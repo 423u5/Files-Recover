@@ -1,0 +1,3 @@
+add_executable(recovery_cli main.cpp)
+set_target_properties(recovery_cli PROPERTIES OUTPUT_NAME recovery)
+target_link_libraries(recovery_cli PRIVATE recovery::core recovery_engine_options)
