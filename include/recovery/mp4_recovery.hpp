@@ -48,9 +48,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace recovery {
@@ -331,5 +333,157 @@ private:
 // The extension of a carved file with this major brand: "mov" for
 // QuickTime, "m4v", "3gp" and "3g2" for theirs, "mp4" otherwise.
 [[nodiscard]] std::string_view mp4Extension(std::optional<formats::mp4::FourCc> majorBrand) noexcept;
+
+// ---------------------------------------------------------------------------
+// Recovery in steps (P15)
+// ---------------------------------------------------------------------------
+
+// A filesystem candidate on its way to becoming an MP4 candidate.
+struct Mp4PendingCandidate {
+    Mp4Candidate candidate;
+    // The volume it belongs to, by the order the volumes were added.
+    std::size_t volume = 0;
+    // Its data was analysed. Otherwise it is an MP4 name without data, which
+    // becomes a candidate only when a carve starts where its first cluster is.
+    bool examined = false;
+    // Where it starts on the source: its first stored byte, or its first cluster.
+    std::optional<std::uint64_t> start;
+};
+
+// What examining one filesystem candidate found.
+struct Mp4Examination {
+    // The candidate: its volume and its index in that volume's scan.
+    std::size_t volume = 0;
+    std::size_t index = 0;
+    // Its data was analysed (Mp4RecoveryReport::filesystemExamined), and it is
+    // an MP4 video file (filesystemMp4).
+    bool analysed = false;
+    bool video = false;
+    // Set when it may become an MP4 candidate.
+    std::optional<Mp4PendingCandidate> pending;
+};
+
+// The state of the steps between two of them, for checkpoints.
+struct Mp4StepsState {
+    // The examined candidates, with every carve merged into them so far.
+    std::vector<Mp4PendingCandidate> pending;
+    // Carving candidates so far, in source order.
+    std::vector<Mp4Candidate> carved;
+    // The carve that validated reaching furthest: hits strictly inside it are its own.
+    std::uint64_t trustedStart = 0;
+    std::uint64_t trustedEnd = 0;
+    // Id of the next carve that is not rejected (CarveOptions::firstId on).
+    std::uint64_t nextCarveId = 1;
+    // The counts so far: filesystemExamined, filesystemMp4, carved,
+    // carvesRejected, hitsSkipped and carvesMerged.
+    Mp4RecoveryReport report;
+};
+
+// What the commits changed since the last takeChanges(), for checkpoints
+// that do not copy the whole state each time.
+struct Mp4StepsChanges {
+    // Pending candidates a carve was merged into: index -> its value now.
+    std::vector<std::pair<std::size_t, Mp4PendingCandidate>> pending;
+    // Carving candidates added, in order.
+    std::vector<Mp4Candidate> carved;
+    std::uint64_t trustedStart = 0;
+    std::uint64_t trustedEnd = 0;
+    std::uint64_t nextCarveId = 1;
+    Mp4RecoveryReport report;
+};
+
+// The work of one hit that does not depend on the hits before it: the carve
+// and, when the commit will need it, the analysis of the carve. Opaque; made
+// by Mp4RecoverySteps::prepare() and used up by commit().
+class Mp4HitWork {
+public:
+    Mp4HitWork();
+    ~Mp4HitWork();
+    Mp4HitWork(Mp4HitWork&&) noexcept;
+    Mp4HitWork& operator=(Mp4HitWork&&) noexcept;
+    Mp4HitWork(const Mp4HitWork&) = delete;
+    Mp4HitWork& operator=(const Mp4HitWork&) = delete;
+
+    // The hit's offset.
+    [[nodiscard]] std::uint64_t fileOffset() const noexcept;
+
+    struct Impl;
+
+private:
+    friend class Mp4RecoverySteps;
+    std::unique_ptr<Impl> impl_;
+};
+
+// MP4 recovery in steps (P15). Mp4Recovery::run() is these steps driven one
+// after the other; a scan coordinator drives them itself, so that the carving
+// shares one pass over the source with the other stages, the work that does
+// not depend on other files runs in parallel, and the state can be saved
+// between steps and restored. The steps deliver exactly what run() delivers.
+//
+//  1. examine() each filesystem candidate (concurrently, in any order), then
+//     addExamination() each result in scan order (volume by volume);
+//  2. commit() each hit of format() in source order, with the work prepare()
+//     made for it (concurrently, ahead of the commits) or with none (commit()
+//     prepares what it needs); skips() tells whether commit() would skip a
+//     hit given the commits so far;
+//  3. deliver() once.
+//
+// Thread safety: examine() and prepare() are const and may run concurrently
+// with each other and with commit() of other hits. Every other member needs
+// one owner at a time. The source, the volumes and their scans must outlive
+// the object.
+class Mp4RecoverySteps {
+public:
+    // Fails with InvalidInput for invalid options or a source that is not open.
+    [[nodiscard]] static Result<std::unique_ptr<Mp4RecoverySteps>> create(storage::IStorageSource& source,
+                                                                         Mp4RecoveryOptions options);
+    ~Mp4RecoverySteps();
+    Mp4RecoverySteps(const Mp4RecoverySteps&) = delete;
+    Mp4RecoverySteps& operator=(const Mp4RecoverySteps&) = delete;
+    Mp4RecoverySteps(Mp4RecoverySteps&&) = delete;
+    Mp4RecoverySteps& operator=(Mp4RecoverySteps&&) = delete;
+
+    // As Mp4Recovery::addVolume(); before any other step.
+    [[nodiscard]] Status addVolume(FilesystemRecovery& volume, const CandidateScan& scan);
+    [[nodiscard]] std::size_t volumeCount() const noexcept;
+
+    // Step 1: candidate `index` of volume `volume`. Fails with InvalidInput
+    // for a candidate that does not exist, with Cancelled, and with the error
+    // of a read that fails for a reason other than an I/O error.
+    [[nodiscard]] Result<Mp4Examination> examine(std::size_t volume, std::size_t index) const;
+    // Fails with InvalidInput for an examination out of scan order.
+    [[nodiscard]] Status addExamination(Mp4Examination examination);
+
+    // Step 2. The format the steps carve with (an Mp4Format with the
+    // options' format settings); a hit of another format with the same
+    // signatures (the "mp4" format of a registry) is carved as one of it.
+    [[nodiscard]] const carving::IFileFormat& format() const noexcept;
+    [[nodiscard]] bool skips(std::uint64_t fileOffset) const noexcept;
+    [[nodiscard]] Result<Mp4HitWork> prepare(const carving::SignatureHit& hit) const;
+    // Skips the hit, or applies its work (`work` may be null). Hits must come
+    // in increasing offset order. Fails like prepare().
+    [[nodiscard]] Status commit(const carving::SignatureHit& hit, Mp4HitWork* work);
+
+    // The state for a checkpoint, and changes since the last call.
+    [[nodiscard]] Mp4StepsState state() const;
+    [[nodiscard]] Mp4StepsChanges takeChanges();
+    // Continues from a saved state (after the volumes were added, instead of
+    // step 1 and the commits it covers). Fails with InvalidInput for a state
+    // that does not fit the volumes.
+    [[nodiscard]] Status restore(Mp4StepsState state);
+
+    // Step 3: finishes the candidates (ids from options.firstId, names,
+    // warnings) and hands them to `sink`; adds the counts to `report` (whose
+    // scan the caller fills). The steps are spent afterwards.
+    [[nodiscard]] Status deliver(const Mp4CandidateSink& sink, Mp4RecoveryReport& report);
+
+    [[nodiscard]] const Mp4RecoveryOptions& options() const noexcept;
+
+    struct Impl;
+
+private:
+    explicit Mp4RecoverySteps(std::unique_ptr<Impl> impl);
+    std::unique_ptr<Impl> impl_;
+};
 
 }  // namespace recovery

@@ -68,6 +68,26 @@ std::string_view toString(RejectionReason reason) noexcept {
     return "Unknown";
 }
 
+bool CarveSkipState::skips(const SignatureHit& hit) const noexcept {
+    return trusted.holds(hit.fileOffset) ||
+           (hit.formatIndex < streams.size() && streams[hit.formatIndex].holds(hit.fileOffset));
+}
+
+void CarveSkipState::record(const SignatureHit& hit, const FileCandidate& candidate) {
+    if (candidate.end.status == EndStatus::Found && candidate.validation.status == ValidationStatus::Valid &&
+        candidate.sourceEnd() > trusted.end) {
+        trusted = Interval{candidate.sourceOffset, candidate.sourceEnd()};
+    }
+    if (hit.format != nullptr && hit.format->descriptor().selfSynchronizing) {
+        if (hit.formatIndex >= streams.size()) {
+            streams.resize(hit.formatIndex + 1);
+        }
+        if (candidate.sourceEnd() > streams[hit.formatIndex].end) {
+            streams[hit.formatIndex] = Interval{candidate.sourceOffset, candidate.sourceEnd()};
+        }
+    }
+}
+
 std::uint64_t CarveReport::count(ValidationStatus status) const noexcept {
     const auto index = static_cast<std::size_t>(status);
     return index < validation.size() ? validation[index] : 0;
@@ -277,29 +297,17 @@ Result<CarveReport> FileCarver::run(const SignatureScanner& scanner, const FileC
     const auto started = std::chrono::steady_clock::now();
     bytesRead_ = 0;
     CarveReport report;
-    // The validated candidate reaching furthest so far; hits strictly inside it are skipped.
-    std::uint64_t trustedStart = 0;
-    std::uint64_t trustedEnd = 0;
-    // Per self-synchronizing format (by registry position), its candidate reaching furthest so far,
-    // whatever its verdict; the format's own hits strictly inside it are skipped.
-    struct Stream {
-        std::uint64_t start = 0;
-        std::uint64_t end = 0;
-    };
-    std::vector<Stream> streams(scanner.formats().size());
+    // Hits strictly inside the validated candidate reaching furthest so far are
+    // skipped, and so are a self-synchronizing format's own hits inside its
+    // candidate reaching furthest, whatever its verdict.
+    CarveSkipState skip;
     log(LogLevel::Info, "carving started",
         {field("formats", scanner.formats().size()), field("validate", options_.validate ? "yes" : "no")});
 
     const HitSink onHit = [&](const SignatureHit& hit) -> Status {
-        if (options_.skipHitsInsideValidCandidates) {
-            const bool insideTrusted = hit.fileOffset > trustedStart && hit.fileOffset < trustedEnd;
-            const bool insideOwnStream = hit.formatIndex < streams.size() &&
-                                         hit.fileOffset > streams[hit.formatIndex].start &&
-                                         hit.fileOffset < streams[hit.formatIndex].end;
-            if (insideTrusted || insideOwnStream) {
-                ++report.skippedInsideCandidates;
-                return success();
-            }
+        if (options_.skipHitsInsideValidCandidates && skip.skips(hit)) {
+            ++report.skippedInsideCandidates;
+            return success();
         }
         Result<CarveOutcome> outcome = carveValidated(hit);
         if (!outcome.ok()) {
@@ -312,15 +320,7 @@ Result<CarveReport> FileCarver::run(const SignatureScanner& scanner, const FileC
         FileCandidate& candidate = std::get<FileCandidate>(*outcome);
         ++report.candidates;
         ++report.validation[static_cast<std::size_t>(candidate.validation.status)];
-        if (candidate.end.status == EndStatus::Found && candidate.validation.status == ValidationStatus::Valid &&
-            candidate.sourceEnd() > trustedEnd) {
-            trustedStart = candidate.sourceOffset;
-            trustedEnd = candidate.sourceEnd();
-        }
-        if (hit.format->descriptor().selfSynchronizing && hit.formatIndex < streams.size() &&
-            candidate.sourceEnd() > streams[hit.formatIndex].end) {
-            streams[hit.formatIndex] = Stream{candidate.sourceOffset, candidate.sourceEnd()};
-        }
+        skip.record(hit, candidate);
         return sink(std::move(candidate));
     };
 

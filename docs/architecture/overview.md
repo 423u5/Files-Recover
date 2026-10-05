@@ -1,6 +1,6 @@
 # Architecture overview
 
-This file covers what is implemented (P0–P14). The target architecture for all phases is in the project plan.
+This file covers what is implemented (P0–P15). The target architecture for all phases is in the project plan.
 
 ## Modules and dependencies
 
@@ -17,6 +17,7 @@ recovery_fragments  ──► recovery_mp4
 recovery_validation ──► recovery_formats
 recovery_playability ─► recovery_validation (Windows Imaging Component, Media Foundation)
 recovery_evaluation ──► recovery_validation, recovery_mp4, recovery_fragments
+recovery_scan       ──► recovery_evaluation, recovery_partition
 ```
 
 The partition and filesystem modules are independent of each other, and carving is independent of both: it reads
@@ -28,11 +29,15 @@ carving together; the two stay independent of each other below it. `recovery_fra
 fragment reconstruction takes filesystem candidates and carves as seeds and validates every layout it tries with
 the formats. P14 adds the validation levels (`recovery_validation`: the structural verdict and the engine's own media
 decoders; `recovery_playability`: optional platform decoders) and `recovery_evaluation`, where every stage's
-candidates end: one per file, validated at every level and identified by SHA-256.
+candidates end: one per file, validated at every level and identified by SHA-256. P15's `recovery_scan` runs them
+all as one scan: on a bounded pool of workers, with one pass over the source that every carving stage shares,
+cancellable, pausable and resumable from the updates it hands out; and writes candidates out the same way. The
+stages it drives gained step interfaces for it (`CarveSkipState`, `Mp4RecoverySteps`, `FragmentRecoverySteps`, the
+evaluation's pool and resume records); their own `run()` drives the same steps.
 
 | Library | Namespace | Responsibility |
 | --- | --- | --- |
-| `recovery_core` | `recovery`, `recovery::diagnostics` | `Result<T>`/`Status`, `Error`/`ErrorCode`, strong types, checked arithmetic, bounds-checked byte access, CRC-32, UTF-16 conversion, cancellation, configuration, logging |
+| `recovery_core` | `recovery`, `recovery::diagnostics` | `Result<T>`/`Status`, `Error`/`ErrorCode`, strong types, checked arithmetic, bounds-checked byte access, CRC-32, SHA-256, UTF-16 conversion, cancellation, configuration, logging; the bounded worker pool, job control (cancel, pause) and `runOrdered` of P15 |
 | `recovery_storage` | `recovery::storage` | Read-only sources, bad-region map, destination file, destination guard |
 | `recovery_imaging` | `recovery::imaging` | Imaging a source into a raw image, with resumable metadata |
 | `recovery_partition` | `recovery::partition` | MBR/GPT/superfloppy detection, and a `PartitionSource` view that confines reads to one partition ([partitions.md](partitions.md)) |
@@ -45,6 +50,7 @@ candidates end: one per file, validated at every level and identified by SHA-256
 | `recovery_playability` | `recovery::validation` | The playability level on Windows (P14): the Windows Imaging Component and Media Foundation decode whole files through a read-only stream over the content |
 | `recovery_evaluation` | `recovery::evaluation` | Candidate evaluation (P14): filesystem candidates, carves, MP4 candidates and reconstructions merged into one `EvaluatedCandidate` per file, with its evidence, validation levels, SHA-256 and preliminary hash, duplicates and `explain()` ([../recovery/candidate_evaluation.md](../recovery/candidate_evaluation.md)) |
 | `recovery_fragments` | `recovery` | Fragment reconstruction (P13): deleted files whose layout the metadata only guesses and carves that break, reconstructed from layout hypotheses that each format validates, ranked by the allocation and the evidence of other files, MP4 placed by its sample tables; COMPLETE, PARTIAL, CORRUPTED, AMBIGUOUS or UNRECOVERABLE ([../recovery/fragment_recovery.md](../recovery/fragment_recovery.md)) |
+| `recovery_scan` | `recovery::scan` | Scanning (P15): `ScanCoordinator` runs a Quick or Deep scan (volumes, MP4 examination, fragment seeds, one shared source pass, MP4 delivery, fragments, evaluation) on a bounded worker pool, cancellable and pausable, with progress and metrics, handing out `ScanUpdate`s that a `ScanCheckpoint` resumes from; `ScanSource` (pause gate, shared block cache, read counts); `RecoveryJob` writes candidates the same way ([../recovery/scanning.md](../recovery/scanning.md)) |
 
 Public headers live in `include/<module>/`. `<windows.h>` is only included from `src/storage/windows/` and
 `src/validation/windows/` (the playability level's WIC and Media Foundation code), never from a public header.
@@ -77,6 +83,15 @@ Public headers live in `include/<module>/`. `<windows.h>` is only included from 
 | `FragmentRecovery` | Not thread-safe. One owner at a time; the source, the format registry, the volumes and their scans must outlive it. The sink is called on the thread of `run()`. |
 | `SignatureScanner` | `scan` is const. Concurrent scans are safe on sources that allow concurrent reads. The sink and progress callback run on the scanning thread. |
 | `FileCarver`, `SourceContentReader` | Not thread-safe. One owner at a time; the source must outlive them. |
+| `WorkerPool` | Every member from any thread. Tasks must not throw (counted, never propagated), nor wait for tasks queued after them, nor submit to their own pool. |
+| `JobControl` | Every member from any thread; copies share their state. |
+| `runOrdered` | Called on a thread that is not one of the pool's workers; `consume` runs on it, `produce` on the workers. |
+| `ScanSource` | Reads from any number of threads; `open`/`close` must not overlap other calls. |
+| `ScanCoordinator`, `RecoveryJob` | `run()` has one owner and drives everything on its thread (commits, the sink, the progress callback); the pool's workers and, during the source pass, one scanner thread do the rest. `progress()` from any thread at any time. |
+| `ScanCheckpoint`, `RecoveryJobCheckpoint` | Not thread-safe. One owner at a time. |
+| `Mp4RecoverySteps` | `examine()` and `prepare()` concurrently with each other and with `commit()` of other hits; every other member one owner at a time. |
+| `FragmentRecoverySteps` | `examineSeed()` concurrently with itself; every other member one owner at a time. |
+| `CandidateEvaluation` with `EvaluationOptions::pool` | `run()` validates and hashes on the pool's workers (allocation queries under a lock per volume); the sink is called on the thread of `run()`. |
 
 ## Windows-specific assumptions
 

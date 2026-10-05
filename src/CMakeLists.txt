@@ -1,16 +1,18 @@
 # ---------------------------------------------------------------------------
 # recovery_core: error/result types, configuration, cancellation, logging,
-# checksums and SHA-256.
+# checksums and SHA-256, and the worker pool and job control of P15.
 # ---------------------------------------------------------------------------
 add_library(recovery_core STATIC
     recovery/byte_order.cpp
     recovery/config.cpp
     recovery/crc32.cpp
     recovery/error.cpp
+    recovery/job_control.cpp
     recovery/result.cpp
     recovery/sha256.cpp
     recovery/text.cpp
     recovery/unicode.cpp
+    recovery/worker_pool.cpp
     diagnostics/logger.cpp
 )
 add_library(recovery::core ALIAS recovery_core)
@@ -291,5 +293,25 @@ add_library(recovery_evaluation STATIC
 add_library(recovery::evaluation ALIAS recovery_evaluation)
 target_link_libraries(recovery_evaluation
     PUBLIC recovery::validation recovery::mp4 recovery::fragments
+    PRIVATE recovery_engine_options
+)
+
+# ---------------------------------------------------------------------------
+# recovery_scan: the scan coordinator (P15): every stage of a scan on a
+# bounded pool of workers, one shared pass over the source, cancellation,
+# pause and resume, progress and metrics, and checkpoints as updates; and the
+# recovery job that writes candidates the same way.
+# ---------------------------------------------------------------------------
+add_library(recovery_scan STATIC
+    scan/recovery_job.cpp
+    scan/scan_coordinator.cpp
+    scan/scan_source.cpp
+    scan/scan_state.cpp
+    scan/source_pass.cpp
+    scan/source_pass.hpp
+)
+add_library(recovery::scan ALIAS recovery_scan)
+target_link_libraries(recovery_scan
+    PUBLIC recovery::evaluation recovery::partition
     PRIVATE recovery_engine_options
 )

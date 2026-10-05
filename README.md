@@ -3,7 +3,7 @@
 A read-only file recovery engine for Windows 11, written in C++20. It is aimed at deleted media on USB flash
 drives and other removable storage.
 
-> **Status: early development.** Phases P0–P14 are implemented: project skeleton, read-only storage
+> **Status: early development.** Phases P0–P15 are implemented: project skeleton, read-only storage
 > access, disk imaging with bad-sector handling, MBR/GPT partition detection, FAT32 and exFAT parsing,
 > the NTFS foundation (MFT, FILE records, resident and non-resident data, data runs), all including
 > deleted entries, and filesystem-based recovery: recovery candidates from FAT32, exFAT and NTFS metadata,
@@ -17,8 +17,11 @@ drives and other removable storage.
 > exFAT files and carves that break, from layout hypotheses that each format validates, reported as COMPLETE,
 > PARTIAL, CORRUPTED, AMBIGUOUS or UNRECOVERABLE. P14 merges the candidates of every stage into one per file,
 > validated at three levels (structure; media, by the engine's own decoders; optionally playability, by Windows'
-> decoders), identified by SHA-256 with duplicates marked and their evidence explained. There is no session,
-> report or user-facing recovery command yet. Passing builds and tests do **not** mean the engine is
+> decoders), identified by SHA-256 with duplicates marked and their evidence explained. P15 runs all of it as one
+> scan (Quick or Deep): on a bounded pool of workers, with one sequential pass over the source that every carving
+> stage shares, cancellable, pausable, reporting progress and metrics, and resumable from the checkpoint updates it
+> hands out without doing the work again; a recovery job writes the candidates out the same way. There is no
+> persistent session, report or user-facing recovery command yet. Passing builds and tests do **not** mean the engine is
 > production-ready.
 
 ## Safety model
@@ -48,8 +51,9 @@ drives and other removable storage.
 | `include/formats`, `src/formats` | Carvable formats: the images of P9 (JPEG, PNG, WEBP, GIF, BMP), the audio of P10 (MP3, WAV, M4A, AAC) and the MP4 video of P12; the MP4 parser of P11 |
 | `include/validation`, `src/validation` | Validation levels and the media decoders (P14); `src/validation/windows`: the playability checker on WIC and Media Foundation (private) |
 | `include/evaluation`, `src/evaluation` | Candidate evaluation (P14): one evaluated candidate per file, content identity, duplicates |
+| `include/scan`, `src/scan` | Scanning (P15): the scan coordinator, the scan's source (pause gate, block cache), updates and checkpoints, the recovery job |
 | `tools/recovery_cli` | `recovery` CLI (skeleton only) |
-| `tests/unit`, `tests/integration`, `tests/filesystem`, `tests/corruption`, `tests/recovery`, `tests/carving`, `tests/formats`, `tests/validation`, `tests/evaluation` | GoogleTest suites; `tests/support` holds the simulated devices, volume and image file builders, samples from other encoders, and test-only carving formats |
+| `tests/unit`, `tests/integration`, `tests/filesystem`, `tests/corruption`, `tests/recovery`, `tests/carving`, `tests/formats`, `tests/validation`, `tests/evaluation`, `tests/scan` | GoogleTest suites; `tests/support` holds the simulated devices, volume and image file builders, samples from other encoders, and test-only carving formats |
 | `docs/` | Architecture, recovery and testing notes; known limitations in `docs/limitations.md` |
 
 Directories for later phases (`session`, ...) already exist and are empty.
@@ -76,6 +80,7 @@ Other presets:
 | `msvc-analyze` | MSVC `/analyze` on engine and tool code |
 
 Warnings are errors (`/W4 /WX`). To run only one group of tests: `ctest --preset msvc-debug -L unit`,
-`-L integration`, `-L filesystem`, `-L corruption`, `-L recovery`, `-L carving`, `-L formats` or `-L cli`.
+`-L integration`, `-L filesystem`, `-L corruption`, `-L recovery`, `-L carving`, `-L formats`, `-L validation`,
+`-L evaluation`, `-L scan` or `-L cli`.
 
 See [docs/testing/testing.md](docs/testing/testing.md) for how to test safely.

@@ -196,6 +196,11 @@ furthest. `skipHitsInsideValidCandidates = false` turns both rules off. The flag
 `CarveReport` holds the scan report, candidates per validation status, rejected hits per reason, skipped hits and
 the bytes the carves read. In a completed run every hit is accounted for: `hits = candidates + rejected + skipped`.
 
+The two skip rules are a value of their own since P15: `CarveSkipState` (`skips(hit)`, `record(hit, candidate)`).
+`run()` keeps one for its run. A scan (`ScanCoordinator`, [scanning.md](scanning.md)) keeps one across its source
+pass and in its checkpoints, carving each hit with `carve()` and committing them in source order, so that it skips
+exactly what `run()` skips, also when it resumes.
+
 ## Candidates (`FileCandidate`)
 
 | Field | Meaning |

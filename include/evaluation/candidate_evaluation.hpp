@@ -54,6 +54,7 @@
 #include "recovery/fragment_recovery.hpp"
 #include "recovery/mp4_recovery.hpp"
 #include "recovery/result.hpp"
+#include "recovery/worker_pool.hpp"
 #include "storage/storage_source.hpp"
 #include "validation/media_validator.hpp"
 #include "validation/validation.hpp"
@@ -66,7 +67,23 @@
 
 namespace recovery::evaluation {
 
+// What a run needs to know of a candidate an earlier run delivered, to go on
+// as if it had delivered it itself (P15): its id, how it counts in the
+// report, and its content identity (for duplicates).
+struct EvaluationRecord {
+    EvaluatedCandidateId id{0};
+    RecoveryMethod method = RecoveryMethod::Filesystem;
+    carving::ValidationStatus validationStatus = carving::ValidationStatus::NotValidated;
+    ContentIdentity identity;
+    bool duplicate = false;
+    bool alternative = false;
+};
+
+[[nodiscard]] EvaluationRecord recordOf(const EvaluatedCandidate& candidate);
+
 struct EvaluationOptions {
+    static constexpr std::size_t kMaxWindow = 4096;
+
     // Id of the first candidate; the others follow in delivery order.
     std::uint64_t firstId = 1;
     // The levels: media on, playability off (and its checker) by default.
@@ -77,9 +94,22 @@ struct EvaluationOptions {
     std::size_t readCacheSize = carving::SourceContentReader::kDefaultCacheSize;
     // Clusters checked against a volume's allocation per carved file, at most.
     std::uint64_t maxClusterChecks = std::uint64_t{1} << 22;
+    // P15: candidates are validated and hashed on this pool, at most `window`
+    // at a time (0: twice the pool's threads, at most kMaxWindow), and still
+    // delivered one by one, in order, on the thread of run(): what run()
+    // delivers does not depend on the pool. Null: all on the thread of run().
+    WorkerPool* pool = nullptr;
+    std::size_t window = 0;
+    // P15: the records of the candidates an earlier run with the same inputs
+    // and options delivered, in delivery order: run() does not evaluate or
+    // deliver them again, and goes on as if it had delivered them itself (the
+    // next ids, duplicates of their content, the report's counts).
+    std::vector<EvaluationRecord> resume;
 };
 
-// InvalidInput when a limit is 0 or the read or validation options are invalid.
+// InvalidInput when a limit is 0, the read or validation options are
+// invalid, the window is too large, or the resume records are not numbered
+// from firstId on.
 [[nodiscard]] Status validate(const EvaluationOptions& options);
 
 struct EvaluationReport {
@@ -114,8 +144,10 @@ struct EvaluationReport {
 // returned by it (Cancelled too).
 using EvaluatedCandidateSink = std::function<Status(EvaluatedCandidate&& candidate)>;
 
-// Thread safety: none; one owner at a time. The source, the registries, the
-// volumes and their scans must outlive the object.
+// Thread safety: one owner at a time; with a pool, run() validates and
+// hashes candidates on its workers (the sink is still called on the thread
+// of run()). The source, the registries, the volumes, their scans and the
+// pool must outlive the object.
 class CandidateEvaluation {
 public:
     CandidateEvaluation(storage::IStorageSource& source, const carving::FormatRegistry& formats,

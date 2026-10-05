@@ -1398,5 +1398,104 @@ TEST(FragmentRecoveryTest, NamesOfStatusesOriginsAndSources) {
     RECOVERY_EXPECT_OK(validate(FragmentSearchLimits{}));
 }
 
+
+// ===========================================================================
+// Reconstruction in steps (P15)
+// ===========================================================================
+
+// The steps deliver what run() delivers; new steps restored from the first
+// ones' seed examinations, pass events and first reconstruction go on to the
+// same end without a pass of their own.
+TEST(FragmentRecoveryTest, TheStepsRestoreFromTheirEventsAndReconstructions) {
+    const carving::FormatRegistry registry = allFormats();
+    Card card;
+    const Bytes deleted = photo(31);
+    const std::uint32_t n1 = clustersFor(deleted.size());
+    (void)card.add("KEEP.BIN", test::makePattern(9 * kClusterSize, 31), run(1010, 9));
+    card.addDeleted("Beach photo 31.jpg", deleted, pieces(n1, {{1000, 10}, {1019, n1}}));
+    const Bytes orphan = photo(32);
+    const std::uint32_t n2 = clustersFor(orphan.size());
+    (void)card.add("KEEP2.BIN", test::makePattern(8 * kClusterSize, 32), run(7012, 8));
+    card.plant(pieces(n2, {{7000, 12}, {7020, n2}}), orphan);
+    test::MemoryStorageSource source(card.image());
+    RECOVERY_ASSERT_OK(source.open());
+    Volume volume = openVolume(source);
+    ASSERT_NE(volume.recovery, nullptr);
+    const Recovered expected = reconstructAll(source, registry, {&volume});
+    ASSERT_GE(expected.candidates.size(), 2u);
+
+    const auto make = [&] {
+        Result<std::unique_ptr<FragmentRecoverySteps>> steps = FragmentRecoverySteps::create(source, registry, {});
+        EXPECT_TRUE(steps.ok());
+        EXPECT_TRUE((*steps)->addVolume(*volume.recovery, volume.scan).ok());
+        EXPECT_TRUE((*steps)->begin().ok());
+        return std::move(steps).value();
+    };
+    std::unique_ptr<FragmentRecoverySteps> first = make();
+    RECOVERY_EXPECT_ERROR(first->begin(), ErrorCode::InvalidInput);
+    std::vector<FragmentSeedExamination> examinations;
+    for (std::size_t i = 0; i < volume.scan.candidates.size(); ++i) {
+        Result<FragmentSeedExamination> examined = first->examineSeed(0, i);
+        RECOVERY_ASSERT_OK(examined);
+        examinations.push_back(*examined);
+        RECOVERY_ASSERT_OK(first->addSeedExamination(std::move(*examined)));
+    }
+    // The pass, with the registry's formats and the steps' own.
+    carving::FormatRegistry passFormats;
+    for (const std::shared_ptr<const carving::IFileFormat>& format : registry.formats()) {
+        RECOVERY_ASSERT_OK(passFormats.add(format));
+    }
+    for (const std::shared_ptr<const carving::IFileFormat>& format : first->extraFormats()) {
+        RECOVERY_ASSERT_OK(passFormats.add(format));
+    }
+    Result<carving::SignatureScanner> scanner = carving::SignatureScanner::create(passFormats);
+    RECOVERY_ASSERT_OK(scanner);
+    first->recordEvents(true);
+    RECOVERY_ASSERT_OK(scanner->scan(
+        source, [&](const carving::SignatureHit& hit) { return first->commit(hit, nullptr); }));
+    const std::vector<FragmentPassEvent> events = first->takeEvents();
+    EXPECT_FALSE(events.empty());
+    EXPECT_TRUE(first->takeEvents().empty());
+    std::vector<FragmentCandidate> delivered;
+    Result<std::optional<FragmentCandidate>> next = first->reconstructNext();
+    RECOVERY_ASSERT_OK(next);
+    ASSERT_TRUE(next->has_value());
+    delivered.push_back(std::move(**next));
+
+    // New steps: the examinations, the pass's events and the reconstruction again.
+    std::unique_ptr<FragmentRecoverySteps> second = make();
+    for (const FragmentSeedExamination& examination : examinations) {
+        RECOVERY_ASSERT_OK(second->addSeedExamination(examination));
+    }
+    RECOVERY_ASSERT_OK(second->replay(events));
+    RECOVERY_ASSERT_OK(second->replayReconstruction(delivered.front()));
+    while (second->nextSeed() < second->seedCount()) {
+        Result<std::optional<FragmentCandidate>> more = second->reconstructNext();
+        RECOVERY_ASSERT_OK(more);
+        if (more->has_value()) {
+            delivered.push_back(std::move(**more));
+        }
+    }
+    ASSERT_EQ(delivered.size(), expected.candidates.size());
+    for (std::size_t i = 0; i < delivered.size(); ++i) {
+        EXPECT_EQ(describeFragments(delivered[i]), describeFragments(expected.candidates[i]));
+    }
+    const FragmentRecoveryReport report = second->report();
+    EXPECT_EQ(report.filesystemSeeds, expected.report.filesystemSeeds);
+    EXPECT_EQ(report.filesystemSkipped, expected.report.filesystemSkipped);
+    EXPECT_EQ(report.carved, expected.report.carved);
+    EXPECT_EQ(report.carvesValid, expected.report.carvesValid);
+    EXPECT_EQ(report.carvingSeeds, expected.report.carvingSeeds);
+    EXPECT_EQ(report.complete, expected.report.complete);
+    // Nothing is left to reconstruct, and what is not the next seed's is refused.
+    RECOVERY_EXPECT_ERROR(second->reconstructNext(), ErrorCode::InvalidInput);
+    RECOVERY_EXPECT_ERROR(second->replayReconstruction(delivered.front()), ErrorCode::InvalidInput);
+    // A saved hit of a format the registry does not have.
+    std::unique_ptr<FragmentRecoverySteps> third = make();
+    std::vector<FragmentPassEvent> unknown = {events.front()};
+    unknown.front().formatId = "no-such-format";
+    RECOVERY_EXPECT_ERROR(third->replay(unknown), ErrorCode::InvalidInput);
+}
+
 }  // namespace
 }  // namespace recovery

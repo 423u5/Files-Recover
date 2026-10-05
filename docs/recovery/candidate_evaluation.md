@@ -107,6 +107,19 @@ candidate it comes from), then the others in source order; ids follow from `firs
 candidates by method and status, the duplicates, the carves merged or kept as evidence, the inputs another stage
 replaced, the alternatives, and the bytes hashed.
 
+## A pool, and runs that resume (P15)
+
+`run()` first merges the inputs into the candidates to deliver, in delivery order (cheap, and the same every time).
+With `EvaluationOptions::pool`, each candidate is then validated and hashed on the pool's workers, at most `window`
+at a time. Candidates are still delivered one by one in order on the thread of `run()`: the ids, the duplicates and
+the counts are given at delivery. A carved file's container id is known from the merge. The allocation queries of
+the candidates in flight hold a lock per volume. What `run()` delivers does not depend on the pool.
+
+`EvaluationOptions::resume` holds the records (`EvaluationRecord`, `recordOf`) of the candidates an earlier run with
+the same inputs delivered. They are not evaluated or delivered again. The run counts them, and records their
+content for duplicates, as if it had delivered them, then goes on with the next id. Records that are not numbered
+from `firstId`, or whose duplicate flags do not fit their content, are refused.
+
 ## Cost
 
 Each candidate's data is read at least twice (validation, hashing), video media data in full; the inputs are kept

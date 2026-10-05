@@ -32,6 +32,10 @@
 
 #include <gtest/gtest.h>
 
+#include <thread>
+
+#include <optional>
+
 #include <algorithm>
 #include <cstring>
 #include <memory>
@@ -1633,6 +1637,110 @@ TEST(Mp4RecoveryTest, LogsTheRun) {
     EXPECT_TRUE(has("carving", "1"));
     EXPECT_TRUE(has("merged", "1"));
     EXPECT_TRUE(has("valid", "2"));
+}
+
+
+// ===========================================================================
+// Recovery in steps (P15)
+// ===========================================================================
+
+// The steps deliver what run() delivers, with the candidates examined in any
+// order, the hits prepared ahead on threads of their own, and the state saved
+// half-way through the hits and restored into new steps that go on.
+TEST(Mp4RecoveryTest, TheStepsDeliverWhatRunDelivers) {
+    test::Fat32BuilderOptions geometry;
+    geometry.clusterCount = 8192;
+    test::Fat32ImageBuilder builder(geometry);
+    const auto root = test::Fat32ImageBuilder::root();
+    (void)builder.addFile(builder.addDirectory(root, "DCIM").clusters.front(), "CLIP0001.MP4",
+                          test::makeMp4(seeded(121)).bytes);
+    const auto entry = builder.addFile(root, "Recording.mp4", test::makeMp4(moovFirst(122)).bytes);
+    builder.deleteEntry(entry);
+    storeLe32(builder.shortEntry(entry), 28, 0);
+    plant(builder, 5000, test::makeMp4(seeded(123)).bytes);
+    plant(builder, 6000, test::makeMp4(quickTime(124)).bytes);
+    test::MemoryStorageSource source(builder.build());
+    RECOVERY_ASSERT_OK(source.open());
+    Volume volume = openVolume(source);
+    ASSERT_NE(volume.recovery, nullptr);
+    const Recovered expected = recover(source, {&volume});
+    ASSERT_GE(expected.candidates.size(), 4u);
+
+    const auto make = [&] {
+        Result<std::unique_ptr<Mp4RecoverySteps>> steps = Mp4RecoverySteps::create(source, {});
+        EXPECT_TRUE(steps.ok());
+        EXPECT_TRUE((*steps)->addVolume(*volume.recovery, volume.scan).ok());
+        return std::move(steps).value();
+    };
+    std::unique_ptr<Mp4RecoverySteps> first = make();
+    // Step 1: examined from the last candidate to the first, added in scan order.
+    std::vector<Mp4Examination> examinations(volume.scan.candidates.size());
+    for (std::size_t i = examinations.size(); i-- > 0;) {
+        Result<Mp4Examination> examined = first->examine(0, i);
+        RECOVERY_ASSERT_OK(examined);
+        examinations[i] = std::move(*examined);
+    }
+    for (Mp4Examination& examination : examinations) {
+        RECOVERY_ASSERT_OK(first->addExamination(std::move(examination)));
+    }
+    RECOVERY_EXPECT_ERROR(first->addExamination(Mp4Examination{}), ErrorCode::InvalidInput);
+
+    // Step 2: the hits, prepared on threads of their own, then committed in order.
+    carving::FormatRegistry registry;
+    RECOVERY_ASSERT_OK(registry.add(std::make_shared<formats::Mp4Format>()));
+    Result<carving::SignatureScanner> scanner = carving::SignatureScanner::create(registry);
+    RECOVERY_ASSERT_OK(scanner);
+    std::vector<carving::SignatureHit> hits;
+    RECOVERY_ASSERT_OK(scanner->scan(source, [&](const carving::SignatureHit& hit) {
+        hits.push_back(hit);
+        return success();
+    }));
+    ASSERT_GE(hits.size(), 4u);
+    std::vector<std::optional<Result<Mp4HitWork>>> works(hits.size());
+    std::vector<std::thread> threads;
+    for (std::size_t i = 0; i < hits.size(); ++i) {
+        threads.emplace_back([&, i] { works[i].emplace(first->prepare(hits[i])); });
+    }
+    for (std::thread& thread : threads) {
+        thread.join();
+    }
+    const std::size_t half = hits.size() / 2;
+    for (std::size_t i = 0; i < half; ++i) {
+        RECOVERY_ASSERT_OK(*works[i]);
+        RECOVERY_ASSERT_OK(first->commit(hits[i], &works[i]->value()));
+    }
+    // Saved half-way and restored: new steps go on (some hits without prepared work).
+    std::unique_ptr<Mp4RecoverySteps> second = make();
+    RECOVERY_ASSERT_OK(second->restore(first->state()));
+    for (std::size_t i = half; i < hits.size(); ++i) {
+        RECOVERY_ASSERT_OK(*works[i]);
+        RECOVERY_ASSERT_OK(second->commit(hits[i], i % 2 == 0 ? &works[i]->value() : nullptr));
+    }
+    std::vector<Mp4Candidate> delivered;
+    Mp4RecoveryReport report;
+    RECOVERY_ASSERT_OK(second->deliver(
+        [&](Mp4Candidate&& candidate) {
+            delivered.push_back(std::move(candidate));
+            return success();
+        },
+        report));
+    ASSERT_EQ(delivered.size(), expected.candidates.size());
+    for (std::size_t i = 0; i < delivered.size(); ++i) {
+        EXPECT_EQ(describeMp4(delivered[i]), describeMp4(expected.candidates[i]));
+        ASSERT_EQ(delivered[i].carving.has_value(), expected.candidates[i].carving.has_value());
+        if (delivered[i].carving.has_value()) {
+            EXPECT_EQ(delivered[i].carving->id, expected.candidates[i].carving->id);
+        }
+    }
+    EXPECT_EQ(report.carved, expected.report.carved);
+    EXPECT_EQ(report.carvesMerged, expected.report.carvesMerged);
+    EXPECT_EQ(report.carvesRejected, expected.report.carvesRejected);
+    EXPECT_EQ(report.hitsSkipped, expected.report.hitsSkipped);
+    EXPECT_EQ(report.filesystemExamined, expected.report.filesystemExamined);
+    EXPECT_EQ(report.filesystemMp4, expected.report.filesystemMp4);
+    // Spent once delivered.
+    RECOVERY_EXPECT_ERROR(second->deliver([](Mp4Candidate&&) { return success(); }, report),
+                          ErrorCode::InvalidInput);
 }
 
 }  // namespace

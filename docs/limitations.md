@@ -257,6 +257,8 @@ Content-based duplicate detection is planned for P17.
 `CandidateScan` holds every candidate of a volume, each with its regions and a copy of any resident data, on top
 of the filesystem's own catalog (L29). Memory grows with the number of files, bounded by `ScanLimits::maxEntries`.
 
+P15: a scan hands the candidates out in its updates, so a session (P16) can keep them on disk, but keeps them itself until the evaluation, and in its checkpoint (L139).
+
 ### L41. Reading around bad sectors is slow
 **Status:** Open  
 After a failed chunk, reconstruction reads the chunk sector by sector with retries. There is no intermediate
@@ -320,10 +322,14 @@ extents as stored runs), which `RecoveryWriter` writes as it is, named `recovere
 id.
 
 ### L49. A carved file's bytes are read at least twice
-**Status:** Open (P15)  
+**Status:** Open; reduced in scans (P15)  
 End detection and validation read a file through its own reader, and the scanner later reads the same bytes again as
 part of its pass. The carve's reads also jump ahead of the scan, so a carving run is not strictly sequential. This is
 cheap on flash media but costs seeks on hard disks.
+
+P15: a scan reads the source through one cache of the blocks read recently (`ScanSource`): a carve's reads,
+and the scanner's reads of what a carve read, are served from it while the blocks are still there. Files larger
+than the cache are still read twice (L136). `FileCarver::run` on its own is unchanged.
 
 ### L50. Hostile images can still cost much work
 **Status:** Open (P20)  
@@ -359,9 +365,13 @@ indexes signatures by it). A format whose files start with variable bytes anchor
 position instead.
 
 ### L54. Scanning and carving are single-threaded
-**Status:** Planned (P15)  
+**Status:** Resolved (P15)  
 One scan runs on one thread. Scans of different ranges can run concurrently (adjacent ranges report every hit
 once), but nothing splits a scan into ranges yet, and `FileCarver` is not thread-safe.
+
+P15: a scan runs one sequential signature scan on a thread of its own and makes the carves on a pool of
+workers, ahead of the commits, which are made in source order (`ScanCoordinator`, see
+[recovery/scanning.md](recovery/scanning.md)). `FileCarver` itself is still one owner at a time.
 
 ### L55. No real format has used the framework yet
 **Status:** Resolved (images P9, audio P10, MP4 P12)  
@@ -488,13 +498,16 @@ between two fragments, changes nothing a walk can check. The RIFF size still end
 carved with the right length, validates, and holds the wrong bytes. Test: `AudioCarvingTest.FragmentedFilesInAVolume`.
 
 ### L72. Frame-sync signatures make rejected hits frequent
-**Status:** Planned (P15)
+**Status:** Resolved in scans (P15)
 MP3 and ADTS frames start with 11 or 12 set bits, so random and compressed data (JPEG, MP4, ZIP) holds about 100
 MP3 and 60 ADTS signature matches per MiB. Each costs a 4 KiB header read before it is rejected, which adds about
 a third to the reads of a scan over such data. An ADTS header that claims a frame longer than the header check can
 see (6 or 8 channels, or a program config element) reaches end detection before it is rejected, and a "LYRICSBEGIN"
 after a stream is searched for its end marker up to 1 MB further. Reusing the scanner's block for header checks
 (P15) would remove most of the cost.
+
+P15: in a scan, a hit's header check reads the block the scanner has just read, from the scan's cache, so a
+rejected hit costs no read of the source. `FileCarver::run` on its own is unchanged.
 
 ### L73. VBRI info tags are recognised but their counts are not used
 **Status:** Open
@@ -685,12 +698,16 @@ candidate, trying at most 64 occurrences of "moov". A moov with no filesystem ca
 whose moov is lost, are not carved: pairing orphan moov and mdat pieces is fragment reconstruction (P13).
 
 ### L97. MP4 recovery reads each file several times, and carves allocated space
-**Status:** Open (P15)  
+**Status:** Open; reduced in scans (P15)  
 A filesystem candidate's data is read to analyse it (the parse, then the framing check, L95). The scan then reads
 the whole source, active files included, and each hit's carve reads the file's boxes; unless the carve matches a
 filesystem candidate stored in one run with an intact structure, the carve is analysed again. So the media data of a
 file is read two to four times (L49). The scan cannot simply leave out allocated clusters either, because data
 inside active files (a motion photo's video) is recovered too.
+
+P15: in a scan, MP4 recovery takes its hits from the one pass every stage shares (no scan of its own), and the
+analyses read through the scan's cache. Each file's data is still analysed for MP4 recovery and validated again
+by the evaluation.
 
 ### L98. Unreadable samples are counted only where the analysis read
 **Status:** Accepted (cost)  
@@ -701,11 +718,14 @@ Reading every sample as well would add a full read of every file. `RecoveryWrite
 byte of a file it writes. Test: `Mp4RecoveryTest.BadSectorsMakeSamplesUnreadable`.
 
 ### L99. MP4 candidates are kept in memory until the end of the run
-**Status:** Open (P15); P14's evaluation keeps its inputs too (L129)  
+**Status:** Open; P14's evaluation keeps its inputs too (L129)  
 Filesystem candidates are examined before carving, so that a carve can be attached to the candidate that starts
 where it does, and every MP4 candidate (with its structure and sample evidence, and the first 32 parser issues) is
 kept until the run delivers them. Memory grows with the number of MP4 files on the source (a few kilobytes each),
 as for the filesystem candidates themselves (L40).
+
+P15: a scan hands the MP4 candidates out in one update, which a session (P16) can keep on disk; the scan keeps
+them until the evaluation.
 
 ### L100. How HYBRID and SizeMismatch are decided
 **Status:** Accepted (decision to review)  
@@ -765,11 +785,14 @@ it. Every limit is a field of `FragmentSearchLimits`; a search that one stopped 
 when it ended without a valid layout, so does a list of candidates that was cut. None was measured on a corpus.
 
 ### L105. Every layout is validated from the start of the file
-**Status:** Open (P15)  
+**Status:** Open  
 The formats validate whole files, not a part of one, so the generic search validates each layout it tries from the
 file's first byte, reading and parsing the part before the break again each time: the cost grows with the file's
 size times the layouts tried (hundreds for a fragment across data no evidence explains). The reads are served from
 the source each time; there is no cache across layouts. MP4 walks its samples instead, a window at a time.
+
+P15 did not change the search: seeds are reconstructed one after the other, and a seed's layouts one after the
+other (L132).
 
 ### L106. What a structure confirms
 **Status:** Accepted (decision to review)  
@@ -844,18 +867,24 @@ their format classes for the sample-table placement. The `dataChecked` control r
 there, not whether the layout is right.
 
 ### L114. The carving pass carves every format again
-**Status:** Open (P15)  
+**Status:** Resolved in scans (P15)  
 Fragment reconstruction scans the whole source with every registered format (and a moov probe), after whatever other
 passes a caller runs (L49, L97), and carves every hit at the start of a free cluster of an added volume: the costs of
 L50 and L61 apply (a JPEG header followed by zeros reads to the maximum size).
 
+P15: in a scan, fragment reconstruction takes its hits from the one pass every stage shares, and the carves it
+makes are the carving stage's own (made once). `FragmentRecovery::run` on its own still scans the source.
+
 ### L115. What is kept in memory
-**Status:** Open (P15)  
+**Status:** Open  
 The claims of every file (interval maps over clusters), the carve seeds and the moov anchors are kept for the whole
 run, on top of the volumes' candidates (L40); cluster states are cached per volume (at most 16 MiB); each seed's
 layouts until it is delivered.
 
 ## Validation and candidate evaluation (P14)
+
+P15: unchanged in scans; the claims are rebuilt on resume from the pass's events and the reconstructions
+delivered, instead of being saved.
 
 ### L116. Lossy codecs are checked only in part
 **Status:** Accepted (the user's P14 scope: no codec tables in the engine)  
@@ -900,10 +929,12 @@ ProRes, AV1, VP9 and encrypted tracks are `Unsupported`; PCM is `NotApplicable`.
 AAC LC of its channels and rate, as FFmpeg plays it.
 
 ### L121. Validation and hashing read every candidate's data
-**Status:** Open (P15)  
+**Status:** Open; parallel in scans (P15)  
 The media level reads all of a video track's media data (the NAL byte scan), and the evaluation then reads every
 candidate's data again for its SHA-256: two passes over every recovered byte, more for HYBRID candidates (their own
 layout is validated first). The NAL scan is linear in the file's size and not bounded by `MediaLimits`.
+
+P15: in a scan, candidates are validated and hashed on the pool's workers; their data is still read twice.
 
 ### L122. Platform decoders conceal damage
 **Status:** Accepted  
@@ -955,9 +986,11 @@ extension's when several do or none does). Files of formats the engine does not 
 executables) are `NotValidated` with `FORMAT_UNKNOWN`; a renamed file is validated as what it contains.
 
 ### L129. The evaluation keeps its inputs until the end of the run
-**Status:** Open (P15)  
+**Status:** Open  
 The volumes' scans, every carve, MP4 candidate and reconstruction are kept (and copied once) until the run has
 delivered every candidate, on top of what the stages kept themselves (L40, L99, L115).
+
+P15: a scan keeps the stages' results in its checkpoint and gives the evaluation a copy (L139).
 
 ### L130. Carved files get new names
 **Status:** Accepted  
@@ -970,3 +1003,86 @@ A carve gives a filesystem candidate its layout only when the candidate's own da
 the carve validates (or the metadata locates no data). A carve that is longer than the metadata's own valid layout
 (a file the metadata records too short but whose truncated form still validates, as for formats that validate any
 prefix) does not replace it.
+
+## Scanning (P15)
+
+### L132. Fragment reconstruction is not parallel
+**Status:** Accepted (design)  
+Each seed is reconstructed with the claims of the reconstructions settled before it as evidence, so seeds are
+reconstructed one after the other on the scan's thread, and a seed's layouts are validated one after the other.
+Every other stage runs in parallel. A source with many fragmented deleted files spends most of a scan there.
+
+### L133. The pass's hit limit counts every stage's hits
+**Status:** Open  
+A scan's one signature scan stops at `ScanConfiguration::maxHits` hits of every format it scans for: the carving
+formats, the moov probe of fragment reconstruction, and a separate MP4 format when the registry has none. Each stage
+run on its own counts only its own hits, so a scan that reaches the limit can stop where one of the stages on its
+own would have gone on. Below the limit (10 million by default) a scan delivers exactly what the stages deliver.
+
+### L134. What a resumed scan does again
+**Status:** Accepted (design)  
+The unit in progress at an interruption is done again; units an update recorded are not. A unit is:
+- a volume's whole traversal, so a volume of millions of files interrupted near the end of `findCandidates` is
+  traversed again;
+- an examined candidate;
+- the source pass from its last consistent point (at most `checkpointBytes` of the source, or `checkpointInterval`);
+- a seed's reconstruction;
+- a candidate's evaluation.
+
+Work prepared ahead of a consistent point (carves and analyses in the window) is made again too.
+
+### L135. A pause takes effect at reads and safe points
+**Status:** Accepted (design)  
+A pause stops every read of the source at once (the reads under way end first). Work in progress that does not
+read goes on to its next read or safe point: a fragment search's validations from the cache, a commit of the pass.
+`ScanProgress::paused` is true once the scan waits at a safe point or no read is under way, which can be before
+every thread has stopped computing. A scan that fails while paused (its sink failing at the update handed out
+before the pause) returns its failure once it is resumed or cancelled: its readers wait at the pause until then.
+
+### L136. The cache helps work that comes soon after
+**Status:** Accepted (cost)  
+The scan's cache holds the blocks read most recently (64 MiB by default). A carve reads ahead of the scanner, and the
+scanner reads those blocks again from the cache only while they are still there: a file larger than the cache (most
+videos) is read twice. The evaluation reads every candidate's data after the pass, mostly from the source again
+(L121).
+
+### L137. Carves made ahead may be wasted
+**Status:** Accepted (cost)  
+The pass carves hits ahead of the commits, before it knows whether an earlier file covers them. A hit inside a file
+whose carve is still being made is carved for nothing, at most `window` hits at a time. Hits of
+self-synchronizing formats wait for the earlier hits of their format instead, since every frame of a stream is a hit.
+
+### L138. Checkpoints are kept in memory
+**Status:** Planned (P16)  
+The user's P15 decision: a scan hands its updates out and keeps its own checkpoint in memory; nothing is written to
+disk. A crash of the application loses everything the caller has not saved. P16 stores the updates crash-safely.
+
+### L139. A checkpoint holds every stage's results
+**Status:** Open  
+`ScanCheckpoint` keeps the volumes' candidates, the carves, the MP4 candidates and the reconstructions (about a few
+kilobytes per file), as the scan must to resume. Several copies exist at once:
+- applying an update copies what it holds;
+- the evaluation gets a copy of its inputs;
+- a caller that keeps a checkpoint of its own beside the coordinator's keeps a second one.
+
+The evaluated candidates are only in the updates (the checkpoint keeps records of them).
+
+### L140. A crash while a file is written leaves it behind
+**Status:** Planned (P16)  
+`RecoveryWriter` removes a file it could not finish, so a cancelled or failing recovery job leaves no partial file,
+and a resumed job writes it again under the same name. A crash of the process while a file is written leaves that
+file, incomplete, under its name, and a resumed job writes it again under the next free name.
+
+### L141. A scan resumes only as the same scan
+**Status:** Accepted (design)  
+The scan's identity holds the engine version, the source (type, path, size, sector size), the configuration and the
+formats. A checkpoint of another identity is refused, so an image moved to another path is another scan. The
+configuration is a small set of settings (`ScanConfiguration`): the stages' finer limits (search limits, parse
+limits, media limits, filesystem caches) are their defaults, so that everything that decides the results is in the
+identity.
+
+### L142. A Quick scan reads every file the metadata knows
+**Status:** Accepted (the user's P15 decision: Quick = metadata and validation)  
+A Quick scan validates and hashes the filesystem candidates: it reads every byte of every file the filesystems know,
+active and deleted. It skips the source pass, MP4 recovery's carving and fragment reconstruction, not the reads of
+the files themselves.

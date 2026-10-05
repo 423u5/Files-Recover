@@ -205,10 +205,27 @@ Component `fragments`, through `carving.scan.logger`: the start and the end of a
 limited, layouts validated, time) at `Info`, each candidate (id, origin, format, status, hypotheses, fragments,
 layouts validated, whether the search was complete) at `Debug`. No file content is logged.
 
+## Steps (P15)
+
+`FragmentRecoverySteps` holds what `run()` does, as steps a scan drives itself ([scanning.md](scanning.md)); `run()`
+drives the same steps one after the other:
+1. `begin()`: the claims of the volumes' files;
+2. `examineSeed()` per filesystem candidate, concurrently, then `addSeedExamination()` in scan order;
+3. `commit(hit, outcome)` for the pass's hits in source order. A scan shares one pass among its stages and passes
+   the carve with validation that carving made of the hit, since the two carve alike. `extraFormats()` adds the
+   moov probe to that pass, and `wants(hit)` tells whether a commit would carve the hit;
+4. `reconstructNext()`, seed after seed.
+
+For checkpoints, the commits that changed the steps' state are kept as events (`recordEvents`, `takeEvents`). A
+restored object replays them (`replay`), and replays each reconstruction already delivered
+(`replayReconstruction`: its claims, from the chosen hypothesis's clusters, without the search). It then goes on
+exactly where the first stopped.
+
 ## Thread safety
 
 None: one owner at a time. The source, the registry, the volumes and their scans must outlive the
-`FragmentRecovery`. The sink is called on the thread of `run()`.
+`FragmentRecovery`. The sink is called on the thread of `run()`. `FragmentRecoverySteps::examineSeed()` may run
+concurrently with itself: the cache of cluster states it reads has a lock.
 
 ## Tests
 

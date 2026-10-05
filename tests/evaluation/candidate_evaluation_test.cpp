@@ -30,6 +30,7 @@
 #include "support/test_macros.hpp"
 #include "validation/media_validator.hpp"
 
+#include "recovery/worker_pool.hpp"
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -874,6 +875,148 @@ TEST(CandidateEvaluationTest, IdsAndHashesFollowTheOptions) {
     ASSERT_TRUE(candidates[0].identity.preliminary.has_value());
     EXPECT_EQ(candidates[0].identity.preliminary, candidates[1].identity.preliminary);
     EXPECT_EQ(report->bytesHashed, 0U);
+}
+
+
+// ===========================================================================
+// A pool, and runs that resume (P15)
+// ===========================================================================
+
+// Everything a candidate says, as one line per candidate.
+std::vector<std::string> linesOf(const std::vector<EvaluatedCandidate>& candidates) {
+    std::vector<std::string> lines;
+    for (const EvaluatedCandidate& candidate : candidates) {
+        std::string line = std::to_string(candidate.id.value());
+        for (const std::string& fact : explain(candidate)) {
+            line += " | " + fact;
+        }
+        lines.push_back(std::move(line));
+    }
+    return lines;
+}
+
+struct PoolCard {
+    Card card;
+    Bytes image;
+
+    PoolCard() {
+        const Bytes jpeg = photo(41);
+        card.add("PHOTO.JPG", jpeg, 100);
+        card.add("COPY.JPG", jpeg, 300);
+        card.add("PICTURE.PNG", test::makePng({}), 500);
+        card.add("ANIMATION.GIF", test::makeGif({}), 700);
+        card.plant(1500, photo(42));
+        card.plant(1800, test::makeBmp({}));
+        image = card.image();
+    }
+};
+
+Result<EvaluationReport> runEvaluation(storage::IStorageSource& source, Volume& volume,
+                                       const std::vector<carving::FileCandidate>& carves,
+                                       const EvaluationOptions& options, std::vector<EvaluatedCandidate>& delivered) {
+    CandidateEvaluation evaluation(source, allFormats(), allMedia(), options);
+    if (Status added = evaluation.addVolume(*volume.recovery, volume.scan); !added.ok()) {
+        return added.error();
+    }
+    for (const carving::FileCandidate& carve : carves) {
+        if (Status added = evaluation.addCarve(carve); !added.ok()) {
+            return added.error();
+        }
+    }
+    return evaluation.run([&](EvaluatedCandidate&& candidate) {
+        delivered.push_back(std::move(candidate));
+        return success();
+    });
+}
+
+TEST(CandidateEvaluationTest, APoolChangesNothingButTheThreads) {
+    PoolCard card;
+    test::MemoryStorageSource source(card.image);
+    RECOVERY_ASSERT_OK(source.open());
+    Volume volume = openVolume(source);
+    ASSERT_NE(volume.recovery, nullptr);
+    const std::vector<carving::FileCandidate> carves = carveAll(source);
+    std::vector<EvaluatedCandidate> plain;
+    const Result<EvaluationReport> plainReport = runEvaluation(source, volume, carves, {}, plain);
+    RECOVERY_ASSERT_OK(plainReport);
+    ASSERT_GE(plain.size(), 6U);
+
+    Result<std::unique_ptr<WorkerPool>> pool = WorkerPool::create(4);
+    RECOVERY_ASSERT_OK(pool);
+    for (const std::size_t window : {std::size_t{0}, std::size_t{1}, std::size_t{3}}) {
+        SCOPED_TRACE(window);
+        EvaluationOptions options;
+        options.pool = pool->get();
+        options.window = window;
+        std::vector<EvaluatedCandidate> pooled;
+        const Result<EvaluationReport> report = runEvaluation(source, volume, carves, options, pooled);
+        RECOVERY_ASSERT_OK(report);
+        EXPECT_EQ(linesOf(pooled), linesOf(plain));
+        EXPECT_EQ(report->candidates(), plainReport->candidates());
+        EXPECT_EQ(report->duplicates, plainReport->duplicates);
+        EXPECT_EQ(report->bytesHashed, plainReport->bytesHashed);
+        EXPECT_EQ(report->carvesMerged, plainReport->carvesMerged);
+    }
+    EvaluationOptions tooWide;
+    tooWide.window = EvaluationOptions::kMaxWindow + 1;
+    RECOVERY_EXPECT_ERROR(validate(tooWide), ErrorCode::InvalidInput);
+}
+
+TEST(CandidateEvaluationTest, ARunResumesAfterTheCandidatesDeliveredBefore) {
+    PoolCard card;
+    test::MemoryStorageSource source(card.image);
+    RECOVERY_ASSERT_OK(source.open());
+    Volume volume = openVolume(source);
+    ASSERT_NE(volume.recovery, nullptr);
+    const std::vector<carving::FileCandidate> carves = carveAll(source);
+    std::vector<EvaluatedCandidate> whole;
+    const Result<EvaluationReport> wholeReport = runEvaluation(source, volume, carves, {}, whole);
+    RECOVERY_ASSERT_OK(wholeReport);
+    const std::vector<std::string> lines = linesOf(whole);
+    for (std::size_t delivered = 0; delivered <= whole.size(); ++delivered) {
+        SCOPED_TRACE(delivered);
+        EvaluationOptions options;
+        for (std::size_t i = 0; i < delivered; ++i) {
+            options.resume.push_back(recordOf(whole[i]));
+        }
+        std::vector<EvaluatedCandidate> rest;
+        const Result<EvaluationReport> report = runEvaluation(source, volume, carves, options, rest);
+        RECOVERY_ASSERT_OK(report);
+        const std::vector<std::string> restLines = linesOf(rest);
+        ASSERT_EQ(restLines.size(), lines.size() - delivered);
+        const auto skipped = static_cast<std::ptrdiff_t>(delivered);
+        EXPECT_TRUE(std::equal(restLines.begin(), restLines.end(), lines.begin() + skipped));
+        // The counts are those of the whole run.
+        EXPECT_EQ(report->candidates(), wholeReport->candidates());
+        EXPECT_EQ(report->valid, wholeReport->valid);
+        EXPECT_EQ(report->invalid, wholeReport->invalid);
+        EXPECT_EQ(report->duplicates, wholeReport->duplicates);
+        EXPECT_EQ(report->bytesHashed, wholeReport->bytesHashed);
+    }
+    // Records that do not fit are refused.
+    EvaluationOptions gap;
+    gap.resume = {recordOf(whole[1])};
+    RECOVERY_EXPECT_ERROR(validate(gap), ErrorCode::InvalidInput);
+    std::vector<EvaluatedCandidate> unused;
+    RECOVERY_EXPECT_ERROR(runEvaluation(source, volume, carves, gap, unused), ErrorCode::InvalidInput);
+    EvaluationOptions lie;
+    for (const EvaluatedCandidate& candidate : whole) {
+        lie.resume.push_back(recordOf(candidate));
+    }
+    for (EvaluationRecord& record : lie.resume) {
+        record.duplicate = !record.duplicate;
+    }
+    RECOVERY_EXPECT_ERROR(runEvaluation(source, volume, carves, lie, unused), ErrorCode::InvalidInput);
+    EvaluationOptions tooMany;
+    for (std::size_t i = 0; i <= whole.size(); ++i) {
+        EvaluationRecord record = recordOf(whole[i % whole.size()]);
+        record.id = EvaluatedCandidateId{i + 1};
+        record.duplicate = false;
+        record.identity = ContentIdentity{};
+        tooMany.resume.push_back(record);
+    }
+    RECOVERY_EXPECT_ERROR(runEvaluation(source, volume, carves, tooMany, unused), ErrorCode::InvalidInput);
+    EXPECT_TRUE(unused.empty());
 }
 
 }  // namespace

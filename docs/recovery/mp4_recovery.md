@@ -181,10 +181,25 @@ Component `mp4_recovery`, through `carving.scan.logger`: the start and the end o
 method, carves, merges, verdicts, time) at `Info`, and each candidate (id, method, offset, size, structure,
 samples, intact samples) at `Debug`. No file content is logged.
 
+## Steps (P15)
+
+`Mp4RecoverySteps` holds what `run()` does, as steps a scan drives itself ([scanning.md](scanning.md)); `run()`
+drives the same steps one after the other:
+1. `examine(volume, index)`, concurrently, then `addExamination()` in scan order;
+2. for each hit of `format()` in source order, `commit(hit, work)`, with the work `prepare(hit)` made ahead
+   (the carve and, when the commit will need it, its analysis) or with none. `skips(offset)` tells whether the
+   commit would skip a hit;
+3. `deliver()`.
+
+Carve ids are given at the commit, as one carver numbers its carves. `state()`, `takeChanges()` and `restore()` save
+the steps between hits and restore them. A merge changes only the candidates that start where its carve does, which
+is why a hit's preparation can run while other hits are committed.
+
 ## Thread safety
 
 None: one owner at a time. The source, the volumes and their scans must outlive the `Mp4Recovery`; a
-`CandidateContentReader` keeps its own copy of the candidate's regions.
+`CandidateContentReader` keeps its own copy of the candidate's regions. `Mp4RecoverySteps::examine()` and `prepare()`
+are const and may run concurrently with each other and with `commit()` of other hits.
 
 ## Tests
 

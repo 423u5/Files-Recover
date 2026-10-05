@@ -49,9 +49,12 @@ add_executable(recovery_unit_tests
     unit/core/config_test.cpp
     unit/core/encoding_test.cpp
     unit/core/error_test.cpp
+    unit/core/job_control_test.cpp
+    unit/core/ordered_work_test.cpp
     unit/core/result_test.cpp
     unit/core/sha256_test.cpp
     unit/core/text_test.cpp
+    unit/core/worker_pool_test.cpp
     unit/diagnostics/logger_test.cpp
     unit/imaging/image_metadata_test.cpp
     unit/partition/partition_source_test.cpp
@@ -294,6 +297,34 @@ target_link_libraries(recovery_evaluation_tests PRIVATE
 )
 gtest_discover_tests(recovery_evaluation_tests
     PROPERTIES LABELS evaluation
+    DISCOVERY_TIMEOUT 60
+)
+
+# ---------------------------------------------------------------------------
+# Scan tests (P15): the worker pool's users, the scan's source, checkpoints,
+# the scan coordinator (every stage, interrupted and resumed anywhere,
+# paused, on any number of workers), large images and bounded memory, and the
+# recovery job. heap_tracking.cpp replaces the global operator new of this
+# executable, as in the carving tests.
+# ---------------------------------------------------------------------------
+add_executable(recovery_scan_tests
+    carving/heap_tracking.cpp
+    carving/heap_tracking.hpp
+    scan/recovery_job_test.cpp
+    scan/scan_coordinator_test.cpp
+    scan/scan_large_test.cpp
+    scan/scan_source_test.cpp
+    scan/scan_test_support.cpp
+    scan/scan_test_support.hpp
+)
+target_link_libraries(recovery_scan_tests PRIVATE
+    recovery::scan
+    recovery_test_support
+    GTest::gtest_main
+    recovery_build_options
+)
+gtest_discover_tests(recovery_scan_tests
+    PROPERTIES LABELS scan
     DISCOVERY_TIMEOUT 60
 )
 

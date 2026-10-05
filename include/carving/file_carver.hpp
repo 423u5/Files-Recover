@@ -23,6 +23,7 @@
 #include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 namespace recovery::carving {
 
@@ -75,6 +76,35 @@ struct CarveOptions {
     std::uint64_t firstId = 1;
     // Cache size of each carve's content reader (SourceContentReader limits).
     std::size_t readCacheSize = SourceContentReader::kDefaultCacheSize;
+};
+
+// The rules by which run() skips hits (CarveOptions::skipHitsInsideValidCandidates),
+// as a value (P15): what a scan driven hit by hit from outside, or resumed
+// from a checkpoint, carries from one hit to the next to skip exactly the
+// hits one run() skips.
+struct CarveSkipState {
+    struct Interval {
+        std::uint64_t start = 0;
+        std::uint64_t end = 0;
+
+        // Holds `offset` strictly inside.
+        [[nodiscard]] bool holds(std::uint64_t offset) const noexcept { return offset > start && offset < end; }
+        friend bool operator==(const Interval&, const Interval&) = default;
+    };
+
+    // The candidate whose end was Found and that validated as Valid that
+    // reaches furthest so far.
+    Interval trusted;
+    // Per format (by registry position): the candidate of a self-synchronizing
+    // format that reaches furthest so far, whatever its verdict.
+    std::vector<Interval> streams;
+
+    // Whether run() skips `hit` given the candidates recorded so far.
+    [[nodiscard]] bool skips(const SignatureHit& hit) const noexcept;
+    // Records the candidate carved at `hit` (a hit with its format).
+    void record(const SignatureHit& hit, const FileCandidate& candidate);
+
+    friend bool operator==(const CarveSkipState&, const CarveSkipState&) = default;
 };
 
 struct CarveReport {

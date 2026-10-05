@@ -355,12 +355,44 @@ class RunState {
 public:
     RunState(storage::IStorageSource& source, const carving::FormatRegistry& formats,
              const FragmentRecoveryOptions& options)
-        : source_(source), formats_(formats), options_(options) {}
+        : source_(source), formats_(formats), options_(options), probe_(std::make_shared<MoovProbe>()) {
+        carving::CarveOptions carveOptions = options_.carving;
+        carveOptions.validate = true;
+        carver_ = std::make_unique<carving::FileCarver>(source_, std::move(carveOptions));
+        nextCarveId_ = options_.carving.firstId;
+        nextId_ = options_.firstId;
+    }
 
     [[nodiscard]] Status addVolume(FilesystemRecovery& recovery, const CandidateScan& scan);
-    [[nodiscard]] Status run(const FragmentCandidateSink& sink, FragmentRecoveryReport& report);
+    [[nodiscard]] std::size_t volumeCount() const noexcept { return volumes_.size(); }
+    [[nodiscard]] Status begin();
+
+    [[nodiscard]] Result<FragmentSeedExamination> examineSeed(std::size_t volume, std::size_t index) const;
+    [[nodiscard]] Status addSeedExamination(FragmentSeedExamination examination);
+
+    [[nodiscard]] std::vector<std::shared_ptr<const carving::IFileFormat>> extraFormats() const;
+    [[nodiscard]] bool wants(const carving::SignatureHit& hit);
+    [[nodiscard]] Status commit(const carving::SignatureHit& hit, const carving::CarveOutcome* outcome) {
+        return commitHit(hit, outcome, false);
+    }
+    void recordEvents(bool on) noexcept { recording_ = on; }
+    [[nodiscard]] std::vector<FragmentPassEvent> takeEvents() { return std::exchange(events_, {}); }
+    [[nodiscard]] Status replay(const std::vector<FragmentPassEvent>& events);
+
+    [[nodiscard]] std::size_t seedCount() const noexcept { return filesystemSeeds_.size() + carveSeeds_.size(); }
+    [[nodiscard]] std::size_t nextSeed() const noexcept { return cursor_; }
+    [[nodiscard]] Result<std::optional<FragmentCandidate>> reconstructNext();
+    [[nodiscard]] Status replayReconstruction(const FragmentCandidate& candidate);
+
+    [[nodiscard]] const FragmentRecoveryReport& report() const noexcept { return report_; }
 
 private:
+    // Where a hit of the pass lands: its volume and cluster.
+    struct HitPlace {
+        std::size_t volume = 0;
+        std::uint64_t index = 0;
+    };
+
     [[nodiscard]] const carving::SourceReadOptions& reads() const noexcept { return options_.carving.scan.reads; }
     void log(LogLevel level, std::string_view message, std::initializer_list<diagnostics::LogField> fields) const {
         if (options_.carving.scan.logger != nullptr) {
@@ -376,10 +408,23 @@ private:
     [[nodiscard]] std::optional<std::size_t> volumeAt(std::uint64_t sourceOffset) const;
     [[nodiscard]] const carving::IFileFormat* formatForExtension(std::string_view extension) const;
     [[nodiscard]] Result<const carving::IFileFormat*> formatByContent(const RecoveryCandidate& candidate) const;
+    // A format of the registry that the pass carves.
+    [[nodiscard]] bool carves(const carving::IFileFormat* format) const;
+    // Where a carve of the hit would go: a free cluster's start of a volume,
+    // not inside a carve that validated, nor inside its own format's stream.
+    [[nodiscard]] std::optional<HitPlace> carvePlace(const carving::SignatureHit& hit);
+    [[nodiscard]] Status commitHit(const carving::SignatureHit& hit, const carving::CarveOutcome* outcome,
+                                   bool replaying);
+    void applyCarve(const carving::SignatureHit& hit, const HitPlace& place, FileCandidate carve, bool replaying);
+    void record(const carving::SignatureHit& hit, const FileCandidate* carve);
+    // The delivery counts of one candidate.
+    void count(const FragmentCandidate& candidate);
+    [[nodiscard]] Seed& seedAt(std::size_t position) {
+        return position < filesystemSeeds_.size() ? filesystemSeeds_[position]
+                                                  : carveSeeds_[position - filesystemSeeds_.size()];
+    }
 
     void claimVolumes();
-    [[nodiscard]] Status collectFilesystemSeeds(FragmentRecoveryReport& report);
-    [[nodiscard]] Status scan(FragmentRecoveryReport& report);
     [[nodiscard]] Result<FragmentCandidate> reconstruct(Seed& seed);
     [[nodiscard]] Result<ReconstructionHypothesis> deliver(Search& search, Hypothesis& hypothesis,
                                                            const FragmentCandidate& candidate, bool full);
@@ -401,9 +446,32 @@ private:
     // (volume, first cluster) -> the owner of the carves that start there.
     std::map<std::pair<std::size_t, std::uint64_t>, OwnerId> carveOwners_;
     std::uint64_t nextId_ = 1;
+
+    bool begun_ = false;
+    // The last seed examination added, to keep them in scan order.
+    std::optional<std::pair<std::size_t, std::size_t>> lastExamined_;
+    // The pass: the moov probe, the carver, the carve that validated reaching
+    // furthest (hits strictly inside it are its own) and, per
+    // self-synchronizing format, the carve reaching furthest (its own frames
+    // are not files).
+    std::shared_ptr<MoovProbe> probe_;
+    std::unique_ptr<carving::FileCarver> carver_;
+    std::uint64_t trustedStart_ = 0;
+    std::uint64_t trustedEnd_ = 0;
+    std::map<const carving::IFileFormat*, std::pair<std::uint64_t, std::uint64_t>> streams_;
+    // Id of the next carve that is not rejected, as one carver numbers them.
+    std::uint64_t nextCarveId_ = 1;
+    bool recording_ = false;
+    std::vector<FragmentPassEvent> events_;
+    // The next seed to reconstruct.
+    std::size_t cursor_ = 0;
+    FragmentRecoveryReport report_;
 };
 
 Status RunState::addVolume(FilesystemRecovery& recovery, const CandidateScan& scan) {
+    if (begun_) {
+        return makeError(ErrorCode::InvalidInput, "volumes are added before fragment reconstruction begins");
+    }
     const std::optional<Geometry> geometry = Geometry::of(recovery);
     if (!geometry.has_value()) {
         return makeError(ErrorCode::InvalidInput, "the volume at " + std::to_string(recovery.volumeOffset()) +
@@ -508,208 +576,318 @@ void RunState::claimVolumes() {
     }
 }
 
-Status RunState::collectFilesystemSeeds(FragmentRecoveryReport& report) {
-    for (std::size_t v = 0; v < volumes_.size(); ++v) {
-        VolumeEvidence& volume = *volumes_[v];
-        const std::vector<RecoveryCandidate>& candidates = volume.scan().candidates;
-        for (std::size_t i = 0; i < candidates.size(); ++i) {
-            if (Status cancelled = checkCancelled(); !cancelled.ok()) {
-                return cancelled;
-            }
-            const RecoveryCandidate& candidate = candidates[i];
-            if (candidate.filesystemEvidence.allocation.layout != LayoutEvidence::Guessed) {
-                continue;
-            }
-            const std::optional<std::uint64_t> startOffset = candidate.sourceOffset();
-            const std::optional<std::uint64_t> start =
-                startOffset.has_value() ? volume.geometry().indexAt(*startOffset) : std::nullopt;
-            if (!start.has_value()) {
-                ++report.filesystemSkipped;
-                continue;
-            }
-            Seed seed;
-            seed.origin = SeedOrigin::Filesystem;
-            seed.volume = v;
-            seed.start = *start;
-            seed.size = candidate.expectedSize;
-            seed.owner = ownerBase_[v] + i;
-            seed.metadata = &candidate;
-            const carving::IFileFormat* byName = formatForExtension(candidate.extension);
-            if (volume.inUse(*start)) {
-                // What starts there is another file's now: only a name says what this one was.
-                if (byName == nullptr) {
-                    ++report.filesystemSkipped;
-                    continue;
-                }
-                seed.format = byName;
-                seed.unrecoverable = "its first cluster is allocated to other data now";
-            } else {
-                Result<const carving::IFileFormat*> byContent = formatByContent(candidate);
-                if (!byContent.ok()) {
-                    return byContent.error();
-                }
-                if (*byContent != nullptr) {
-                    seed.format = *byContent;
-                } else if (byName != nullptr) {
-                    seed.format = byName;
-                    seed.unrecoverable = "its first cluster does not start a file of the format its name says (" +
-                                         byName->descriptor().name + ")";
-                } else {
-                    ++report.filesystemSkipped;
-                    continue;
-                }
-            }
-            if (candidate.filesystemEvidence.allocation.hasIssue(filesystem::AllocationIssue::SizeExceedsVolume)) {
-                seed.unrecoverable = "its recorded size is larger than the volume";
-            }
-            seedStarts_.emplace(std::make_pair(v, *start), filesystemSeeds_.size());
-            filesystemSeeds_.push_back(std::move(seed));
-            ++report.filesystemSeeds;
-        }
+Status RunState::begin() {
+    if (begun_) {
+        return makeError(ErrorCode::InvalidInput, "fragment reconstruction has begun already");
     }
+    begun_ = true;
+    claimVolumes();
     return success();
 }
 
-Status RunState::scan(FragmentRecoveryReport& report) {
-    carving::FormatRegistry registry;
-    if (options_.carve) {
-        for (const std::shared_ptr<const carving::IFileFormat>& format : formats_.formats()) {
-            if (Status added = registry.add(format); !added.ok()) {
-                return added;
-            }
+Result<FragmentSeedExamination> RunState::examineSeed(std::size_t v, std::size_t i) const {
+    if (!begun_) {
+        return makeError(ErrorCode::InvalidInput, "fragment reconstruction has not begun");
+    }
+    if (v >= volumes_.size() || i >= volumes_[v]->scan().candidates.size()) {
+        return makeError(ErrorCode::InvalidInput,
+                         "no filesystem candidate " + std::to_string(i) + " in volume " + std::to_string(v));
+    }
+    if (Status cancelled = checkCancelled(); !cancelled.ok()) {
+        return cancelled.error();
+    }
+    VolumeEvidence& volume = *volumes_[v];
+    const RecoveryCandidate& candidate = volume.scan().candidates[i];
+    FragmentSeedExamination examination;
+    examination.volume = v;
+    examination.index = i;
+    if (candidate.filesystemEvidence.allocation.layout != LayoutEvidence::Guessed) {
+        return examination;
+    }
+    const std::optional<std::uint64_t> startOffset = candidate.sourceOffset();
+    const std::optional<std::uint64_t> start =
+        startOffset.has_value() ? volume.geometry().indexAt(*startOffset) : std::nullopt;
+    if (!start.has_value()) {
+        examination.skipped = true;
+        return examination;
+    }
+    const carving::IFileFormat* format = nullptr;
+    const carving::IFileFormat* byName = formatForExtension(candidate.extension);
+    if (volume.inUse(*start)) {
+        // What starts there is another file's now: only a name says what this one was.
+        if (byName == nullptr) {
+            examination.skipped = true;
+            return examination;
+        }
+        format = byName;
+        examination.unrecoverable = "its first cluster is allocated to other data now";
+    } else {
+        Result<const carving::IFileFormat*> byContent = formatByContent(candidate);
+        if (!byContent.ok()) {
+            return byContent.error();
+        }
+        if (*byContent != nullptr) {
+            format = *byContent;
+        } else if (byName != nullptr) {
+            format = byName;
+            examination.unrecoverable = "its first cluster does not start a file of the format its name says (" +
+                                        byName->descriptor().name + ")";
+        } else {
+            examination.skipped = true;
+            return examination;
         }
     }
+    if (candidate.filesystemEvidence.allocation.hasIssue(filesystem::AllocationIssue::SizeExceedsVolume)) {
+        examination.unrecoverable = "its recorded size is larger than the volume";
+    }
+    examination.seed = true;
+    examination.formatId = format->descriptor().id;
+    return examination;
+}
+
+Status RunState::addSeedExamination(FragmentSeedExamination examination) {
+    const std::pair<std::size_t, std::size_t> at{examination.volume, examination.index};
+    if (!begun_ || examination.volume >= volumes_.size() ||
+        examination.index >= volumes_[examination.volume]->scan().candidates.size() ||
+        (lastExamined_.has_value() && at <= *lastExamined_) || (examination.seed && examination.skipped)) {
+        return makeError(ErrorCode::InvalidInput, "seed examinations are added once each, in scan order");
+    }
+    lastExamined_ = at;
+    if (examination.skipped) {
+        ++report_.filesystemSkipped;
+        return success();
+    }
+    if (!examination.seed) {
+        return success();
+    }
+    const carving::IFileFormat* format = formats_.find(examination.formatId);
+    VolumeEvidence& volume = *volumes_[examination.volume];
+    const RecoveryCandidate& candidate = volume.scan().candidates[examination.index];
+    const std::optional<std::uint64_t> startOffset = candidate.sourceOffset();
+    const std::optional<std::uint64_t> start =
+        startOffset.has_value() ? volume.geometry().indexAt(*startOffset) : std::nullopt;
+    if (format == nullptr || !start.has_value()) {
+        return makeError(ErrorCode::InvalidInput, "a seed examination does not fit its candidate");
+    }
+    Seed seed;
+    seed.origin = SeedOrigin::Filesystem;
+    seed.volume = examination.volume;
+    seed.start = *start;
+    seed.size = candidate.expectedSize;
+    seed.owner = ownerBase_[examination.volume] + examination.index;
+    seed.metadata = &candidate;
+    seed.format = format;
+    seed.unrecoverable = std::move(examination.unrecoverable);
+    seedStarts_.emplace(std::make_pair(examination.volume, *start), filesystemSeeds_.size());
+    filesystemSeeds_.push_back(std::move(seed));
+    ++report_.filesystemSeeds;
+    return success();
+}
+
+std::vector<std::shared_ptr<const carving::IFileFormat>> RunState::extraFormats() const {
     const bool isoSeeds = std::any_of(filesystemSeeds_.begin(), filesystemSeeds_.end(),
                                       [](const Seed& seed) { return fragments::isIsoFormat(*seed.format); });
     const bool isoFormats = std::any_of(formats_.formats().begin(), formats_.formats().end(),
                                         [](const auto& format) { return fragments::isIsoFormat(*format); });
-    auto probe = std::make_shared<MoovProbe>();
     if ((options_.carve && isoFormats) || isoSeeds) {
-        if (Status added = registry.add(probe); !added.ok()) {
-            return added;
+        return {probe_};
+    }
+    return {};
+}
+
+bool RunState::carves(const carving::IFileFormat* format) const {
+    if (!options_.carve || format == nullptr) {
+        return false;
+    }
+    return std::any_of(formats_.formats().begin(), formats_.formats().end(),
+                       [&](const auto& registered) { return registered.get() == format; });
+}
+
+std::optional<RunState::HitPlace> RunState::carvePlace(const carving::SignatureHit& hit) {
+    if (!carves(hit.format)) {
+        return std::nullopt;
+    }
+    const std::optional<std::size_t> v = volumeAt(hit.fileOffset);
+    if (!v.has_value()) {
+        return std::nullopt;
+    }
+    VolumeEvidence& volume = *volumes_[*v];
+    const Geometry& geometry = volume.geometry();
+    const std::uint64_t index = *geometry.indexAt(hit.fileOffset);
+    // Files start at a cluster; clusters in use hold other data now.
+    if (!geometry.startsCluster(hit.fileOffset) || volume.inUse(index)) {
+        return std::nullopt;
+    }
+    if (hit.fileOffset > trustedStart_ && hit.fileOffset < trustedEnd_) {
+        return std::nullopt;
+    }
+    if (hit.format->descriptor().selfSynchronizing) {
+        if (const auto stream = streams_.find(hit.format); stream != streams_.end() &&
+                                                           hit.fileOffset > stream->second.first &&
+                                                           hit.fileOffset < stream->second.second) {
+            return std::nullopt;
         }
     }
-    if (registry.empty() || volumes_.empty()) {
-        return success();
-    }
-    Result<carving::SignatureScanner> scanner = carving::SignatureScanner::create(registry);
-    if (!scanner.ok()) {
-        return scanner.error();
-    }
-    carving::CarveOptions carveOptions = options_.carving;
-    carveOptions.validate = true;
-    carving::FileCarver carver(source_, carveOptions);
-    // The carve that validated reaching furthest; hits strictly inside it are its own.
-    std::uint64_t trustedStart = 0;
-    std::uint64_t trustedEnd = 0;
-    // Per self-synchronizing format, the carve reaching furthest: its own frames are not files.
-    std::map<const carving::IFileFormat*, std::pair<std::uint64_t, std::uint64_t>> streams;
+    return HitPlace{*v, index};
+}
 
-    const carving::HitSink onHit = [&](const carving::SignatureHit& hit) -> Status {
+bool RunState::wants(const carving::SignatureHit& hit) {
+    return begun_ && carvePlace(hit).has_value();
+}
+
+void RunState::record(const carving::SignatureHit& hit, const FileCandidate* carve) {
+    if (!recording_) {
+        return;
+    }
+    FragmentPassEvent event;
+    event.fileOffset = hit.fileOffset;
+    event.formatId = hit.format->descriptor().id;
+    event.signatureIndex = hit.signatureIndex;
+    if (carve != nullptr) {
+        event.carve = *carve;
+    }
+    events_.push_back(std::move(event));
+}
+
+Status RunState::commitHit(const carving::SignatureHit& hit, const carving::CarveOutcome* outcome, bool replaying) {
+    const auto mismatch = [&]() -> Status {
+        if (!replaying) {
+            return success();
+        }
+        return makeError(ErrorCode::InvalidInput, "a saved hit at " + std::to_string(hit.fileOffset) +
+                                                      " does not fit the volumes as they are now");
+    };
+    if (!begun_) {
+        return makeError(ErrorCode::InvalidInput, "fragment reconstruction has not begun");
+    }
+    if (hit.format == probe_.get()) {
         const std::optional<std::size_t> v = volumeAt(hit.fileOffset);
         if (!v.has_value()) {
-            return success();
+            return mismatch();
         }
         VolumeEvidence& volume = *volumes_[*v];
-        const Geometry& geometry = volume.geometry();
-        const std::uint64_t index = *geometry.indexAt(hit.fileOffset);
-        if (hit.format == probe.get()) {
-            // A moov of a file whose clusters are free.
-            if (!volume.inUse(index)) {
-                moovAnchors_[*v].push_back(hit.fileOffset);
-            }
-            return success();
+        // A moov of a file whose clusters are free.
+        if (volume.inUse(*volume.geometry().indexAt(hit.fileOffset))) {
+            return mismatch();
         }
-        // Files start at a cluster; clusters in use hold other data now.
-        if (!geometry.startsCluster(hit.fileOffset) || volume.inUse(index)) {
-            return success();
-        }
-        if (hit.fileOffset > trustedStart && hit.fileOffset < trustedEnd) {
-            return success();
-        }
-        if (hit.format->descriptor().selfSynchronizing) {
-            if (const auto stream = streams.find(hit.format);
-                stream != streams.end() && hit.fileOffset > stream->second.first &&
-                hit.fileOffset < stream->second.second) {
-                return success();
-            }
-        }
-        Result<carving::CarveOutcome> outcome = carver.carve(hit);
-        if (!outcome.ok()) {
-            return outcome.error();
-        }
-        if (std::holds_alternative<carving::CarveRejection>(*outcome)) {
-            return success();
-        }
-        FileCandidate carve = std::get<FileCandidate>(std::move(*outcome));
-        ++report.carved;
-        if (hit.format->descriptor().selfSynchronizing) {
-            std::pair<std::uint64_t, std::uint64_t>& stream = streams[hit.format];
-            if (carve.sourceEnd() > stream.second) {
-                stream = {carve.sourceOffset, carve.sourceEnd()};
-            }
-        }
-        const bool valid =
-            carve.end.status == carving::EndStatus::Found && carve.validation.status == ValidationStatus::Valid;
-        const auto seeded = seedStarts_.find(std::make_pair(*v, index));
-        OwnerId owner = 0;
-        if (seeded != seedStarts_.end()) {
-            owner = filesystemSeeds_[seeded->second].owner;
-        } else if (const auto known = carveOwners_.find(std::make_pair(*v, index)); known != carveOwners_.end()) {
-            owner = known->second;
-        } else {
-            owner = nextOwner_++;
-            carveOwners_.emplace(std::make_pair(*v, index), owner);
-        }
-        volume.strong().add(index, index + 1, owner);
-        const auto clustersOf = [&](std::uint64_t length) {
-            return geometry.clustersOf(carve.sourceOffset, carve.sourceOffset + length);
-        };
-        if (valid) {
-            ++report.carvesValid;
-            if (const auto clusters = clustersOf(carve.length)) {
-                volume.strong().add(clusters->first, clusters->second, owner);
-            }
-            if (carve.sourceEnd() > trustedEnd) {
-                trustedStart = carve.sourceOffset;
-                trustedEnd = carve.sourceEnd();
-            }
-        } else if (const auto clusters = clustersOf(carve.validation.validBytes)) {
-            volume.soft().add(clusters->first, clusters->second, owner);
-        }
-        if (seeded != seedStarts_.end()) {
-            // The same file as a filesystem seed: evidence of it, not a seed of its own.
-            filesystemSeeds_[seeded->second].carve = std::move(carve);
-            return success();
-        }
-        const bool broken = carve.end.status == carving::EndStatus::Broken ||
-                            (carve.end.status == carving::EndStatus::Found &&
-                             carve.validation.status == ValidationStatus::Invalid);
-        if (!valid && broken && options_.carve) {
-            Seed seed;
-            seed.origin = SeedOrigin::Carving;
-            seed.volume = *v;
-            seed.format = hit.format;
-            seed.start = index;
-            seed.owner = owner;
-            seed.carve = std::move(carve);
-            carveSeeds_.push_back(std::move(seed));
+        moovAnchors_[*v].push_back(hit.fileOffset);
+        if (!replaying) {
+            record(hit, nullptr);
         }
         return success();
-    };
+    }
+    const std::optional<HitPlace> place = carvePlace(hit);
+    if (!place.has_value()) {
+        return mismatch();
+    }
+    Result<carving::CarveOutcome> made = carving::CarveOutcome(carving::CarveRejection{});
+    if (outcome == nullptr) {
+        if (replaying) {
+            return mismatch();
+        }
+        made = carver_->carve(hit);
+        if (!made.ok()) {
+            return made.error();
+        }
+        outcome = &*made;
+    }
+    const FileCandidate* carve = std::get_if<FileCandidate>(outcome);
+    if (carve == nullptr) {
+        return mismatch();  // rejected: nothing changes
+    }
+    if (carve->sourceOffset != hit.fileOffset) {
+        return makeError(ErrorCode::InvalidInput, "a carve committed at another hit's offset");
+    }
+    applyCarve(hit, *place, *carve, replaying);
+    return success();
+}
 
-    Result<carving::ScanReport> scanned = scanner->scan(source_, onHit, options_.carving.scan);
-    if (!scanned.ok()) {
-        return scanned.error();
+void RunState::applyCarve(const carving::SignatureHit& hit, const HitPlace& place, FileCandidate carve,
+                          bool replaying) {
+    VolumeEvidence& volume = *volumes_[place.volume];
+    const Geometry& geometry = volume.geometry();
+    const std::uint64_t index = place.index;
+    carve.id = carving::FileCandidateId{nextCarveId_++};
+    ++report_.carved;
+    if (!replaying) {
+        record(hit, &carve);
     }
-    report.scan = std::move(*scanned);
-    if (report.scan.outcome == carving::ScanOutcome::Cancelled) {
-        return makeError(ErrorCode::Cancelled, "fragment reconstruction cancelled");
+    if (hit.format->descriptor().selfSynchronizing) {
+        std::pair<std::uint64_t, std::uint64_t>& stream = streams_[hit.format];
+        if (carve.sourceEnd() > stream.second) {
+            stream = {carve.sourceOffset, carve.sourceEnd()};
+        }
     }
-    // The probe is not one of the caller's formats.
-    if (!report.scan.hitsPerFormat.empty() && registry.find(probe->descriptor().id) != nullptr) {
-        report.scan.hits -= report.scan.hitsPerFormat.back();
-        report.scan.hitsPerFormat.pop_back();
+    const bool valid =
+        carve.end.status == carving::EndStatus::Found && carve.validation.status == ValidationStatus::Valid;
+    const auto seeded = seedStarts_.find(std::make_pair(place.volume, index));
+    OwnerId owner = 0;
+    if (seeded != seedStarts_.end()) {
+        owner = filesystemSeeds_[seeded->second].owner;
+    } else if (const auto known = carveOwners_.find(std::make_pair(place.volume, index));
+               known != carveOwners_.end()) {
+        owner = known->second;
+    } else {
+        owner = nextOwner_++;
+        carveOwners_.emplace(std::make_pair(place.volume, index), owner);
+    }
+    volume.strong().add(index, index + 1, owner);
+    const auto clustersOf = [&](std::uint64_t length) {
+        return geometry.clustersOf(carve.sourceOffset, carve.sourceOffset + length);
+    };
+    if (valid) {
+        ++report_.carvesValid;
+        if (const auto clusters = clustersOf(carve.length)) {
+            volume.strong().add(clusters->first, clusters->second, owner);
+        }
+        if (carve.sourceEnd() > trustedEnd_) {
+            trustedStart_ = carve.sourceOffset;
+            trustedEnd_ = carve.sourceEnd();
+        }
+    } else if (const auto clusters = clustersOf(carve.validation.validBytes)) {
+        volume.soft().add(clusters->first, clusters->second, owner);
+    }
+    if (seeded != seedStarts_.end()) {
+        // The same file as a filesystem seed: evidence of it, not a seed of its own.
+        filesystemSeeds_[seeded->second].carve = std::move(carve);
+        return;
+    }
+    const bool broken = carve.end.status == carving::EndStatus::Broken ||
+                        (carve.end.status == carving::EndStatus::Found &&
+                         carve.validation.status == ValidationStatus::Invalid);
+    if (!valid && broken && options_.carve) {
+        Seed seed;
+        seed.origin = SeedOrigin::Carving;
+        seed.volume = place.volume;
+        seed.format = hit.format;
+        seed.start = index;
+        seed.owner = owner;
+        seed.carve = std::move(carve);
+        carveSeeds_.push_back(std::move(seed));
+    }
+}
+
+Status RunState::replay(const std::vector<FragmentPassEvent>& events) {
+    for (const FragmentPassEvent& event : events) {
+        carving::SignatureHit hit;
+        hit.fileOffset = event.fileOffset;
+        hit.signatureIndex = event.signatureIndex;
+        hit.format = event.formatId == probe_->descriptor().id ? probe_.get() : formats_.find(event.formatId);
+        if (hit.format == nullptr || hit.signatureIndex >= hit.format->descriptor().signatures.size()) {
+            return makeError(ErrorCode::InvalidInput, "a saved hit names an unknown format or signature");
+        }
+        std::optional<carving::CarveOutcome> outcome;
+        if (event.carve.has_value()) {
+            if (Status valid = carving::validateFileCandidate(*event.carve); !valid.ok()) {
+                return valid;
+            }
+            outcome = carving::CarveOutcome(*event.carve);
+        } else if (hit.format != probe_.get()) {
+            return makeError(ErrorCode::InvalidInput, "a saved carving hit has no carve");
+        }
+        if (Status applied = commitHit(hit, outcome.has_value() ? &*outcome : nullptr, true); !applied.ok()) {
+            return applied;
+        }
     }
     return success();
 }
@@ -1052,85 +1230,242 @@ Result<FragmentCandidate> RunState::reconstruct(Seed& seed) {
     return candidate;
 }
 
-Status RunState::run(const FragmentCandidateSink& sink, FragmentRecoveryReport& report) {
-    nextId_ = options_.firstId;
-    claimVolumes();
-    if (options_.useFilesystem) {
-        if (Status collected = collectFilesystemSeeds(report); !collected.ok()) {
-            return collected;
-        }
+void RunState::count(const FragmentCandidate& candidate) {
+    switch (candidate.status) {
+    case ReconstructionStatus::Complete:
+        ++report_.complete;
+        break;
+    case ReconstructionStatus::Partial:
+        ++report_.partial;
+        break;
+    case ReconstructionStatus::Corrupted:
+        ++report_.corrupted;
+        break;
+    case ReconstructionStatus::Ambiguous:
+        ++report_.ambiguous;
+        break;
+    case ReconstructionStatus::Unrecoverable:
+        ++report_.unrecoverable;
+        break;
     }
-    if (Status scanned = scan(report); !scanned.ok()) {
-        return scanned;
+    if (!candidate.search.complete) {
+        ++report_.searchesLimited;
     }
-    const auto send = [&](FragmentCandidate&& candidate) -> Status {
-        switch (candidate.status) {
-        case ReconstructionStatus::Complete:
-            ++report.complete;
-            break;
-        case ReconstructionStatus::Partial:
-            ++report.partial;
-            break;
-        case ReconstructionStatus::Corrupted:
-            ++report.corrupted;
-            break;
-        case ReconstructionStatus::Ambiguous:
-            ++report.ambiguous;
-            break;
-        case ReconstructionStatus::Unrecoverable:
-            ++report.unrecoverable;
-            break;
-        }
-        if (!candidate.search.complete) {
-            ++report.searchesLimited;
-        }
-        report.layoutsValidated += candidate.search.layoutsValidated;
-        const ReconstructionHypothesis* chosen = candidate.reconstruction();
-        log(LogLevel::Debug, "fragment candidate",
-            {field("id", candidate.id.value()), field("origin", toString(candidate.origin)),
-             field("format", candidate.formatId), field("status", toString(candidate.status)),
-             field("hypotheses", candidate.hypotheses.size()),
-             field("fragments", chosen != nullptr ? chosen->evidence.fragments : 0),
-             field("layouts_validated", candidate.search.layoutsValidated),
-             field("search_complete", candidate.search.complete ? "yes" : "no")});
-        return sink(std::move(candidate));
-    };
-    for (Seed& seed : filesystemSeeds_) {
-        if (Status cancelled = checkCancelled(); !cancelled.ok()) {
-            return cancelled;
-        }
-        Result<FragmentCandidate> candidate = reconstruct(seed);
-        if (!candidate.ok()) {
-            return candidate.error();
-        }
-        if (Status sent = send(std::move(*candidate)); !sent.ok()) {
-            return sent;
-        }
+    report_.layoutsValidated += candidate.search.layoutsValidated;
+}
+
+Result<std::optional<FragmentCandidate>> RunState::reconstructNext() {
+    if (Status cancelled = checkCancelled(); !cancelled.ok()) {
+        return cancelled.error();
     }
-    for (Seed& seed : carveSeeds_) {
-        if (Status cancelled = checkCancelled(); !cancelled.ok()) {
-            return cancelled;
-        }
+    if (!begun_ || cursor_ >= seedCount()) {
+        return makeError(ErrorCode::InvalidInput, "every seed is reconstructed already");
+    }
+    const bool fromCarve = cursor_ >= filesystemSeeds_.size();
+    Seed& seed = seedAt(cursor_);
+    ++cursor_;
+    if (fromCarve) {
         // A reconstruction settled since holds its first cluster: it is part of that file.
         if (volumes_[seed.volume]->strong().claimedByOthers(seed.start, seed.owner)) {
+            return std::optional<FragmentCandidate>{};
+        }
+        ++report_.carvingSeeds;
+    }
+    Result<FragmentCandidate> candidate = reconstruct(seed);
+    if (!candidate.ok()) {
+        return candidate.error();
+    }
+    count(*candidate);
+    const ReconstructionHypothesis* chosen = candidate->reconstruction();
+    log(LogLevel::Debug, "fragment candidate",
+        {field("id", candidate->id.value()), field("origin", toString(candidate->origin)),
+         field("format", candidate->formatId), field("status", toString(candidate->status)),
+         field("hypotheses", candidate->hypotheses.size()),
+         field("fragments", chosen != nullptr ? chosen->evidence.fragments : 0),
+         field("layouts_validated", candidate->search.layoutsValidated),
+         field("search_complete", candidate->search.complete ? "yes" : "no")});
+    return std::optional<FragmentCandidate>(std::move(*candidate));
+}
+
+Status RunState::replayReconstruction(const FragmentCandidate& candidate) {
+    if (!begun_) {
+        return makeError(ErrorCode::InvalidInput, "fragment reconstruction has not begun");
+    }
+    // The seeds reconstructNext() would pass over first.
+    for (;;) {
+        if (cursor_ >= seedCount()) {
+            return makeError(ErrorCode::InvalidInput, "a saved reconstruction has no seed left");
+        }
+        const Seed& next = seedAt(cursor_);
+        if (cursor_ >= filesystemSeeds_.size() &&
+            volumes_[next.volume]->strong().claimedByOthers(next.start, next.owner)) {
+            ++cursor_;
             continue;
         }
-        ++report.carvingSeeds;
-        Result<FragmentCandidate> candidate = reconstruct(seed);
-        if (!candidate.ok()) {
-            return candidate.error();
-        }
-        if (Status sent = send(std::move(*candidate)); !sent.ok()) {
-            return sent;
+        break;
+    }
+    const bool fromCarve = cursor_ >= filesystemSeeds_.size();
+    const Seed& seed = seedAt(cursor_);
+    bool fits = candidate.origin == seed.origin && candidate.id.value() == nextId_ &&
+                candidate.formatId == seed.format->descriptor().id;
+    if (seed.metadata != nullptr) {
+        fits = fits && candidate.filesystemCandidate == seed.metadata->id;
+    } else {
+        fits = fits && candidate.carve.has_value() && seed.carve.has_value() &&
+               candidate.carve->sourceOffset == seed.carve->sourceOffset;
+    }
+    if (!fits) {
+        return makeError(ErrorCode::InvalidInput, "a saved reconstruction is not the next seed's");
+    }
+    // Its clusters are this file's from now on, as reconstruct() settled them.
+    VolumeEvidence& volume = *volumes_[seed.volume];
+    const Geometry& geometry = volume.geometry();
+    Layout settled;
+    if (!candidate.hypotheses.empty() && candidate.status != ReconstructionStatus::Ambiguous &&
+        candidate.status != ReconstructionStatus::Unrecoverable) {
+        for (const ClusterRun& run : candidate.hypotheses.front().clusters) {
+            const bool inside = run.count > 0 && run.firstCluster >= geometry.firstCluster &&
+                                run.firstCluster - geometry.firstCluster < geometry.clusterCount &&
+                                run.count <= geometry.clusterCount - (run.firstCluster - geometry.firstCluster);
+            if (!inside) {
+                return makeError(ErrorCode::InvalidInput, "a saved reconstruction places clusters outside its volume");
+            }
+            settled.push_back(Run{run.firstCluster - geometry.firstCluster, run.count});
         }
     }
+    ++cursor_;
+    ++nextId_;
+    if (fromCarve) {
+        ++report_.carvingSeeds;
+    }
+    volume.claimLayout(volume.strong(), settled, seed.owner);
+    count(candidate);
     return success();
 }
 
 }  // namespace
 
 // ---------------------------------------------------------------------------
-// FragmentRecovery
+// FragmentRecoverySteps
+// ---------------------------------------------------------------------------
+
+struct FragmentRecoverySteps::Impl {
+    Impl(storage::IStorageSource& source, const carving::FormatRegistry& formats, FragmentRecoveryOptions options)
+        : options(std::move(options)), state(source, formats, this->options) {}
+
+    const FragmentRecoveryOptions options;
+    RunState state;
+};
+
+Result<std::unique_ptr<FragmentRecoverySteps>> FragmentRecoverySteps::create(storage::IStorageSource& source,
+                                                                             const carving::FormatRegistry& formats,
+                                                                             FragmentRecoveryOptions options) {
+    if (!source.isOpen()) {
+        return makeError(ErrorCode::InvalidInput, "fragment reconstruction source is not open");
+    }
+    if (formats.empty()) {
+        return makeError(ErrorCode::InvalidInput, "fragment reconstruction needs at least one format");
+    }
+    if (options.carving.readCacheSize < carving::SourceContentReader::kMinCacheSize ||
+        options.carving.readCacheSize > carving::IContentReader::kMaxReadLength) {
+        return makeError(ErrorCode::InvalidInput,
+                         "readCacheSize must lie between " +
+                             std::to_string(carving::SourceContentReader::kMinCacheSize) + " and " +
+                             std::to_string(carving::IContentReader::kMaxReadLength));
+    }
+    if (Status valid = carving::validate(options.carving.scan.reads); !valid.ok()) {
+        return valid.error();
+    }
+    if (Status valid = formats::mp4::validate(options.mp4.limits); !valid.ok()) {
+        return valid.error();
+    }
+    if (Status valid = validate(options.limits); !valid.ok()) {
+        return valid.error();
+    }
+    auto impl = std::make_unique<Impl>(source, formats, std::move(options));
+    return std::unique_ptr<FragmentRecoverySteps>(new FragmentRecoverySteps(std::move(impl)));
+}
+
+FragmentRecoverySteps::FragmentRecoverySteps(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
+
+FragmentRecoverySteps::~FragmentRecoverySteps() = default;
+
+Status FragmentRecoverySteps::addVolume(FilesystemRecovery& volume, const CandidateScan& scan) {
+    if (scan.volumeOffset != volume.volumeOffset()) {
+        return makeError(ErrorCode::InvalidInput, "the candidate scan of the volume at " +
+                                                      std::to_string(scan.volumeOffset) +
+                                                      " is not from the volume at " +
+                                                      std::to_string(volume.volumeOffset()));
+    }
+    return impl_->state.addVolume(volume, scan);
+}
+
+std::size_t FragmentRecoverySteps::volumeCount() const noexcept {
+    return impl_->state.volumeCount();
+}
+
+Status FragmentRecoverySteps::begin() {
+    return impl_->state.begin();
+}
+
+Result<FragmentSeedExamination> FragmentRecoverySteps::examineSeed(std::size_t volume, std::size_t index) const {
+    return impl_->state.examineSeed(volume, index);
+}
+
+Status FragmentRecoverySteps::addSeedExamination(FragmentSeedExamination examination) {
+    return impl_->state.addSeedExamination(std::move(examination));
+}
+
+std::vector<std::shared_ptr<const carving::IFileFormat>> FragmentRecoverySteps::extraFormats() const {
+    return impl_->state.extraFormats();
+}
+
+bool FragmentRecoverySteps::wants(const carving::SignatureHit& hit) {
+    return impl_->state.wants(hit);
+}
+
+Status FragmentRecoverySteps::commit(const carving::SignatureHit& hit, const carving::CarveOutcome* outcome) {
+    return impl_->state.commit(hit, outcome);
+}
+
+void FragmentRecoverySteps::recordEvents(bool on) noexcept {
+    impl_->state.recordEvents(on);
+}
+
+std::vector<FragmentPassEvent> FragmentRecoverySteps::takeEvents() {
+    return impl_->state.takeEvents();
+}
+
+Status FragmentRecoverySteps::replay(const std::vector<FragmentPassEvent>& events) {
+    return impl_->state.replay(events);
+}
+
+std::size_t FragmentRecoverySteps::seedCount() const noexcept {
+    return impl_->state.seedCount();
+}
+
+std::size_t FragmentRecoverySteps::nextSeed() const noexcept {
+    return impl_->state.nextSeed();
+}
+
+Result<std::optional<FragmentCandidate>> FragmentRecoverySteps::reconstructNext() {
+    return impl_->state.reconstructNext();
+}
+
+Status FragmentRecoverySteps::replayReconstruction(const FragmentCandidate& candidate) {
+    return impl_->state.replayReconstruction(candidate);
+}
+
+FragmentRecoveryReport FragmentRecoverySteps::report() const {
+    return impl_->state.report();
+}
+
+const FragmentRecoveryOptions& FragmentRecoverySteps::options() const noexcept {
+    return impl_->options;
+}
+
+// ---------------------------------------------------------------------------
+// FragmentRecovery: the steps, one after the other
 // ---------------------------------------------------------------------------
 
 FragmentRecovery::FragmentRecovery(storage::IStorageSource& source, const carving::FormatRegistry& formats,
@@ -1156,27 +1491,16 @@ Result<FragmentRecoveryReport> FragmentRecovery::run(const FragmentCandidateSink
     if (!sink) {
         return makeError(ErrorCode::InvalidInput, "fragment reconstruction needs a candidate sink");
     }
-    if (!source_->isOpen()) {
-        return makeError(ErrorCode::InvalidInput, "fragment reconstruction source is not open");
+    Result<std::unique_ptr<FragmentRecoverySteps>> created =
+        FragmentRecoverySteps::create(*source_, *formats_, options_);
+    if (!created.ok()) {
+        return created.error();
     }
-    if (formats_->empty()) {
-        return makeError(ErrorCode::InvalidInput, "fragment reconstruction needs at least one format");
-    }
-    if (options_.carving.readCacheSize < carving::SourceContentReader::kMinCacheSize ||
-        options_.carving.readCacheSize > carving::IContentReader::kMaxReadLength) {
-        return makeError(ErrorCode::InvalidInput,
-                         "readCacheSize must lie between " +
-                             std::to_string(carving::SourceContentReader::kMinCacheSize) + " and " +
-                             std::to_string(carving::IContentReader::kMaxReadLength));
-    }
-    if (Status valid = carving::validate(options_.carving.scan.reads); !valid.ok()) {
-        return valid.error();
-    }
-    if (Status valid = formats::mp4::validate(options_.mp4.limits); !valid.ok()) {
-        return valid.error();
-    }
-    if (Status valid = validate(options_.limits); !valid.ok()) {
-        return valid.error();
+    FragmentRecoverySteps& steps = **created;
+    for (const Volume& volume : volumes_) {
+        if (Status added = steps.addVolume(*volume.recovery, *volume.scan); !added.ok()) {
+            return added.error();
+        }
     }
     const auto started = std::chrono::steady_clock::now();
     diagnostics::Logger* logger = options_.carving.scan.logger;
@@ -1186,16 +1510,75 @@ Result<FragmentRecoveryReport> FragmentRecovery::run(const FragmentCandidateSink
                      field("filesystem", options_.useFilesystem ? "yes" : "no"),
                      field("carve", options_.carve ? "yes" : "no")});
     }
-    RunState state(*source_, *formats_, options_);
-    for (const Volume& volume : volumes_) {
-        if (Status added = state.addVolume(*volume.recovery, *volume.scan); !added.ok()) {
+    if (Status begun = steps.begin(); !begun.ok()) {
+        return begun.error();
+    }
+    if (options_.useFilesystem) {
+        for (std::size_t v = 0; v < volumes_.size(); ++v) {
+            for (std::size_t i = 0; i < volumes_[v].scan->candidates.size(); ++i) {
+                Result<FragmentSeedExamination> examined = steps.examineSeed(v, i);
+                if (!examined.ok()) {
+                    return examined.error();
+                }
+                if (Status added = steps.addSeedExamination(std::move(*examined)); !added.ok()) {
+                    return added.error();
+                }
+            }
+        }
+    }
+
+    // The pass: the registry's formats (when carving) and the moov probe.
+    carving::ScanReport scanReport;
+    carving::FormatRegistry registry;
+    if (options_.carve) {
+        for (const std::shared_ptr<const carving::IFileFormat>& format : formats_->formats()) {
+            if (Status added = registry.add(format); !added.ok()) {
+                return added.error();
+            }
+        }
+    }
+    const std::vector<std::shared_ptr<const carving::IFileFormat>> extras = steps.extraFormats();
+    for (const std::shared_ptr<const carving::IFileFormat>& format : extras) {
+        if (Status added = registry.add(format); !added.ok()) {
             return added.error();
         }
     }
-    FragmentRecoveryReport report;
-    if (Status ran = state.run(sink, report); !ran.ok()) {
-        return ran.error();
+    if (!registry.empty() && steps.volumeCount() > 0) {
+        Result<carving::SignatureScanner> scanner = carving::SignatureScanner::create(registry);
+        if (!scanner.ok()) {
+            return scanner.error();
+        }
+        const carving::HitSink onHit = [&](const carving::SignatureHit& hit) -> Status {
+            return steps.commit(hit, nullptr);
+        };
+        Result<carving::ScanReport> scanned = scanner->scan(*source_, onHit, options_.carving.scan);
+        if (!scanned.ok()) {
+            return scanned.error();
+        }
+        scanReport = std::move(*scanned);
+        if (scanReport.outcome == carving::ScanOutcome::Cancelled) {
+            return makeError(ErrorCode::Cancelled, "fragment reconstruction cancelled");
+        }
+        // The probe is not one of the caller's formats.
+        if (!extras.empty() && !scanReport.hitsPerFormat.empty()) {
+            scanReport.hits -= scanReport.hitsPerFormat.back();
+            scanReport.hitsPerFormat.pop_back();
+        }
     }
+
+    while (steps.nextSeed() < steps.seedCount()) {
+        Result<std::optional<FragmentCandidate>> candidate = steps.reconstructNext();
+        if (!candidate.ok()) {
+            return candidate.error();
+        }
+        if (candidate->has_value()) {
+            if (Status sent = sink(std::move(**candidate)); !sent.ok()) {
+                return sent.error();
+            }
+        }
+    }
+    FragmentRecoveryReport report = steps.report();
+    report.scan = std::move(scanReport);
     report.elapsed =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
     if (logger != nullptr) {

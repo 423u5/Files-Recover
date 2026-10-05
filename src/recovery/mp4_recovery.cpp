@@ -12,6 +12,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <set>
 #include <utility>
 #include <variant>
 
@@ -458,17 +459,8 @@ Result<Mp4Structure> analyzeMp4(carving::IContentReader& content, const formats:
 
 namespace {
 
-// A filesystem candidate on its way to becoming an MP4 candidate.
-struct Pending {
-    Mp4Candidate candidate;
-    std::size_t volume = 0;
-    // Its data was analysed; otherwise it is an MP4 name without data, which
-    // becomes a candidate only when a carve starts where its first cluster is.
-    bool examined = false;
-};
-
 // The candidate's own data validated: its layout stands.
-bool ownValid(const Pending& pending) noexcept {
+bool ownValid(const Mp4PendingCandidate& pending) noexcept {
     const Mp4Structure& structure = pending.candidate.structure;
     return pending.examined && structure.status == mp4::FileStatus::Valid && structure.samplesMisframed() == 0;
 }
@@ -476,7 +468,7 @@ bool ownValid(const Pending& pending) noexcept {
 // Whether a carve from the candidate's start would give it its layout
 // (HYBRID): when the candidate's own data did not validate and the carve's
 // did, or when the metadata located no data at all.
-bool takesCarveLayout(const Pending& pending, bool carveValid) noexcept {
+bool takesCarveLayout(const Mp4PendingCandidate& pending, bool carveValid) noexcept {
     return !(pending.examined && (ownValid(pending) || !carveValid));
 }
 
@@ -488,45 +480,74 @@ bool startReallocated(const RecoveryCandidate& data) noexcept {
            data.sourceRegions.front().reallocated;
 }
 
-// Run state shared by the steps of Mp4Recovery::run.
-class Run {
-public:
-    Run(storage::IStorageSource& source, const Mp4RecoveryOptions& options,
-        const std::vector<std::pair<FilesystemRecovery*, const CandidateScan*>>& volumes)
-        : source_(source), options_(options), volumes_(volumes) {}
+}  // namespace
 
-    Status examineFilesystem(Mp4RecoveryReport& report);
-    Status carve(Mp4RecoveryReport& report);
-    Status deliver(const Mp4CandidateSink& sink, Mp4RecoveryReport& report);
+struct Mp4HitWork::Impl {
+    carving::SignatureHit hit;
+    // The carve: rejected, or carved with the validation the analysis gave it
+    // (or that of the filesystem candidate holding the same bytes).
+    std::variant<carving::CarveRejection, FileCandidate> outcome;
+    std::optional<Analysis> analysis;
+    std::vector<DamagedRange> unreadable;
+};
 
-private:
-    [[nodiscard]] const carving::SourceReadOptions& reads() const noexcept { return options_.carving.scan.reads; }
+Mp4HitWork::Mp4HitWork() = default;
+Mp4HitWork::~Mp4HitWork() = default;
+Mp4HitWork::Mp4HitWork(Mp4HitWork&&) noexcept = default;
+Mp4HitWork& Mp4HitWork::operator=(Mp4HitWork&&) noexcept = default;
+
+std::uint64_t Mp4HitWork::fileOffset() const noexcept {
+    return impl_ != nullptr ? impl_->hit.fileOffset : 0;
+}
+
+// The state the steps share; Mp4Recovery::run drives the same steps.
+struct Mp4RecoverySteps::Impl {
+    Impl(storage::IStorageSource& source, Mp4RecoveryOptions options)
+        : source(source), options(std::move(options)), format(this->options.format) {}
+
+    [[nodiscard]] const carving::SourceReadOptions& reads() const noexcept { return options.carving.scan.reads; }
     void log(LogLevel level, std::string_view message, std::initializer_list<diagnostics::LogField> fields) const {
-        if (options_.carving.scan.logger != nullptr) {
-            options_.carving.scan.logger->log(level, kComponent, message, fields);
+        if (options.carving.scan.logger != nullptr) {
+            options.carving.scan.logger->log(level, kComponent, message, fields);
         }
     }
     [[nodiscard]] std::optional<std::uint64_t> startOf(const RecoveryCandidate& candidate, std::size_t volume) const;
     [[nodiscard]] std::optional<std::size_t> volumeAt(std::uint64_t sourceOffset) const;
     Result<AllocationScan> allocationOf(std::size_t volume, std::uint64_t begin, std::uint64_t end);
-    Result<Analysis> analyzeCarve(FileCandidate& carve, std::vector<DamagedRange>& unreadable);
-    Status merge(Pending& pending, FileCandidate carve, std::optional<Analysis>& analysis,
+    Result<Analysis> analyzeCarve(FileCandidate& carve, std::vector<DamagedRange>& unreadable) const;
+    Status merge(Mp4PendingCandidate& pending, FileCandidate carve, std::optional<Analysis>& analysis,
                  std::vector<DamagedRange>& unreadable);
     [[nodiscard]] std::vector<SourceRegion> regionsFor(const FileCandidate& carve, const AllocationScan* scan) const;
+    Status apply(Mp4HitWork::Impl& work);
     void finish(Mp4Candidate& candidate, std::uint64_t id) const;
 
-    storage::IStorageSource& source_;
-    const Mp4RecoveryOptions& options_;
-    const std::vector<std::pair<FilesystemRecovery*, const CandidateScan*>>& volumes_;
-    std::vector<Pending> pending_;
+    storage::IStorageSource& source;
+    const Mp4RecoveryOptions options;
+    // The format carves are made with.
+    const formats::Mp4Format format;
+    std::vector<std::pair<FilesystemRecovery*, const CandidateScan*>> volumes;
+    std::vector<Mp4PendingCandidate> pending;
     // Where each pending candidate starts on the source -> its index.
-    std::multimap<std::uint64_t, std::size_t> starts_;
-    std::vector<Mp4Candidate> carved_;
+    std::multimap<std::uint64_t, std::size_t> starts;
+    std::vector<Mp4Candidate> carved;
+    // The carve that validated reaching furthest; hits strictly inside it are its own.
+    std::uint64_t trustedStart = 0;
+    std::uint64_t trustedEnd = 0;
+    // Id of the next carve that is not rejected, as one carver numbers them.
+    std::uint64_t nextCarveId = 1;
+    Mp4RecoveryReport counts;
     // Per volume, the active files' data (built on first use).
-    std::map<std::size_t, std::vector<ActiveData>> active_;
+    std::map<std::size_t, std::vector<ActiveData>> active;
+    // The last examination added, to keep them in scan order.
+    std::optional<std::pair<std::size_t, std::size_t>> lastExamined;
+    // For takeChanges(): pending candidates changed, and carving candidates reported.
+    std::set<std::size_t> changed;
+    std::size_t carvedReported = 0;
+    bool delivered = false;
 };
 
-std::optional<std::uint64_t> Run::startOf(const RecoveryCandidate& candidate, std::size_t volume) const {
+std::optional<std::uint64_t> Mp4RecoverySteps::Impl::startOf(const RecoveryCandidate& candidate,
+                                                            std::size_t volume) const {
     if (!candidate.sourceRegions.empty() && candidate.sourceRegions.front().kind == RegionKind::Stored) {
         return candidate.sourceRegions.front().sourceOffset;
     }
@@ -535,13 +556,13 @@ std::optional<std::uint64_t> Run::startOf(const RecoveryCandidate& candidate, st
     if (cluster == 0) {
         return std::nullopt;
     }
-    FilesystemRecovery& recovery = *volumes_[volume].first;
+    FilesystemRecovery& recovery = *volumes[volume].first;
     return clusterOffset(recovery, recovery.filesystem().info(), cluster);
 }
 
-std::optional<std::size_t> Run::volumeAt(std::uint64_t sourceOffset) const {
-    for (std::size_t v = 0; v < volumes_.size(); ++v) {
-        FilesystemRecovery& recovery = *volumes_[v].first;
+std::optional<std::size_t> Mp4RecoverySteps::Impl::volumeAt(std::uint64_t sourceOffset) const {
+    for (std::size_t v = 0; v < volumes.size(); ++v) {
+        FilesystemRecovery& recovery = *volumes[v].first;
         const filesystem::FilesystemInfo& info = recovery.filesystem().info();
         const std::uint64_t begin = recovery.volumeOffset();
         if (sourceOffset >= begin && sourceOffset - begin < info.volumeSize) {
@@ -551,8 +572,9 @@ std::optional<std::size_t> Run::volumeAt(std::uint64_t sourceOffset) const {
     return std::nullopt;
 }
 
-Result<AllocationScan> Run::allocationOf(std::size_t volume, std::uint64_t begin, std::uint64_t end) {
-    FilesystemRecovery& recovery = *volumes_[volume].first;
+Result<AllocationScan> Mp4RecoverySteps::Impl::allocationOf(std::size_t volume, std::uint64_t begin,
+                                                            std::uint64_t end) {
+    FilesystemRecovery& recovery = *volumes[volume].first;
     filesystem::IFilesystem& fs = recovery.filesystem();
     const filesystem::FilesystemInfo& info = fs.info();
     AllocationScan scan;
@@ -572,7 +594,7 @@ Result<AllocationScan> Run::allocationOf(std::size_t volume, std::uint64_t begin
             const std::uint64_t last = (to - 1 - *dataStart) / info.clusterSize;
             evidence.clusters = last - first + 1;
             for (std::uint64_t index = first; index <= last; ++index) {
-                if (index - first >= options_.maxClusterChecks) {
+                if (index - first >= options.maxClusterChecks) {
                     evidence.complete = false;
                     break;
                 }
@@ -603,9 +625,9 @@ Result<AllocationScan> Run::allocationOf(std::size_t volume, std::uint64_t begin
     }
 
     // Active files whose data overlaps the range.
-    auto found = active_.find(volume);
-    if (found == active_.end()) {
-        found = active_.emplace(volume, activeDataOf(*volumes_[volume].second)).first;
+    auto found = active.find(volume);
+    if (found == active.end()) {
+        found = active.emplace(volume, activeDataOf(*volumes[volume].second)).first;
     }
     const std::vector<ActiveData>& data = found->second;
     auto at = std::lower_bound(data.begin(), data.end(), begin,
@@ -624,7 +646,7 @@ Result<AllocationScan> Run::allocationOf(std::size_t volume, std::uint64_t begin
         if (std::find(named.begin(), named.end(), at->candidate) == named.end()) {
             named.push_back(at->candidate);
             if (evidence.activeFiles.size() < kMaxActiveFiles) {
-                const RecoveryCandidate& file = volumes_[volume].second->candidates[at->candidate];
+                const RecoveryCandidate& file = volumes[volume].second->candidates[at->candidate];
                 evidence.activeFiles.push_back(file.filesystemEvidence.path);
             }
         }
@@ -632,94 +654,14 @@ Result<AllocationScan> Run::allocationOf(std::size_t volume, std::uint64_t begin
     return scan;
 }
 
-Status Run::examineFilesystem(Mp4RecoveryReport& report) {
-    for (std::size_t v = 0; v < volumes_.size(); ++v) {
-        const CandidateScan& scan = *volumes_[v].second;
-        for (const RecoveryCandidate& candidate : scan.candidates) {
-            if (reads().cancellation.isCancellationRequested()) {
-                return makeError(ErrorCode::Cancelled, "MP4 recovery cancelled");
-            }
-            const bool named = isVideoExtension(candidate.extension);
-            const std::optional<std::uint64_t> start = startOf(candidate, v);
-            const bool located = candidate.bytes(RegionKind::Stored) + candidate.bytes(RegionKind::Embedded) > 0;
-            if (!located) {
-                if (named && start.has_value()) {
-                    // An MP4 name without data: a carve starting at its first cluster may be it.
-                    Pending pending;
-                    pending.candidate.data = candidate;
-                    pending.candidate.filesystemCandidate = candidate.id;
-                    pending.candidate.recordedSize = candidate.expectedSize;
-                    pending.volume = v;
-                    starts_.emplace(*start, pending_.size());
-                    pending_.push_back(std::move(pending));
-                }
-                continue;
-            }
-            Result<std::unique_ptr<CandidateContentReader>> content = CandidateContentReader::open(
-                source_, candidate, reads(), options_.carving.readCacheSize);
-            if (!content.ok()) {
-                return content.error();
-            }
-            CandidateContentReader& reader = **content;
-            if (!named) {
-                // Unnamed: only content that starts like an MP4 file.
-                const auto length = static_cast<std::size_t>(std::min<std::uint64_t>(reader.size(), kSniffLength));
-                if (length < formats::Mp4Format::kMinimumSize) {
-                    continue;
-                }
-                Result<std::span<const std::byte>> header = reader.read(0, length);
-                if (!header.ok()) {
-                    return header.error();
-                }
-                static const formats::Mp4Format sniffer;
-                if (!sniffer.checkHeader(*header).plausible) {
-                    continue;
-                }
-            }
-            ++report.filesystemExamined;
-            Result<Analysis> analysis = analyze(reader, options_.format);
-            if (!analysis.ok()) {
-                return analysis.error();
-            }
-            if (!named && analysis->structure.kind != mp4::MediaKind::Video) {
-                continue;  // an audio file (M4A's) or an image
-            }
-            ++report.filesystemMp4;
-            Pending pending;
-            pending.volume = v;
-            pending.examined = true;
-            Mp4Candidate& video = pending.candidate;
-            video.data = candidate;
-            video.filesystemCandidate = candidate.id;
-            video.recordedSize = candidate.expectedSize;
-            video.structure = std::move(analysis->structure);
-            if (analysis->movie.has_value()) {
-                countSamples(video.structure, *analysis->movie, damageOf(candidate, reader));
-            }
-            // A guessed layout that the structure validates is the metadata's
-            // start and the structure's confirmation together, unless another
-            // file has taken the first cluster since.
-            if (candidate.filesystemEvidence.allocation.layout == LayoutEvidence::Guessed &&
-                video.structure.status == mp4::FileStatus::Valid && video.structure.samplesMisframed() == 0 &&
-                !startReallocated(candidate)) {
-                video.data.method = RecoveryMethod::Hybrid;
-            }
-            if (start.has_value()) {
-                starts_.emplace(*start, pending_.size());
-            }
-            pending_.push_back(std::move(pending));
-        }
-    }
-    return success();
-}
-
-Result<Analysis> Run::analyzeCarve(FileCandidate& carve, std::vector<DamagedRange>& unreadable) {
+Result<Analysis> Mp4RecoverySteps::Impl::analyzeCarve(FileCandidate& carve,
+                                                      std::vector<DamagedRange>& unreadable) const {
     Result<std::unique_ptr<carving::SourceContentReader>> content = carving::SourceContentReader::open(
-        source_, carve.sourceOffset, carve.length, reads(), options_.carving.readCacheSize);
+        source, carve.sourceOffset, carve.length, reads(), options.carving.readCacheSize);
     if (!content.ok()) {
         return content.error();
     }
-    Result<Analysis> analysis = analyze(**content, options_.format);
+    Result<Analysis> analysis = analyze(**content, options.format);
     if (!analysis.ok()) {
         return analysis.error();
     }
@@ -737,7 +679,8 @@ Result<Analysis> Run::analyzeCarve(FileCandidate& carve, std::vector<DamagedRang
     return analysis;
 }
 
-std::vector<SourceRegion> Run::regionsFor(const FileCandidate& carve, const AllocationScan* scan) const {
+std::vector<SourceRegion> Mp4RecoverySteps::Impl::regionsFor(const FileCandidate& carve,
+                                                             const AllocationScan* scan) const {
     std::vector<SourceRegion> regions;
     std::uint64_t position = carve.sourceOffset;
     const auto add = [&](std::uint64_t end, bool allocated) {
@@ -757,10 +700,10 @@ std::vector<SourceRegion> Run::regionsFor(const FileCandidate& carve, const Allo
     return regions;
 }
 
-Status Run::merge(Pending& pending, FileCandidate carve, std::optional<Analysis>& analysis,
-                  std::vector<DamagedRange>& unreadable) {
-    Mp4Candidate& video = pending.candidate;
-    if (!takesCarveLayout(pending, carve.validation.status == ValidationStatus::Valid)) {
+Status Mp4RecoverySteps::Impl::merge(Mp4PendingCandidate& pendingCandidate, FileCandidate carve,
+                                     std::optional<Analysis>& analysis, std::vector<DamagedRange>& unreadable) {
+    Mp4Candidate& video = pendingCandidate.candidate;
+    if (!takesCarveLayout(pendingCandidate, carve.validation.status == ValidationStatus::Valid)) {
         // The metadata's layout stands; the carve is evidence of the same file.
         video.carving = std::move(carve);
         return success();
@@ -773,7 +716,7 @@ Status Run::merge(Pending& pending, FileCandidate carve, std::optional<Analysis>
     const bool deleted = video.data.isDeleted();
     std::optional<AllocationScan> allocation;
     if (deleted) {
-        Result<AllocationScan> scanned = allocationOf(pending.volume, carve.sourceOffset, carve.sourceEnd());
+        Result<AllocationScan> scanned = allocationOf(pendingCandidate.volume, carve.sourceOffset, carve.sourceEnd());
         if (!scanned.ok()) {
             return scanned.error();
         }
@@ -816,152 +759,82 @@ Status Run::merge(Pending& pending, FileCandidate carve, std::optional<Analysis>
     return success();
 }
 
-Status Run::carve(Mp4RecoveryReport& report) {
-    carving::FormatRegistry registry;
-    if (Status added = registry.add(std::make_shared<formats::Mp4Format>(options_.format)); !added.ok()) {
-        return added;
-    }
-    Result<carving::SignatureScanner> scanner = carving::SignatureScanner::create(registry);
-    if (!scanner.ok()) {
-        return scanner.error();
-    }
-    carving::CarveOptions carveOptions = options_.carving;
-    carveOptions.validate = false;  // each carve is analysed (and validated) here
-    carving::FileCarver carver(source_, carveOptions);
-    // The carve that validated reaching furthest; hits strictly inside it are its own.
-    std::uint64_t trustedStart = 0;
-    std::uint64_t trustedEnd = 0;
-
-    const carving::HitSink onHit = [&](const carving::SignatureHit& hit) -> Status {
-        if (hit.fileOffset > trustedStart && hit.fileOffset < trustedEnd) {
-            ++report.hitsSkipped;
-            return success();
-        }
-        Result<carving::CarveOutcome> outcome = carver.carve(hit);
-        if (!outcome.ok()) {
-            return outcome.error();
-        }
-        if (std::holds_alternative<carving::CarveRejection>(*outcome)) {
-            ++report.carvesRejected;
-            return success();
-        }
-        FileCandidate carve = std::get<FileCandidate>(std::move(*outcome));
-        ++report.carved;
-        const auto [first, last] = starts_.equal_range(carve.sourceOffset);
-
-        // A filesystem candidate whose own data validated, stored as one run
-        // from the same start and of the carve's length, holds the same bytes:
-        // its analysis stands for the carve's, unless another candidate
-        // starting here would take the carve's layout, which needs the carve's
-        // own analysis.
-        std::optional<Analysis> analysis;
-        std::vector<DamagedRange> unreadable;
-        const Pending* same = nullptr;
-        for (auto it = first; it != last; ++it) {
-            const Pending& candidate = pending_[it->second];
-            const std::vector<SourceRegion>& regions = candidate.candidate.data.sourceRegions;
-            const bool oneRun =
-                candidate.examined && candidate.candidate.structure.intact() && !regions.empty() &&
-                std::all_of(regions.begin(), regions.end(),
-                            [&](const SourceRegion& r) {
-                                return r.kind == RegionKind::Stored &&
-                                       r.sourceOffset == carve.sourceOffset + r.fileOffset;
-                            }) &&
-                candidate.candidate.data.expectedSize == carve.length;
-            if (oneRun) {
-                same = &candidate;
-                break;
-            }
-        }
-        const bool othersTakeIt = std::any_of(first, last, [&](const auto& entry) {
-            const Pending& other = pending_[entry.second];
-            return &other != same && takesCarveLayout(other, true);
-        });
-        if (same != nullptr && !othersTakeIt) {
-            carve.validation = carving::ValidationResult{ValidationStatus::Valid, carve.length,
-                                                         same->candidate.structure.detail};
-        } else {
-            Result<Analysis> analyzed = analyzeCarve(carve, unreadable);
-            if (!analyzed.ok()) {
-                return analyzed.error();
-            }
-            analysis = std::move(*analyzed);
-        }
-        if (carve.end.status == carving::EndStatus::Found && carve.validation.status == ValidationStatus::Valid &&
-            carve.sourceEnd() > trustedEnd) {
-            trustedStart = carve.sourceOffset;
-            trustedEnd = carve.sourceEnd();
-        }
-
-        if (first != last) {
-            for (auto it = first; it != last; ++it) {
-                // The last candidate starting here takes the analysis; the others copy it.
-                const bool lastOne = std::next(it) == last;
-                std::optional<Analysis> own = lastOne ? std::move(analysis) : analysis;
-                std::vector<DamagedRange> ranges = lastOne ? std::move(unreadable) : unreadable;
-                if (Status merged = merge(pending_[it->second], carve, own, ranges); !merged.ok()) {
-                    return merged;
-                }
-            }
-            ++report.carvesMerged;
-            return success();
-        }
-        if (!analysis.has_value()) {
-            return makeError(ErrorCode::InternalError, "a carve without its analysis");
-        }
-
-        // CARVING: no metadata names it.
-        Mp4Candidate video;
-        video.data.method = RecoveryMethod::Carving;
-        video.data.extension = std::string(mp4Extension(analysis->structure.majorBrand));
-        video.data.expectedSize = carve.length;
-        std::optional<AllocationScan> allocation;
-        if (const std::optional<std::size_t> volume = volumeAt(carve.sourceOffset); volume.has_value()) {
-            Result<AllocationScan> scanned = allocationOf(*volume, carve.sourceOffset, carve.sourceEnd());
-            if (!scanned.ok()) {
-                return scanned.error();
-            }
-            allocation = std::move(*scanned);
-        }
-        // Clusters allocated now hold other data, unless the carve lies inside
-        // an active file: then they are that file's, and so are the carve's bytes.
-        const bool reused = allocation.has_value() && !allocation->evidence.insideActiveFile;
-        video.data.sourceRegions = regionsFor(carve, reused ? &*allocation : nullptr);
-        video.data.fragmentation = FragmentationInfo{1, false};
-        if (video.data.reallocatedBytes() > 0) {
-            video.data.warnings.push_back(CandidateWarning::ClustersReallocated);
-        }
-        video.structure = std::move(analysis->structure);
-        if (analysis->movie.has_value()) {
-            std::vector<DamagedRange> ranges = std::move(unreadable);
-            for (const SourceRegion& region : video.data.sourceRegions) {
-                if (region.reallocated) {
-                    ranges.push_back(
-                        DamagedRange{region.fileOffset, region.fileOffset + region.length, Damage::Reallocated});
-                }
-            }
-            countSamples(video.structure, *analysis->movie, flatten(std::move(ranges)));
-        }
-        if (allocation.has_value()) {
-            video.allocation = std::move(allocation->evidence);
-        }
-        video.carving = std::move(carve);
-        carved_.push_back(std::move(video));
+Status Mp4RecoverySteps::Impl::apply(Mp4HitWork::Impl& work) {
+    if (std::holds_alternative<carving::CarveRejection>(work.outcome)) {
+        ++counts.carvesRejected;
         return success();
-    };
+    }
+    FileCandidate carve = std::get<FileCandidate>(std::move(work.outcome));
+    carve.id = carving::FileCandidateId{nextCarveId++};
+    ++counts.carved;
+    std::optional<Analysis>& analysis = work.analysis;
+    std::vector<DamagedRange>& unreadable = work.unreadable;
+    if (carve.end.status == carving::EndStatus::Found && carve.validation.status == ValidationStatus::Valid &&
+        carve.sourceEnd() > trustedEnd) {
+        trustedStart = carve.sourceOffset;
+        trustedEnd = carve.sourceEnd();
+    }
 
-    Result<carving::ScanReport> scan = scanner->scan(source_, onHit, options_.carving.scan);
-    if (!scan.ok()) {
-        return scan.error();
+    const auto [first, last] = starts.equal_range(carve.sourceOffset);
+    if (first != last) {
+        for (auto it = first; it != last; ++it) {
+            // The last candidate starting here takes the analysis; the others copy it.
+            const bool lastOne = std::next(it) == last;
+            std::optional<Analysis> own = lastOne ? std::move(analysis) : analysis;
+            std::vector<DamagedRange> ranges = lastOne ? std::move(unreadable) : unreadable;
+            if (Status merged = merge(pending[it->second], carve, own, ranges); !merged.ok()) {
+                return merged;
+            }
+            changed.insert(it->second);
+        }
+        ++counts.carvesMerged;
+        return success();
     }
-    report.scan = std::move(*scan);
-    if (report.scan.outcome == carving::ScanOutcome::Cancelled) {
-        return makeError(ErrorCode::Cancelled, "MP4 recovery cancelled");
+    if (!analysis.has_value()) {
+        return makeError(ErrorCode::InternalError, "a carve without its analysis");
     }
+
+    // CARVING: no metadata names it.
+    Mp4Candidate video;
+    video.data.method = RecoveryMethod::Carving;
+    video.data.extension = std::string(mp4Extension(analysis->structure.majorBrand));
+    video.data.expectedSize = carve.length;
+    std::optional<AllocationScan> allocation;
+    if (const std::optional<std::size_t> volume = volumeAt(carve.sourceOffset); volume.has_value()) {
+        Result<AllocationScan> scanned = allocationOf(*volume, carve.sourceOffset, carve.sourceEnd());
+        if (!scanned.ok()) {
+            return scanned.error();
+        }
+        allocation = std::move(*scanned);
+    }
+    // Clusters allocated now hold other data, unless the carve lies inside
+    // an active file: then they are that file's, and so are the carve's bytes.
+    const bool reused = allocation.has_value() && !allocation->evidence.insideActiveFile;
+    video.data.sourceRegions = regionsFor(carve, reused ? &*allocation : nullptr);
+    video.data.fragmentation = FragmentationInfo{1, false};
+    if (video.data.reallocatedBytes() > 0) {
+        video.data.warnings.push_back(CandidateWarning::ClustersReallocated);
+    }
+    video.structure = std::move(analysis->structure);
+    if (analysis->movie.has_value()) {
+        std::vector<DamagedRange> ranges = std::move(unreadable);
+        for (const SourceRegion& region : video.data.sourceRegions) {
+            if (region.reallocated) {
+                ranges.push_back(
+                    DamagedRange{region.fileOffset, region.fileOffset + region.length, Damage::Reallocated});
+            }
+        }
+        countSamples(video.structure, *analysis->movie, flatten(std::move(ranges)));
+    }
+    if (allocation.has_value()) {
+        video.allocation = std::move(allocation->evidence);
+    }
+    video.carving = std::move(carve);
+    carved.push_back(std::move(video));
     return success();
 }
 
-void Run::finish(Mp4Candidate& candidate, std::uint64_t id) const {
+void Mp4RecoverySteps::Impl::finish(Mp4Candidate& candidate, std::uint64_t id) const {
     candidate.data.id = CandidateId{id};
     if (candidate.data.method == RecoveryMethod::Carving) {
         std::string number = std::to_string(id);
@@ -1009,10 +882,343 @@ void Run::finish(Mp4Candidate& candidate, std::uint64_t id) const {
     }
 }
 
-Status Run::deliver(const Mp4CandidateSink& sink, Mp4RecoveryReport& report) {
-    std::uint64_t id = options_.firstId;
+// ---------------------------------------------------------------------------
+// Mp4RecoverySteps
+// ---------------------------------------------------------------------------
+
+Result<std::unique_ptr<Mp4RecoverySteps>> Mp4RecoverySteps::create(storage::IStorageSource& source,
+                                                                   Mp4RecoveryOptions options) {
+    if (!source.isOpen()) {
+        return makeError(ErrorCode::InvalidInput, "MP4 recovery source is not open");
+    }
+    if (options.carving.readCacheSize < carving::SourceContentReader::kMinCacheSize ||
+        options.carving.readCacheSize > carving::IContentReader::kMaxReadLength) {
+        return makeError(ErrorCode::InvalidInput,
+                         "readCacheSize must lie between " +
+                             std::to_string(carving::SourceContentReader::kMinCacheSize) + " and " +
+                             std::to_string(carving::IContentReader::kMaxReadLength));
+    }
+    if (Status valid = carving::validate(options.carving.scan.reads); !valid.ok()) {
+        return valid.error();
+    }
+    if (Status valid = formats::mp4::validate(options.format.limits); !valid.ok()) {
+        return valid.error();
+    }
+    if (options.maxClusterChecks == 0) {
+        return makeError(ErrorCode::InvalidInput, "maxClusterChecks must not be 0");
+    }
+    auto impl = std::make_unique<Impl>(source, std::move(options));
+    impl->nextCarveId = impl->options.carving.firstId;
+    return std::unique_ptr<Mp4RecoverySteps>(new Mp4RecoverySteps(std::move(impl)));
+}
+
+Mp4RecoverySteps::Mp4RecoverySteps(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
+
+Mp4RecoverySteps::~Mp4RecoverySteps() = default;
+
+const Mp4RecoveryOptions& Mp4RecoverySteps::options() const noexcept {
+    return impl_->options;
+}
+
+Status Mp4RecoverySteps::addVolume(FilesystemRecovery& volume, const CandidateScan& scan) {
+    if (scan.volumeOffset != volume.volumeOffset()) {
+        return makeError(ErrorCode::InvalidInput, "the candidate scan of the volume at " +
+                                                      std::to_string(scan.volumeOffset) +
+                                                      " is not from the volume at " +
+                                                      std::to_string(volume.volumeOffset()));
+    }
+    if (!impl_->pending.empty() || impl_->lastExamined.has_value() || impl_->counts.carved > 0) {
+        return makeError(ErrorCode::InvalidInput, "volumes are added before the first step");
+    }
+    impl_->volumes.emplace_back(&volume, &scan);
+    return success();
+}
+
+std::size_t Mp4RecoverySteps::volumeCount() const noexcept {
+    return impl_->volumes.size();
+}
+
+Result<Mp4Examination> Mp4RecoverySteps::examine(std::size_t volume, std::size_t index) const {
+    const Impl& impl = *impl_;
+    if (volume >= impl.volumes.size() || index >= impl.volumes[volume].second->candidates.size()) {
+        return makeError(ErrorCode::InvalidInput, "no filesystem candidate " + std::to_string(index) +
+                                                      " in volume " + std::to_string(volume));
+    }
+    if (impl.reads().cancellation.isCancellationRequested()) {
+        return makeError(ErrorCode::Cancelled, "MP4 recovery cancelled");
+    }
+    const RecoveryCandidate& candidate = impl.volumes[volume].second->candidates[index];
+    Mp4Examination examination;
+    examination.volume = volume;
+    examination.index = index;
+    const bool named = isVideoExtension(candidate.extension);
+    const std::optional<std::uint64_t> start = impl.startOf(candidate, volume);
+    const bool located = candidate.bytes(RegionKind::Stored) + candidate.bytes(RegionKind::Embedded) > 0;
+    if (!located) {
+        if (named && start.has_value()) {
+            // An MP4 name without data: a carve starting at its first cluster may be it.
+            Mp4PendingCandidate pending;
+            pending.candidate.data = candidate;
+            pending.candidate.filesystemCandidate = candidate.id;
+            pending.candidate.recordedSize = candidate.expectedSize;
+            pending.volume = volume;
+            pending.start = start;
+            examination.pending = std::move(pending);
+        }
+        return examination;
+    }
+    Result<std::unique_ptr<CandidateContentReader>> content =
+        CandidateContentReader::open(impl.source, candidate, impl.reads(), impl.options.carving.readCacheSize);
+    if (!content.ok()) {
+        return content.error();
+    }
+    CandidateContentReader& reader = **content;
+    if (!named) {
+        // Unnamed: only content that starts like an MP4 file.
+        const auto length = static_cast<std::size_t>(std::min<std::uint64_t>(reader.size(), kSniffLength));
+        if (length < formats::Mp4Format::kMinimumSize) {
+            return examination;
+        }
+        Result<std::span<const std::byte>> header = reader.read(0, length);
+        if (!header.ok()) {
+            return header.error();
+        }
+        static const formats::Mp4Format sniffer;
+        if (!sniffer.checkHeader(*header).plausible) {
+            return examination;
+        }
+    }
+    examination.analysed = true;
+    Result<Analysis> analysis = analyze(reader, impl.options.format);
+    if (!analysis.ok()) {
+        return analysis.error();
+    }
+    if (!named && analysis->structure.kind != mp4::MediaKind::Video) {
+        return examination;  // an audio file (M4A's) or an image
+    }
+    examination.video = true;
+    Mp4PendingCandidate pending;
+    pending.volume = volume;
+    pending.examined = true;
+    pending.start = start;
+    Mp4Candidate& video = pending.candidate;
+    video.data = candidate;
+    video.filesystemCandidate = candidate.id;
+    video.recordedSize = candidate.expectedSize;
+    video.structure = std::move(analysis->structure);
+    if (analysis->movie.has_value()) {
+        countSamples(video.structure, *analysis->movie, damageOf(candidate, reader));
+    }
+    // A guessed layout that the structure validates is the metadata's
+    // start and the structure's confirmation together, unless another
+    // file has taken the first cluster since.
+    if (candidate.filesystemEvidence.allocation.layout == LayoutEvidence::Guessed &&
+        video.structure.status == mp4::FileStatus::Valid && video.structure.samplesMisframed() == 0 &&
+        !startReallocated(candidate)) {
+        video.data.method = RecoveryMethod::Hybrid;
+    }
+    examination.pending = std::move(pending);
+    return examination;
+}
+
+Status Mp4RecoverySteps::addExamination(Mp4Examination examination) {
+    Impl& impl = *impl_;
+    const std::pair<std::size_t, std::size_t> at{examination.volume, examination.index};
+    if (examination.volume >= impl.volumes.size() ||
+        examination.index >= impl.volumes[examination.volume].second->candidates.size() ||
+        (impl.lastExamined.has_value() && at <= *impl.lastExamined)) {
+        return makeError(ErrorCode::InvalidInput, "examinations are added once each, in scan order");
+    }
+    if (examination.pending.has_value() && examination.pending->volume != examination.volume) {
+        return makeError(ErrorCode::InvalidInput, "an examination's candidate belongs to its volume");
+    }
+    impl.lastExamined = at;
+    impl.counts.filesystemExamined += examination.analysed ? 1 : 0;
+    impl.counts.filesystemMp4 += examination.video ? 1 : 0;
+    if (examination.pending.has_value()) {
+        if (examination.pending->start.has_value()) {
+            impl.starts.emplace(*examination.pending->start, impl.pending.size());
+        }
+        impl.pending.push_back(std::move(*examination.pending));
+    }
+    return success();
+}
+
+const carving::IFileFormat& Mp4RecoverySteps::format() const noexcept {
+    return impl_->format;
+}
+
+bool Mp4RecoverySteps::skips(std::uint64_t fileOffset) const noexcept {
+    return fileOffset > impl_->trustedStart && fileOffset < impl_->trustedEnd;
+}
+
+Result<Mp4HitWork> Mp4RecoverySteps::prepare(const carving::SignatureHit& hit) const {
+    const Impl& impl = *impl_;
+    const carving::FormatDescriptor& descriptor = impl.format.descriptor();
+    if (hit.signatureIndex >= descriptor.signatures.size()) {
+        return makeError(ErrorCode::InvalidInput, "an MP4 hit names a signature MP4 does not have");
+    }
+    carving::SignatureHit own = hit;
+    own.format = &impl.format;
+    own.formatIndex = 0;
+    carving::CarveOptions carveOptions = impl.options.carving;
+    carveOptions.validate = false;  // each carve is analysed (and validated) here
+    carving::FileCarver carver(impl.source, carveOptions);
+    Result<carving::CarveOutcome> outcome = carver.carve(own);
+    if (!outcome.ok()) {
+        return outcome.error();
+    }
+    Mp4HitWork work;
+    work.impl_ = std::make_unique<Mp4HitWork::Impl>();
+    Mp4HitWork::Impl& result = *work.impl_;
+    result.hit = own;
+    if (carving::CarveRejection* rejection = std::get_if<carving::CarveRejection>(&*outcome); rejection != nullptr) {
+        result.outcome = std::move(*rejection);
+        return work;
+    }
+    FileCandidate carve = std::get<FileCandidate>(std::move(*outcome));
+    const auto [first, last] = impl.starts.equal_range(carve.sourceOffset);
+
+    // A filesystem candidate whose own data validated, stored as one run
+    // from the same start and of the carve's length, holds the same bytes:
+    // its analysis stands for the carve's, unless another candidate starting
+    // here would take the carve's layout, which needs the carve's own
+    // analysis. (Commits of other hits change only the candidates that start
+    // where those hits do.)
+    const Mp4PendingCandidate* same = nullptr;
+    for (auto it = first; it != last; ++it) {
+        const Mp4PendingCandidate& candidate = impl.pending[it->second];
+        const std::vector<SourceRegion>& regions = candidate.candidate.data.sourceRegions;
+        const bool oneRun =
+            candidate.examined && candidate.candidate.structure.intact() && !regions.empty() &&
+            std::all_of(regions.begin(), regions.end(),
+                        [&](const SourceRegion& r) {
+                            return r.kind == RegionKind::Stored && r.sourceOffset == carve.sourceOffset + r.fileOffset;
+                        }) &&
+            candidate.candidate.data.expectedSize == carve.length;
+        if (oneRun) {
+            same = &candidate;
+            break;
+        }
+    }
+    const bool othersTakeIt = std::any_of(first, last, [&](const auto& entry) {
+        const Mp4PendingCandidate& other = impl.pending[entry.second];
+        return &other != same && takesCarveLayout(other, true);
+    });
+    if (same != nullptr && !othersTakeIt) {
+        carve.validation = carving::ValidationResult{ValidationStatus::Valid, carve.length,
+                                                     same->candidate.structure.detail};
+    } else {
+        Result<Analysis> analyzed = impl.analyzeCarve(carve, result.unreadable);
+        if (!analyzed.ok()) {
+            return analyzed.error();
+        }
+        result.analysis = std::move(*analyzed);
+    }
+    result.outcome = std::move(carve);
+    return work;
+}
+
+Status Mp4RecoverySteps::commit(const carving::SignatureHit& hit, Mp4HitWork* work) {
+    Impl& impl = *impl_;
+    if (impl.delivered) {
+        return makeError(ErrorCode::InvalidInput, "the MP4 steps were delivered already");
+    }
+    if (skips(hit.fileOffset)) {
+        ++impl.counts.hitsSkipped;
+        return success();
+    }
+    Mp4HitWork prepared;
+    if (work == nullptr || work->impl_ == nullptr) {
+        Result<Mp4HitWork> made = prepare(hit);
+        if (!made.ok()) {
+            return made.error();
+        }
+        prepared = std::move(*made);
+        work = &prepared;
+    }
+    if (work->impl_->hit.fileOffset != hit.fileOffset) {
+        return makeError(ErrorCode::InvalidInput, "an MP4 hit committed with the work of another hit");
+    }
+    return impl.apply(*work->impl_);
+}
+
+Mp4StepsState Mp4RecoverySteps::state() const {
+    const Impl& impl = *impl_;
+    Mp4StepsState state;
+    state.pending = impl.pending;
+    state.carved = impl.carved;
+    state.trustedStart = impl.trustedStart;
+    state.trustedEnd = impl.trustedEnd;
+    state.nextCarveId = impl.nextCarveId;
+    state.report = impl.counts;
+    return state;
+}
+
+Mp4StepsChanges Mp4RecoverySteps::takeChanges() {
+    Impl& impl = *impl_;
+    Mp4StepsChanges changes;
+    for (const std::size_t index : impl.changed) {
+        changes.pending.emplace_back(index, impl.pending[index]);
+    }
+    impl.changed.clear();
+    for (std::size_t i = impl.carvedReported; i < impl.carved.size(); ++i) {
+        changes.carved.push_back(impl.carved[i]);
+    }
+    impl.carvedReported = impl.carved.size();
+    changes.trustedStart = impl.trustedStart;
+    changes.trustedEnd = impl.trustedEnd;
+    changes.nextCarveId = impl.nextCarveId;
+    changes.report = impl.counts;
+    return changes;
+}
+
+Status Mp4RecoverySteps::restore(Mp4StepsState state) {
+    Impl& impl = *impl_;
+    for (const Mp4PendingCandidate& pending : state.pending) {
+        if (pending.volume >= impl.volumes.size()) {
+            return makeError(ErrorCode::InvalidInput, "a saved MP4 candidate belongs to a volume that was not added");
+        }
+    }
+    if (state.trustedStart > state.trustedEnd) {
+        return makeError(ErrorCode::InvalidInput, "a saved MP4 state has an empty trusted range");
+    }
+    impl.pending = std::move(state.pending);
+    impl.starts.clear();
+    for (std::size_t i = 0; i < impl.pending.size(); ++i) {
+        if (impl.pending[i].start.has_value()) {
+            impl.starts.emplace(*impl.pending[i].start, i);
+        }
+    }
+    impl.carved = std::move(state.carved);
+    impl.trustedStart = state.trustedStart;
+    impl.trustedEnd = state.trustedEnd;
+    impl.nextCarveId = state.nextCarveId;
+    impl.counts = state.report;
+    impl.changed.clear();
+    impl.carvedReported = impl.carved.size();
+    impl.lastExamined = std::pair<std::size_t, std::size_t>{SIZE_MAX, SIZE_MAX};
+    return success();
+}
+
+Status Mp4RecoverySteps::deliver(const Mp4CandidateSink& sink, Mp4RecoveryReport& report) {
+    Impl& impl = *impl_;
+    if (!sink) {
+        return makeError(ErrorCode::InvalidInput, "MP4 recovery needs a candidate sink");
+    }
+    if (impl.delivered) {
+        return makeError(ErrorCode::InvalidInput, "the MP4 steps were delivered already");
+    }
+    impl.delivered = true;
+    report.filesystemExamined = impl.counts.filesystemExamined;
+    report.filesystemMp4 = impl.counts.filesystemMp4;
+    report.carved = impl.counts.carved;
+    report.carvesRejected = impl.counts.carvesRejected;
+    report.hitsSkipped = impl.counts.hitsSkipped;
+    report.carvesMerged = impl.counts.carvesMerged;
+    std::uint64_t id = impl.options.firstId;
     const auto send = [&](Mp4Candidate& candidate) -> Status {
-        finish(candidate, id++);
+        impl.finish(candidate, id++);
         switch (candidate.data.method) {
         case RecoveryMethod::Filesystem:
             ++report.filesystem;
@@ -1022,6 +1228,8 @@ Status Run::deliver(const Mp4CandidateSink& sink, Mp4RecoveryReport& report) {
             break;
         case RecoveryMethod::Hybrid:
             ++report.hybrid;
+            break;
+        case RecoveryMethod::Fragmented:
             break;
         }
         switch (candidate.structure.status) {
@@ -1035,17 +1243,18 @@ Status Run::deliver(const Mp4CandidateSink& sink, Mp4RecoveryReport& report) {
             ++report.invalid;
             break;
         }
-        log(LogLevel::Debug, "MP4 candidate",
-            {field("id", candidate.data.id.value()), field("method", toString(candidate.data.method)),
-             field("offset", candidate.data.sourceOffset().value_or(0)), field("size", candidate.data.expectedSize),
-             field("structure", candidate.structure.status == mp4::FileStatus::Valid       ? "valid"
-                                : candidate.structure.status == mp4::FileStatus::Truncated ? "truncated"
-                                                                                          : "invalid"),
-             field("samples", candidate.structure.samples()),
-             field("samples_intact", candidate.structure.samplesIntact())});
+        impl.log(LogLevel::Debug, "MP4 candidate",
+                 {field("id", candidate.data.id.value()), field("method", toString(candidate.data.method)),
+                  field("offset", candidate.data.sourceOffset().value_or(0)),
+                  field("size", candidate.data.expectedSize),
+                  field("structure", candidate.structure.status == mp4::FileStatus::Valid       ? "valid"
+                                     : candidate.structure.status == mp4::FileStatus::Truncated ? "truncated"
+                                                                                               : "invalid"),
+                  field("samples", candidate.structure.samples()),
+                  field("samples_intact", candidate.structure.samplesIntact())});
         return sink(std::move(candidate));
     };
-    for (Pending& pending : pending_) {
+    for (Mp4PendingCandidate& pending : impl.pending) {
         if (!pending.examined && pending.candidate.data.method != RecoveryMethod::Hybrid) {
             continue;  // an MP4 name without data, and no carve starts where it did
         }
@@ -1053,7 +1262,7 @@ Status Run::deliver(const Mp4CandidateSink& sink, Mp4RecoveryReport& report) {
             return sent;
         }
     }
-    for (Mp4Candidate& candidate : carved_) {
+    for (Mp4Candidate& candidate : impl.carved) {
         if (Status sent = send(candidate); !sent.ok()) {
             return sent;
         }
@@ -1061,7 +1270,9 @@ Status Run::deliver(const Mp4CandidateSink& sink, Mp4RecoveryReport& report) {
     return success();
 }
 
-}  // namespace
+// ---------------------------------------------------------------------------
+// Mp4Recovery: the steps, one after the other
+// ---------------------------------------------------------------------------
 
 Mp4Recovery::Mp4Recovery(storage::IStorageSource& source, Mp4RecoveryOptions options)
     : source_(&source), options_(std::move(options)) {}
@@ -1081,49 +1292,59 @@ Result<Mp4RecoveryReport> Mp4Recovery::run(const Mp4CandidateSink& sink) {
     if (!sink) {
         return makeError(ErrorCode::InvalidInput, "MP4 recovery needs a candidate sink");
     }
-    if (!source_->isOpen()) {
-        return makeError(ErrorCode::InvalidInput, "MP4 recovery source is not open");
+    Result<std::unique_ptr<Mp4RecoverySteps>> created = Mp4RecoverySteps::create(*source_, options_);
+    if (!created.ok()) {
+        return created.error();
     }
-    if (options_.carving.readCacheSize < carving::SourceContentReader::kMinCacheSize ||
-        options_.carving.readCacheSize > carving::IContentReader::kMaxReadLength) {
-        return makeError(ErrorCode::InvalidInput,
-                         "readCacheSize must lie between " +
-                             std::to_string(carving::SourceContentReader::kMinCacheSize) + " and " +
-                             std::to_string(carving::IContentReader::kMaxReadLength));
-    }
-    if (Status valid = carving::validate(options_.carving.scan.reads); !valid.ok()) {
-        return valid.error();
-    }
-    if (Status valid = formats::mp4::validate(options_.format.limits); !valid.ok()) {
-        return valid.error();
-    }
-    if (options_.maxClusterChecks == 0) {
-        return makeError(ErrorCode::InvalidInput, "maxClusterChecks must not be 0");
+    Mp4RecoverySteps& steps = **created;
+    for (const Volume& volume : volumes_) {
+        if (Status added = steps.addVolume(*volume.recovery, *volume.scan); !added.ok()) {
+            return added.error();
+        }
     }
     const auto started = std::chrono::steady_clock::now();
-    std::vector<std::pair<FilesystemRecovery*, const CandidateScan*>> volumes;
-    for (const Volume& volume : volumes_) {
-        volumes.emplace_back(volume.recovery, volume.scan);
-    }
     diagnostics::Logger* logger = options_.carving.scan.logger;
     if (logger != nullptr) {
         logger->log(LogLevel::Info, kComponent, "MP4 recovery started",
-                    {field("volumes", volumes.size()), field("filesystem", options_.useFilesystem ? "yes" : "no"),
+                    {field("volumes", volumes_.size()), field("filesystem", options_.useFilesystem ? "yes" : "no"),
                      field("carve", options_.carve ? "yes" : "no")});
     }
     Mp4RecoveryReport report;
-    Run run(*source_, options_, volumes);
     if (options_.useFilesystem) {
-        if (Status examined = run.examineFilesystem(report); !examined.ok()) {
-            return examined.error();
+        for (std::size_t v = 0; v < volumes_.size(); ++v) {
+            for (std::size_t i = 0; i < volumes_[v].scan->candidates.size(); ++i) {
+                Result<Mp4Examination> examined = steps.examine(v, i);
+                if (!examined.ok()) {
+                    return examined.error();
+                }
+                if (Status added = steps.addExamination(std::move(*examined)); !added.ok()) {
+                    return added.error();
+                }
+            }
         }
     }
     if (options_.carve) {
-        if (Status carved = run.carve(report); !carved.ok()) {
-            return carved.error();
+        carving::FormatRegistry registry;
+        if (Status added = registry.add(std::make_shared<formats::Mp4Format>(options_.format)); !added.ok()) {
+            return added.error();
+        }
+        Result<carving::SignatureScanner> scanner = carving::SignatureScanner::create(registry);
+        if (!scanner.ok()) {
+            return scanner.error();
+        }
+        const carving::HitSink onHit = [&](const carving::SignatureHit& hit) -> Status {
+            return steps.commit(hit, nullptr);
+        };
+        Result<carving::ScanReport> scan = scanner->scan(*source_, onHit, options_.carving.scan);
+        if (!scan.ok()) {
+            return scan.error();
+        }
+        report.scan = std::move(*scan);
+        if (report.scan.outcome == carving::ScanOutcome::Cancelled) {
+            return makeError(ErrorCode::Cancelled, "MP4 recovery cancelled");
         }
     }
-    if (Status delivered = run.deliver(sink, report); !delivered.ok()) {
+    if (Status delivered = steps.deliver(sink, report); !delivered.ok()) {
         return delivered.error();
     }
     report.elapsed =

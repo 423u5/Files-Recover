@@ -65,6 +65,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -371,6 +372,127 @@ private:
     const carving::FormatRegistry* formats_;
     FragmentRecoveryOptions options_;
     std::vector<Volume> volumes_;
+};
+
+// ---------------------------------------------------------------------------
+// Reconstruction in steps (P15)
+// ---------------------------------------------------------------------------
+
+// What examining a filesystem candidate as a seed found. Only deleted files
+// whose layout the metadata guesses are seeds.
+struct FragmentSeedExamination {
+    // The candidate: its volume (by the order added) and its index in that
+    // volume's scan.
+    std::size_t volume = 0;
+    std::size_t index = 0;
+    // A seed to reconstruct (FragmentRecoveryReport::filesystemSeeds), or a
+    // deleted file left alone because no registered format fits it
+    // (filesystemSkipped). Neither for other candidates.
+    bool seed = false;
+    bool skipped = false;
+    // A seed's format (its descriptor id), and why nothing of it can be
+    // reconstructed, when that is known already.
+    std::string formatId;
+    std::optional<std::string> unrecoverable;
+};
+
+// A commit of the pass that changed the steps' state, kept so that the state
+// can be restored without the pass: the hit, and the carve made at it (none
+// for a moov box found by the probe).
+struct FragmentPassEvent {
+    std::uint64_t fileOffset = 0;
+    // The hit's format (its descriptor id) and signature.
+    std::string formatId;
+    std::size_t signatureIndex = 0;
+    std::optional<carving::FileCandidate> carve;
+};
+
+// Fragment reconstruction in steps (P15). FragmentRecovery::run() is these
+// steps driven one after the other; a scan coordinator drives them itself,
+// so that the carving shares one pass over the source with the other stages,
+// the seeds are examined in parallel, and the state can be saved between
+// steps and restored. The steps deliver exactly what run() delivers.
+//
+//  0. begin(), once the volumes are added: the claims of their files;
+//  1. examineSeed() each filesystem candidate (concurrently, in any order),
+//     then addSeedExamination() each result in scan order;
+//  2. commit() every hit of the registry's formats and of extraFormats() in
+//     source order, each with the carve CarveOptions with validate on make
+//     of it, or with none (commit() carves what it needs); wants() tells
+//     whether commit() would carve a hit given the commits so far;
+//  3. reconstructNext() until every seed is done.
+//
+// Restoring: begin() again, then the examinations, replay() of the pass's
+// events, and replayReconstruction() of each candidate delivered, in the
+// order the steps made them.
+//
+// Thread safety: examineSeed() is const and may run concurrently with
+// itself. Every other member needs one owner at a time. The source, the
+// registry, the volumes and their scans must outlive the object.
+class FragmentRecoverySteps {
+public:
+    // Fails with InvalidInput for invalid options, a source that is not open
+    // or a registry without formats.
+    [[nodiscard]] static Result<std::unique_ptr<FragmentRecoverySteps>> create(storage::IStorageSource& source,
+                                                                              const carving::FormatRegistry& formats,
+                                                                              FragmentRecoveryOptions options);
+    ~FragmentRecoverySteps();
+    FragmentRecoverySteps(const FragmentRecoverySteps&) = delete;
+    FragmentRecoverySteps& operator=(const FragmentRecoverySteps&) = delete;
+    FragmentRecoverySteps(FragmentRecoverySteps&&) = delete;
+    FragmentRecoverySteps& operator=(FragmentRecoverySteps&&) = delete;
+
+    // As FragmentRecovery::addVolume(); before begin().
+    [[nodiscard]] Status addVolume(FilesystemRecovery& volume, const CandidateScan& scan);
+    [[nodiscard]] std::size_t volumeCount() const noexcept;
+    [[nodiscard]] Status begin();
+
+    // Step 1. examineSeed() fails with InvalidInput for a candidate that does
+    // not exist or before begin(), with Cancelled, and with the error of a
+    // read that fails for a reason other than an I/O error.
+    [[nodiscard]] Result<FragmentSeedExamination> examineSeed(std::size_t volume, std::size_t index) const;
+    // Fails with InvalidInput for an examination out of scan order or with a
+    // format the registry does not have.
+    [[nodiscard]] Status addSeedExamination(FragmentSeedExamination examination);
+
+    // Step 2. Formats the pass scans for besides the registry's (the moov
+    // probe, which is never carved), known once step 1 is done.
+    [[nodiscard]] std::vector<std::shared_ptr<const carving::IFileFormat>> extraFormats() const;
+    [[nodiscard]] bool wants(const carving::SignatureHit& hit);
+    // Hits must come in increasing offset order; hits of other formats are
+    // ignored. Fails with Cancelled, with the error of a read that fails for
+    // a reason other than an I/O error, and with InvalidInput for a carve
+    // made at another offset.
+    [[nodiscard]] Status commit(const carving::SignatureHit& hit, const carving::CarveOutcome* outcome);
+    // Events are only kept once recording is on.
+    void recordEvents(bool on) noexcept;
+    [[nodiscard]] std::vector<FragmentPassEvent> takeEvents();
+    // Fails with InvalidInput for an event of an unknown format or a carve
+    // that is not well formed.
+    [[nodiscard]] Status replay(const std::vector<FragmentPassEvent>& events);
+
+    // Step 3. Seeds in reconstruction order: the filesystem seeds, then the
+    // carve seeds the pass found.
+    [[nodiscard]] std::size_t seedCount() const noexcept;
+    [[nodiscard]] std::size_t nextSeed() const noexcept;
+    // The next seed, reconstructed; nullopt when it was passed over (a carve
+    // seed whose first cluster a reconstruction settled earlier holds).
+    // Fails with InvalidInput when every seed is done, and like run().
+    [[nodiscard]] Result<std::optional<FragmentCandidate>> reconstructNext();
+    // Restores what reconstructing the next seed did (its claims, the counts)
+    // from the candidate it delivered, without the search. Fails with
+    // InvalidInput for a candidate that is not the next seed's.
+    [[nodiscard]] Status replayReconstruction(const FragmentCandidate& candidate);
+
+    // The counts so far; scan and elapsed are the caller's.
+    [[nodiscard]] FragmentRecoveryReport report() const;
+    [[nodiscard]] const FragmentRecoveryOptions& options() const noexcept;
+
+    struct Impl;
+
+private:
+    explicit FragmentRecoverySteps(std::unique_ptr<Impl> impl);
+    std::unique_ptr<Impl> impl_;
 };
 
 }  // namespace recovery

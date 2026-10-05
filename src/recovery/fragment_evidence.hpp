@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <string_view>
 #include <unordered_map>
@@ -124,7 +125,8 @@ public:
     [[nodiscard]] const Geometry& geometry() const noexcept { return geometry_; }
 
     // The cluster's state in the allocation now; a filesystem error reads as
-    // Unreadable (unknown).
+    // Unreadable (unknown). Safe to call from several threads at once: the
+    // cache and the filesystem are used under a lock.
     [[nodiscard]] filesystem::ClusterState state(std::uint64_t index);
     // Allocated to data, bad or invalid: P7's rule for reallocated clusters.
     [[nodiscard]] bool inUse(std::uint64_t index);
@@ -153,6 +155,7 @@ private:
     Geometry geometry_;
     ClaimMap strong_;
     ClaimMap soft_;
+    std::mutex cacheMutex_;
     std::unordered_map<std::uint64_t, std::vector<std::uint8_t>> pages_;
 };
 

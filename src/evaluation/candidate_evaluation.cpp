@@ -2,11 +2,13 @@
 
 #include "recovery/candidate_content.hpp"
 #include "recovery/checked_math.hpp"
+#include "recovery/ordered_work.hpp"
 
 #include <algorithm>
 #include <array>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <span>
@@ -263,6 +265,16 @@ public:
                                  std::vector<FragmentCandidate> fragments, const EvaluatedCandidateSink& sink);
 
 private:
+    // One candidate to deliver: what it is made of, and the filesystem
+    // candidate it comes from.
+    struct Item {
+        Proposal proposal;
+        std::optional<SlotRef> slot;
+    };
+
+    // Merges the inputs into the candidates to deliver, in delivery order.
+    void plan(std::vector<FileCandidate>& carves, std::vector<Mp4Candidate>& mp4,
+              std::vector<FragmentCandidate>& fragments);
     void buildSlots();
     void takeFragments(std::vector<FragmentCandidate>& fragments);
     void takeMp4(std::vector<Mp4Candidate>& mp4);
@@ -270,10 +282,17 @@ private:
     [[nodiscard]] Status cancelled() const;
     [[nodiscard]] std::optional<std::size_t> volumeAt(std::uint64_t sourceOffset) const;
     [[nodiscard]] const std::vector<ActiveData>& activeData(std::size_t volume);
+    // Thread-safe: a volume's filesystem is used under its lock.
     Result<AllocationScan> allocationOf(std::size_t volume, std::uint64_t begin, std::uint64_t end);
     Result<const carving::IFileFormat*> detectFormat(carving::IContentReader& content, std::string_view extension);
+    // Thread-safe once planned: validates and hashes one candidate.
     Result<EvaluatedCandidate> evaluate(Proposal proposal, std::optional<SlotRef> slot);
+    // In delivery order: the id, duplicates, warnings and counts.
     Status deliver(EvaluatedCandidate&& candidate, const EvaluatedCandidateSink& sink);
+    // Counts a candidate an earlier run delivered as deliver() counts it.
+    Status replay(const EvaluationRecord& record);
+    void countMethod(RecoveryMethod method);
+    void countStatus(ValidationStatus status);
 
     storage::IStorageSource& source_;
     const carving::FormatRegistry& formats_;
@@ -293,8 +312,13 @@ private:
     // Carves that an MP4 candidate or a reconstruction already holds: (start, format).
     std::set<std::pair<std::uint64_t, std::string>> consumed_;
     std::map<std::size_t, std::vector<ActiveData>> active_;
-    // The first evaluated id of each filesystem candidate, once delivered.
-    std::map<SlotRef, EvaluatedCandidateId> delivered_;
+    // The candidates to deliver, in delivery order.
+    std::vector<Item> order_;
+    // The evaluated id of each filesystem candidate's first candidate.
+    std::map<SlotRef, EvaluatedCandidateId> slotFirstId_;
+    // Per volume, held while its filesystem is used; and the lock of active_.
+    std::vector<std::unique_ptr<std::mutex>> volumeLocks_;
+    std::mutex activeLock_;
     DuplicateIndex duplicates_;
     EvaluationReport report_;
     std::uint64_t nextId_ = 0;
@@ -549,6 +573,9 @@ std::optional<std::size_t> Run::volumeAt(std::uint64_t sourceOffset) const {
 }
 
 const std::vector<ActiveData>& Run::activeData(std::size_t volume) {
+    // A map's elements stay where they are when others are added, so the
+    // reference outlives the lock.
+    const std::lock_guard lock(activeLock_);
     auto found = active_.find(volume);
     if (found != active_.end()) {
         return found->second;
@@ -571,6 +598,7 @@ const std::vector<ActiveData>& Run::activeData(std::size_t volume) {
 }
 
 Result<AllocationScan> Run::allocationOf(std::size_t volume, std::uint64_t begin, std::uint64_t end) {
+    const std::lock_guard lock(*volumeLocks_[volume]);
     FilesystemRecovery& recovery = *volumes_[volume].first;
     filesystem::IFilesystem& fs = recovery.filesystem();
     const filesystem::FilesystemInfo& info = fs.info();
@@ -721,8 +749,8 @@ Result<EvaluatedCandidate> Run::evaluate(Proposal proposal, std::optional<SlotRe
             }
             if (scan->container.has_value()) {
                 // Part of an active file: its clusters are that file's.
-                const auto found = delivered_.find(SlotRef{*volume, *scan->container});
-                if (found != delivered_.end()) {
+                const auto found = slotFirstId_.find(SlotRef{*volume, *scan->container});
+                if (found != slotFirstId_.end()) {
                     candidate.container = found->second;
                 }
             } else if (!scan->allocated.empty()) {
@@ -825,7 +853,6 @@ Result<EvaluatedCandidate> Run::evaluate(Proposal proposal, std::optional<SlotRe
     if (!identity.ok()) {
         return identity.error();
     }
-    report_.bytesHashed += options_.identity.sha256 ? identity->size : 0;
     std::uint64_t unreadable = 0;
     for (const storage::BadRegion& region : (*content)->unreadable().regions()) {
         unreadable += region.length;
@@ -886,7 +913,16 @@ Status Run::deliver(EvaluatedCandidate&& candidate, const EvaluatedCandidateSink
         warnings.push_back(EvaluationWarning::InsideActiveFile);
     }
 
-    switch (candidate.data.method) {
+    countMethod(candidate.data.method);
+    countStatus(candidate.validationStatus());
+    report_.duplicates += candidate.duplicateOf.has_value() ? 1 : 0;
+    report_.alternatives += candidate.hasWarning(EvaluationWarning::AlternativeLayout) ? 1 : 0;
+    report_.bytesHashed += options_.identity.sha256 ? candidate.identity.size : 0;
+    return sink(std::move(candidate));
+}
+
+void Run::countMethod(RecoveryMethod method) {
+    switch (method) {
     case RecoveryMethod::Filesystem:
         ++report_.filesystem;
         break;
@@ -900,7 +936,10 @@ Status Run::deliver(EvaluatedCandidate&& candidate, const EvaluatedCandidateSink
         ++report_.fragmented;
         break;
     }
-    switch (candidate.validationStatus()) {
+}
+
+void Run::countStatus(ValidationStatus status) {
+    switch (status) {
     case ValidationStatus::Valid:
         ++report_.valid;
         break;
@@ -914,27 +953,37 @@ Status Run::deliver(EvaluatedCandidate&& candidate, const EvaluatedCandidateSink
         ++report_.notValidated;
         break;
     }
-    report_.duplicates += candidate.duplicateOf.has_value() ? 1 : 0;
-    report_.alternatives += candidate.hasWarning(EvaluationWarning::AlternativeLayout) ? 1 : 0;
-    return sink(std::move(candidate));
 }
 
-Result<EvaluationReport> Run::run(std::vector<FileCandidate> carves, std::vector<Mp4Candidate> mp4,
-                                  std::vector<FragmentCandidate> fragments, const EvaluatedCandidateSink& sink) {
-    const auto started = std::chrono::steady_clock::now();
-    nextId_ = options_.firstId;
+Status Run::replay(const EvaluationRecord& record) {
+    if (record.id.value() != nextId_) {
+        return makeError(ErrorCode::InvalidInput, "candidate evaluation: a resume record is out of order");
+    }
+    const std::optional<std::uint64_t> original = duplicates_.add(record.identity, record.id.value());
+    if (original.has_value() != record.duplicate) {
+        return makeError(ErrorCode::InvalidInput,
+                         "candidate evaluation: a resume record does not fit the records before it");
+    }
+    ++nextId_;
+    countMethod(record.method);
+    countStatus(record.validationStatus);
+    report_.duplicates += record.duplicate ? 1 : 0;
+    report_.alternatives += record.alternative ? 1 : 0;
+    report_.bytesHashed += options_.identity.sha256 ? record.identity.size : 0;
+    return success();
+}
+
+void Run::plan(std::vector<FileCandidate>& carves, std::vector<Mp4Candidate>& mp4,
+               std::vector<FragmentCandidate>& fragments) {
     buildSlots();
     takeFragments(fragments);
     takeMp4(mp4);
     takeCarves(carves);
-
+    std::uint64_t id = options_.firstId;
     // The volumes' candidates, in scan order, each where its filesystem candidate is.
     for (std::size_t v = 0; v < volumes_.size(); ++v) {
         const CandidateScan& scan = *volumes_[v].second;
         for (std::size_t i = 0; i < scan.candidates.size(); ++i) {
-            if (Status stop = cancelled(); !stop.ok()) {
-                return stop.error();
-            }
             Slot& slot = slots_[v][i];
             const SlotRef ref{v, i};
             std::vector<Proposal> proposals;
@@ -954,15 +1003,10 @@ Result<EvaluationReport> Run::run(std::vector<FileCandidate> carves, std::vector
                 own.otherCarves = std::move(slot.otherCarves);
                 proposals.push_back(std::move(own));
             }
+            slotFirstId_.emplace(ref, EvaluatedCandidateId{id});
             for (Proposal& proposal : proposals) {
-                Result<EvaluatedCandidate> evaluated = evaluate(std::move(proposal), ref);
-                if (!evaluated.ok()) {
-                    return evaluated.error();
-                }
-                delivered_.emplace(ref, EvaluatedCandidateId{nextId_});
-                if (Status sent = deliver(std::move(*evaluated), sink); !sent.ok()) {
-                    return sent.error();
-                }
+                order_.push_back(Item{std::move(proposal), ref});
+                ++id;
             }
         }
     }
@@ -971,16 +1015,47 @@ Result<EvaluationReport> Run::run(std::vector<FileCandidate> carves, std::vector
         return a.data.sourceOffset().value_or(UINT64_MAX) < b.data.sourceOffset().value_or(UINT64_MAX);
     });
     for (Proposal& proposal : loose_) {
+        order_.push_back(Item{std::move(proposal), std::nullopt});
+    }
+    loose_.clear();
+}
+
+Result<EvaluationReport> Run::run(std::vector<FileCandidate> carves, std::vector<Mp4Candidate> mp4,
+                                  std::vector<FragmentCandidate> fragments, const EvaluatedCandidateSink& sink) {
+    const auto started = std::chrono::steady_clock::now();
+    nextId_ = options_.firstId;
+    for (std::size_t v = 0; v < volumes_.size(); ++v) {
+        volumeLocks_.push_back(std::make_unique<std::mutex>());
+    }
+    plan(carves, mp4, fragments);
+    if (options_.resume.size() > order_.size()) {
+        return makeError(ErrorCode::InvalidInput,
+                         "candidate evaluation: more candidates to resume after than the inputs give");
+    }
+    // What an earlier run delivered counts as delivered here.
+    for (const EvaluationRecord& record : options_.resume) {
+        if (Status replayed = replay(record); !replayed.ok()) {
+            return replayed.error();
+        }
+    }
+    std::size_t window = options_.window;
+    if (options_.pool != nullptr && window == 0) {
+        window = std::min<std::size_t>(EvaluationOptions::kMaxWindow, 2 * std::size_t{options_.pool->threadCount()});
+    }
+    const auto produce = [&](std::size_t index) -> Result<EvaluatedCandidate> {
         if (Status stop = cancelled(); !stop.ok()) {
             return stop.error();
         }
-        Result<EvaluatedCandidate> evaluated = evaluate(std::move(proposal), std::nullopt);
-        if (!evaluated.ok()) {
-            return evaluated.error();
-        }
-        if (Status sent = deliver(std::move(*evaluated), sink); !sent.ok()) {
-            return sent.error();
-        }
+        Item& item = order_[index];
+        return evaluate(std::move(item.proposal), item.slot);
+    };
+    const auto consume = [&](std::size_t, EvaluatedCandidate&& candidate) -> Status {
+        return deliver(std::move(candidate), sink);
+    };
+    if (Status ran = runOrdered<EvaluatedCandidate>(options_.pool, window, options_.resume.size(), order_.size(),
+                                                    produce, consume);
+        !ran.ok()) {
+        return ran.error();
     }
     report_.elapsed =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
@@ -1000,7 +1075,28 @@ Status validate(const EvaluationOptions& options) {
     if (Status reads = carving::validate(options.reads); !reads.ok()) {
         return reads;
     }
+    if (options.window > EvaluationOptions::kMaxWindow) {
+        return makeError(ErrorCode::InvalidInput, "candidate evaluation: the window is larger than " +
+                                                      std::to_string(EvaluationOptions::kMaxWindow));
+    }
+    for (std::size_t i = 0; i < options.resume.size(); ++i) {
+        if (options.resume[i].id.value() != options.firstId + i) {
+            return makeError(ErrorCode::InvalidInput,
+                             "candidate evaluation: the resume records are not numbered from the first id on");
+        }
+    }
     return validation::validate(options.validation.limits);
+}
+
+EvaluationRecord recordOf(const EvaluatedCandidate& candidate) {
+    EvaluationRecord record;
+    record.id = candidate.id;
+    record.method = candidate.data.method;
+    record.validationStatus = candidate.validationStatus();
+    record.identity = candidate.identity;
+    record.duplicate = candidate.duplicateOf.has_value();
+    record.alternative = candidate.hasWarning(EvaluationWarning::AlternativeLayout);
+    return record;
 }
 
 CandidateEvaluation::CandidateEvaluation(storage::IStorageSource& source, const carving::FormatRegistry& formats,

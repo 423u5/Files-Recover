@@ -223,6 +223,7 @@ filesystem::ClusterState VolumeEvidence::state(std::uint64_t index) {
     if (index >= geometry_.clusterCount) {
         return filesystem::ClusterState::Invalid;
     }
+    const std::lock_guard lock(cacheMutex_);
     const std::uint64_t pageNumber = index >> kPageBits;
     auto page = pages_.find(pageNumber);
     if (page == pages_.end()) {
