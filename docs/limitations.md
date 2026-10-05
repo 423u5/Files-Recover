@@ -1086,3 +1086,15 @@ identity.
 A Quick scan validates and hashes the filesystem candidates: it reads every byte of every file the filesystems know,
 active and deleted. It skips the source pass, MP4 recovery's carving and fragment reconstruction, not the reads of
 the files themselves.
+
+## Continuous integration
+
+### L143. CI does not decode WebP or HEVC
+**Status:** Open  
+The GitHub runners (`windows-latest`: Windows Server 2025, image `windows-2025-vs2026`, seen 2026-10-05) have no
+usable WebP or HEVC decoder: HEVC is not installed, and a WebP decoder is registered with WIC but cannot be created
+(`WINCODEC_ERR_COMPONENTINITIALIZEFAILURE`, 0x88982F8B). `PlayabilityTest.WebpDecodesWithItsExtension` and
+`PlayabilityTest.HevcDecodesWithItsExtension` skip there, so WebP decoding through WIC is tested only on the
+development machine. The playability check takes that HRESULT as a missing codec (`Unsupported`); that WIC never
+returns it for damage in a file is assumed from its meaning, not verified. The other playability tests pass on the
+runners, so the gap lists of L123 hold on Windows Server 2025 for the test files.

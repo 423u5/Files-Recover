@@ -523,6 +523,15 @@ Result<LevelResult> checkImage(carving::IContentReader& content) {
         }
         return level(LevelStatus::Unsupported, kImaging, "no installed decoder takes the file");
     }
+    // A decoder registered for the file that cannot be created (a Store codec such as WebP on Windows Server, or in
+    // a session where its package cannot activate) is a missing codec, not damage in the file.
+    if (result == WINCODEC_ERR_COMPONENTINITIALIZEFAILURE) {
+        if (std::optional<Error> error = stream.error()) {
+            return *error;
+        }
+        return level(LevelStatus::Unsupported, kImaging,
+                     "the decoder registered for the file cannot be loaded (" + hresult(result) + ")");
+    }
     if (FAILED(result)) {
         return failure(stream, kImaging, "no decoder opens the file (" + hresult(result) + ")");
     }

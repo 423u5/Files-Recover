@@ -97,7 +97,7 @@ TEST(PlayabilityTest, ImagesOfTheBuildersAndOfIndependentEncodersDecode) {
 
 TEST(PlayabilityTest, WebpDecodesWithItsExtension) {
     if (play(test::makeWebp({}), "webp", "webp").status == LevelStatus::Unsupported) {
-        GTEST_SKIP() << "no WebP decoder installed (Microsoft Store: WebP Image Extensions)";
+        GTEST_SKIP() << "no usable WebP decoder installed (Microsoft Store: WebP Image Extensions)";
     }
     for (const test::samples::Sample& sample : test::samples::all()) {
         if (sample.format == "webp") {

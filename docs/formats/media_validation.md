@@ -119,7 +119,9 @@ JPEG, PNG, Huffman 1D or RLE24 data, MP4 files with compact sample sizes (`stz2`
 AVC beyond Baseline, Main and High (Windows' H.264 decoder accepts High 10, 4:2:2 and 4:4:4 streams and then never
 delivers a frame or an error). A decoder that stalls anyway is abandoned after the timeout: the result is
 `Unsupported`, and the stalled source reader is never released, because releasing it waits for the stuck decoder
-forever (L124). A missing codec (WebP and HEVC come from Store extensions) is `Unsupported`.
+forever (L124). A missing codec (WebP and HEVC come from Store extensions) is `Unsupported`, and so is a WIC decoder
+that is registered but cannot be created (`WINCODEC_ERR_COMPONENTINITIALIZEFAILURE`: the WebP extension on Windows
+Server 2025, as on the GitHub runners).
 
 Decoders conceal much damage: WIC decodes every PNG of the test vectors whose deflate data is broken, and Media
 Foundation decodes the MP4 builder's pattern-byte "H.264" without an error. `Passed` means they decoded every frame
