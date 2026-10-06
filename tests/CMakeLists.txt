@@ -329,6 +329,32 @@ gtest_discover_tests(recovery_scan_tests
 )
 
 # ---------------------------------------------------------------------------
+# Session tests (P16): the encoding of session records, the journal (torn
+# tails, damage, formats, one writer, concurrent appends), and sessions on
+# the scan tests' card: normal sessions, pause and resume, crashes after
+# every record, damage, other formats and engines, sources, listing.
+# ---------------------------------------------------------------------------
+add_executable(recovery_session_tests
+    scan/scan_test_support.cpp
+    scan/scan_test_support.hpp
+    session/recovery_session_test.cpp
+    session/session_codec_test.cpp
+    session/session_journal_test.cpp
+    session/session_test_support.cpp
+    session/session_test_support.hpp
+)
+target_link_libraries(recovery_session_tests PRIVATE
+    recovery::session
+    recovery_test_support
+    GTest::gtest_main
+    recovery_build_options
+)
+gtest_discover_tests(recovery_session_tests
+    PROPERTIES LABELS session
+    DISCOVERY_TIMEOUT 60
+)
+
+# ---------------------------------------------------------------------------
 # CLI smoke tests.
 # ---------------------------------------------------------------------------
 add_test(NAME cli.version COMMAND recovery_cli --version)

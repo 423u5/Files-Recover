@@ -315,3 +315,21 @@ target_link_libraries(recovery_scan
     PUBLIC recovery::evaluation recovery::partition
     PRIVATE recovery_engine_options
 )
+
+# ---------------------------------------------------------------------------
+# recovery_session: recovery sessions (P16): a scan and its recovery jobs kept
+# in an append-only journal (records flushed as the scan and jobs go), opened
+# again after a restart or a crash, resumed from their last update, repaired
+# when a crash or damage left the journal short.
+# ---------------------------------------------------------------------------
+add_library(recovery_session STATIC
+    session/recovery_session.cpp
+    session/session_codec.cpp
+    session/session_journal.cpp
+    session/session_types.cpp
+)
+add_library(recovery::session ALIAS recovery_session)
+target_link_libraries(recovery_session
+    PUBLIC recovery::scan
+    PRIVATE recovery_engine_options
+)

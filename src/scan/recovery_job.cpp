@@ -358,7 +358,13 @@ void RecoveryJob::Run::dispatch(const std::shared_ptr<Entry>& entry) {
                 item.error = writer.error();
                 result = std::move(item);
             } else {
-                Result<RecoveredFile> written = (*writer)->recover(candidate.data);
+                FileCreatedCallback onCreated;
+                if (options.onFileCreated) {
+                    onCreated = [this, &candidate](const std::filesystem::path& path) {
+                        return options.onFileCreated(candidate.id, path);
+                    };
+                }
+                Result<RecoveredFile> written = (*writer)->recover(candidate.data, onCreated);
                 returnWriter(std::move(*writer));
                 if (written.ok()) {
                     item.file = std::move(*written);

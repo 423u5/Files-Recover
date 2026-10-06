@@ -259,16 +259,21 @@ of the filesystem's own catalog (L29). Memory grows with the number of files, bo
 
 P15: a scan hands the candidates out in its updates, so a session (P16) can keep them on disk, but keeps them itself until the evaluation, and in its checkpoint (L139).
 
+P16: a session writes them to its journal, and holds them in memory too when it is open (L145).
+
 ### L41. Reading around bad sectors is slow
 **Status:** Open  
 After a failed chunk, reconstruction reads the chunk sector by sector with retries. There is no intermediate
 block size as in imaging, so a region with many bad sectors takes long. Imaging the source first is preferable.
 
 ### L42. The recovered file does not record that it is incomplete
-**Status:** Open  
+**Status:** Open; P16 keeps each file's report in its session, the CLI report (P18) is to show it  
 Missing data inside a file is zero-filled and missing data at its end is left out, so the file's size can
 differ from the original. The `ReconstructionReport` says so, but it is only returned to the caller; nothing next
 to the file records it. Sessions (P16) and the CLI report (P18) are expected to persist it.
+
+P16: a session keeps every file's `ReconstructionReport` with its recovery job's updates
+(`RecoverySession::recoveredItems`), so it survives the application. Nothing is written next to the file itself.
 
 ### L43. Sizes larger than the volume are cut to the volume
 **Status:** Accepted (safety)  
@@ -727,6 +732,8 @@ as for the filesystem candidates themselves (L40).
 P15: a scan hands the MP4 candidates out in one update, which a session (P16) can keep on disk; the scan keeps
 them until the evaluation.
 
+P16: a session writes that update to its journal, and holds it in its checkpoint when it is open (L145).
+
 ### L100. How HYBRID and SizeMismatch are decided
 **Status:** Accepted (decision to review)  
 Calls made in P12 without a sample that decided them:
@@ -1053,9 +1060,13 @@ whose carve is still being made is carved for nothing, at most `window` hits at 
 self-synchronizing formats wait for the earlier hits of their format instead, since every frame of a stream is a hit.
 
 ### L138. Checkpoints are kept in memory
-**Status:** Planned (P16)  
+**Status:** Resolved (P16)  
 The user's P15 decision: a scan hands its updates out and keeps its own checkpoint in memory; nothing is written to
 disk. A crash of the application loses everything the caller has not saved. P16 stores the updates crash-safely.
+
+P16: a recovery session (`RecoverySession`, [recovery/sessions.md](recovery/sessions.md)) writes every update of
+its scan and of its recovery jobs to its journal, flushed before the scan or job goes on, and resumes from it after
+a restart or a crash. The journal is never compacted (L144).
 
 ### L139. A checkpoint holds every stage's results
 **Status:** Open  
@@ -1067,11 +1078,20 @@ kilobytes per file), as the scan must to resume. Several copies exist at once:
 
 The evaluated candidates are only in the updates (the checkpoint keeps records of them).
 
+P16: a session is such a caller: it keeps its checkpoint beside the coordinator's while its scan runs, and the
+evaluated candidates (L145).
+
 ### L140. A crash while a file is written leaves it behind
-**Status:** Planned (P16)  
+**Status:** Resolved (P16), but for L148  
 `RecoveryWriter` removes a file it could not finish, so a cancelled or failing recovery job leaves no partial file,
 and a resumed job writes it again under the same name. A crash of the process while a file is written leaves that
 file, incomplete, under its name, and a resumed job writes it again under the next free name.
+
+P16: a session records each file once `RecoveryWriter` has created it and before its data is written
+(`FileStarted`, flushed; P7's `FileCreatedCallback`, through P15's `RecoveryJobOptions::onFileCreated`). Before a
+job resumes, the files it began that no update says are done are removed (when they are still regular files no
+larger than the candidate), and written again under the same names. A crash in the moment between a file's
+creation and its record remains (L148).
 
 ### L141. A scan resumes only as the same scan
 **Status:** Accepted (design)  
@@ -1081,11 +1101,80 @@ configuration is a small set of settings (`ScanConfiguration`): the stages' fine
 limits, media limits, filesystem caches) are their defaults, so that everything that decides the results is in the
 identity.
 
+P16: a session's scan resumes under the same rule, so a session that another engine version started opens (its
+candidates and recovery jobs work) but its scan does not resume (the user's P16 decision). The session also refuses
+a source whose fingerprint changed (L146), and a physical disk is known by its number (L147).
+
 ### L142. A Quick scan reads every file the metadata knows
 **Status:** Accepted (the user's P15 decision: Quick = metadata and validation)  
 A Quick scan validates and hashes the filesystem candidates: it reads every byte of every file the filesystems know,
 active and deleted. It skips the source pass, MP4 recovery's carving and fragment reconstruction, not the reads of
 the files themselves.
+
+## Sessions (P16)
+
+### L144. The journal is never compacted
+**Status:** Open  
+A session's journal holds every update of its scan and jobs as they were handed out: the volumes' candidates, the
+carves, the MP4 and fragment candidates, the evaluated candidates, and every pass update with the pass's state.
+It grows with the scan, and opening the session reads and applies it whole: time and memory grow with it. A
+snapshot of the checkpoint would let the journal start over, but `ScanCheckpoint` can only be built by applying
+updates (P15), so it would need a way to restore one. On the scan tests' card (2 MiB, 10 candidates) the
+journal is 17.6 KB.
+
+### L145. An open session holds all of it in memory
+**Status:** Open  
+Opening a session builds its scan's checkpoint (every stage's results, L139) and every evaluated candidate, and
+each job's checkpoint; while a scan runs, the coordinator holds its own copy of the checkpoint too. A recovery job
+of chosen candidates gets copies of them (one of every candidate uses the session's list). Memory grows with the
+number of files found, a few kilobytes each, as for P15's caller (L40, L99).
+
+### L146. The source fingerprint covers the start of the source and of its partitions
+**Status:** Open  
+A session refuses a source whose fingerprint differs from the one it recorded: SHA-256 of the first 64 KiB of the
+source and of each partition its table lists. Two media identical there (clones) are taken for the same, and
+changes elsewhere (files written to a card since, when its boot region and FSInfo stayed the same) are not seen. A
+source whose first sectors read differently from one run to the next (sectors that fail now and then) is refused,
+and its session cannot resume until they read as before.
+
+### L147. A physical disk is known by its number
+**Status:** Open  
+The session's source is recorded by its path, as P15's scan identity does (L141): `\\.\PhysicalDriveN` for a
+physical disk. A card reader that gets another number after a restart or after the card is put in again is
+another source for the session: its scan does not resume, and its candidates cannot be recovered from it (the
+path, then the fingerprint, must match). Disks are not identified by their serial number or their content alone.
+
+### L148. A crash just after a file is created leaves it unknown
+**Status:** Open  
+A recovery job's file is recorded (`FileStarted`, flushed) right after `RecoveryWriter` has created it, and before
+its data is written. A crash between the two leaves an empty file the session does not know: the resumed job
+writes the candidate under the next free name ("photo (1).jpg"), beside the empty "photo.jpg". Recording the
+name before the file is created would close the window, but the name is only known once `CreateNew` succeeds.
+
+### L149. Damage drops what came after it
+**Status:** Accepted (the user's P16 decision: keep the valid part)  
+A record that does not check, or cannot be used, ends what the session takes in: the records after it are dropped
+(they are in the copy of the damaged journal the session keeps), even intact ones. The scan's lost work is done
+again. A recovery job's lost updates are not: files it wrote after the damage are written again under the next
+free names when the job resumes (the session no longer knows them).
+
+### L150. One session object at a time, and a writable folder
+**Status:** Open  
+Opening a session takes its journal for writing (it is the session's lock), so a session another process has open
+can only be read through `readSessionSummary` and `listSessions`, which give its records' summary, not its
+candidates. For the same reason a session on read-only media (a disc, a read-only share or file) cannot be opened.
+There is no read-only way to open a session, and none to delete one or its damaged copies.
+
+### L151. A recovery job writes the candidates it was given
+**Status:** Open  
+`addRecoveryJob` with no candidates takes every candidate delivered so far. A scan resumed after the job was added
+delivers more, which the job does not write: another job is needed for them.
+
+### L152. Only the first journal format exists
+**Status:** Open  
+The journal is in format 1. An engine reads its own format and older ones, but there is no older one yet, so
+reading an older format (a newer engine keeping the readers of every format before its own) is a rule that is not
+tested. Records of an unknown type marked optional are skipped, and that part is tested.
 
 ## Continuous integration
 

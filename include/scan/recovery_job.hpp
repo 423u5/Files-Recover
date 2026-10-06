@@ -117,6 +117,11 @@ struct RecoveryJobOptions {
     // Progress callback, on the thread of run(); must not throw.
     std::chrono::milliseconds progressInterval{250};
     std::function<void(const RecoveryJobProgress&)> onProgress;
+    // P16: told, on a worker, the path of each candidate's file once it is
+    // created and before its data is written (RecoveryWriter's
+    // FileCreatedCallback). An error fails the file (it is removed and
+    // reported). Must be safe to call from several workers at once.
+    std::function<Status(evaluation::EvaluatedCandidateId candidate, const std::filesystem::path& path)> onFileCreated;
     JobControl control;
     diagnostics::Logger* logger = nullptr;
 };

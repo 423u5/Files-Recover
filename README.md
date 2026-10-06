@@ -3,7 +3,7 @@
 A read-only file recovery engine for Windows 11, written in C++20. It is aimed at deleted media on USB flash
 drives and other removable storage.
 
-> **Status: early development.** Phases P0–P15 are implemented: project skeleton, read-only storage
+> **Status: early development.** Phases P0–P16 are implemented: project skeleton, read-only storage
 > access, disk imaging with bad-sector handling, MBR/GPT partition detection, FAT32 and exFAT parsing,
 > the NTFS foundation (MFT, FILE records, resident and non-resident data, data runs), all including
 > deleted entries, and filesystem-based recovery: recovery candidates from FAT32, exFAT and NTFS metadata,
@@ -20,9 +20,10 @@ drives and other removable storage.
 > decoders), identified by SHA-256 with duplicates marked and their evidence explained. P15 runs all of it as one
 > scan (Quick or Deep): on a bounded pool of workers, with one sequential pass over the source that every carving
 > stage shares, cancellable, pausable, reporting progress and metrics, and resumable from the checkpoint updates it
-> hands out without doing the work again; a recovery job writes the candidates out the same way. There is no
-> persistent session, report or user-facing recovery command yet. Passing builds and tests do **not** mean the engine is
-> production-ready.
+> hands out without doing the work again; a recovery job writes the candidates out the same way. P16 keeps a scan
+> and its recovery jobs in a session on disk, record by record, so that both survive a restart or a crash and resume
+> from where they were. There is no report or user-facing recovery command yet. Passing builds and tests do **not**
+> mean the engine is production-ready.
 
 ## Safety model
 
@@ -52,8 +53,9 @@ drives and other removable storage.
 | `include/validation`, `src/validation` | Validation levels and the media decoders (P14); `src/validation/windows`: the playability checker on WIC and Media Foundation (private) |
 | `include/evaluation`, `src/evaluation` | Candidate evaluation (P14): one evaluated candidate per file, content identity, duplicates |
 | `include/scan`, `src/scan` | Scanning (P15): the scan coordinator, the scan's source (pause gate, block cache), updates and checkpoints, the recovery job |
+| `include/session`, `src/session` | Recovery sessions (P16): the session, its journal, the encoding of its records, the source's fingerprint |
 | `tools/recovery_cli` | `recovery` CLI (skeleton only) |
-| `tests/unit`, `tests/integration`, `tests/filesystem`, `tests/corruption`, `tests/recovery`, `tests/carving`, `tests/formats`, `tests/validation`, `tests/evaluation`, `tests/scan` | GoogleTest suites; `tests/support` holds the simulated devices, volume and image file builders, samples from other encoders, and test-only carving formats |
+| `tests/unit`, `tests/integration`, `tests/filesystem`, `tests/corruption`, `tests/recovery`, `tests/carving`, `tests/formats`, `tests/validation`, `tests/evaluation`, `tests/scan`, `tests/session` | GoogleTest suites; `tests/support` holds the simulated devices, volume and image file builders, samples from other encoders, and test-only carving formats |
 | `docs/` | Architecture, recovery and testing notes; known limitations in `docs/limitations.md` |
 
 Directories for later phases (`session`, ...) already exist and are empty.

@@ -185,6 +185,11 @@ Result<std::filesystem::path> RecoveryWriter::directoryFor(const RecoveryCandida
 }
 
 Result<RecoveredFile> RecoveryWriter::recover(const RecoveryCandidate& candidate) {
+    return recover(candidate, FileCreatedCallback{});
+}
+
+Result<RecoveredFile> RecoveryWriter::recover(const RecoveryCandidate& candidate,
+                                              const FileCreatedCallback& onCreated) {
     if (Status valid = validateCandidate(candidate); !valid.ok()) {
         return valid.error();
     }
@@ -230,6 +235,12 @@ Result<RecoveredFile> RecoveryWriter::recover(const RecoveryCandidate& candidate
         }
         return error;
     };
+
+    if (onCreated) {
+        if (Status told = onCreated(finalPath); !told.ok()) {
+            return discard(told.error());
+        }
+    }
 
     const CandidateSink sink = [&file](std::uint64_t offset, std::span<const std::byte> data) {
         return file.writeAt(offset, data);

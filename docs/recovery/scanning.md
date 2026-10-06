@@ -3,8 +3,9 @@
 A scan of a source runs every stage of the engine as one job: `ScanCoordinator` (`include/scan/scan_coordinator.hpp`,
 library `recovery_scan`). It runs the stages on a bounded pool of workers. It can be cancelled and paused from
 any thread, reports its progress and metrics, and hands out its work as updates at consistent points. A later scan
-resumes from those updates without doing again what they record. `RecoveryJob` (`include/scan/recovery_job.hpp`)
-writes the candidates of a scan to a destination with the same controls.
+resumes from those updates without doing again what they record. A recovery session (P16, [sessions.md](sessions.md))
+keeps the updates on disk, so a scan resumes after a restart or a crash too. `RecoveryJob`
+(`include/scan/recovery_job.hpp`) writes the candidates of a scan to a destination with the same controls.
 
 ```
                        ┌──────────── ScanCoordinator::run() (the calling thread) ────────────┐

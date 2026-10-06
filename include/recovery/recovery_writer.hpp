@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <string>
 
@@ -35,6 +36,12 @@ struct RecoveredFile {
     std::filesystem::path path;
     ReconstructionReport report;
 };
+
+// Told the path of a file once it is created (empty), before anything is
+// written to it (P16: a session records it, so that a file a crash leaves
+// half written is found and removed). An error fails the file, which is
+// removed again.
+using FileCreatedCallback = std::function<Status(const std::filesystem::path& path)>;
 
 // Writes reconstructed candidates below a destination directory.
 //
@@ -69,6 +76,10 @@ public:
     // candidate with data but no located byte (nothing but Missing regions)
     // is refused with InvalidInput rather than written as an empty file.
     [[nodiscard]] Result<RecoveredFile> recover(const RecoveryCandidate& candidate);
+    // The same, telling `onCreated` (when set) the file's path (as
+    // RecoveredFile::path) once it is created, before its data is written.
+    [[nodiscard]] Result<RecoveredFile> recover(const RecoveryCandidate& candidate,
+                                                const FileCreatedCallback& onCreated);
 
     [[nodiscard]] const std::filesystem::path& destination() const noexcept { return destination_; }
 
