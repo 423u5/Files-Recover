@@ -252,6 +252,10 @@ get numbered names), but the tree no longer shows that they were separate.
 Each name of an NTFS record is its own candidate with the same regions, so the data is written once per name.
 Content-based duplicate detection is planned for P17.
 
+P14 identifies duplicate content by SHA-256 (`duplicateOf`), and P17 groups it for a user interface
+(`DuplicateGroups`: the original and its copies, whatever their names). A recovery job still writes every
+candidate it is given: leaving duplicates out is the caller's choice.
+
 ### L40. Candidates are kept in memory
 **Status:** Open  
 `CandidateScan` holds every candidate of a volume, each with its regions and a copy of any resident data, on top
@@ -1176,6 +1180,97 @@ The journal is in format 1. An engine reads its own format and older ones, but t
 reading an older format (a newer engine keeping the readers of every format before its own) is a rule that is not
 tested. Records of an unknown type marked optional are skipped, and that part is tested.
 
+## Metadata (P17)
+
+### L153. Media metadata needs the source
+**Status:** Accepted (the user's P17 decision: read on demand)  
+Media metadata is read from a candidate's bytes when a user interface asks for it (`readMediaMetadata`): the source
+must be attached, and each request reads it again. Nothing of it is kept in the scan's results or in a session's
+journal, so a session opened without its source shows names, sizes, validation, conditions and duplicates, but not
+dimensions, durations, tags or previews.
+
+### L154. Some pictures inside tags are not offered
+**Status:** Open  
+A picture is offered as a preview only when its bytes lie in the content as they are. Pictures inside an ID3v2 tag
+that is unsynchronised as a whole (versions 2.2 and 2.3; the tag's text is still read, restored in memory) or inside
+an unsynchronised, compressed or encrypted ID3v2.4 frame are not offered, nor is the picture of a frame whose
+description is longer than the 4 KiB read to find where the picture starts.
+
+### L155. Exif thumbnails only, and only JPEG ones
+**Status:** Open  
+The previews of an image are its Exif IFD1 JPEG thumbnail and the image itself. Uncompressed (TIFF strip)
+thumbnails, the larger previews of MPF (APP2) and maker notes, and XMP, IPTC and PNG text metadata are not read.
+
+### L156. HE-AAC is seen only when the configuration says it
+**Status:** Open  
+ADTS headers give the core profile and rate: an HE-AAC stream (SBR, PS signalled inside the audio data) shows as AAC
+LC at half its output rate. In MP4 only explicit signalling in the AudioSpecificConfig (object type 5 or 29) is
+read; backward-compatible signalling after the core configuration is not.
+
+### L157. Video profiles for AVC and HEVC only
+**Status:** Open  
+The profile and level come from avcC and hvcC. Other video codecs (MPEG-4 Part 2, H.263, AV1, VP9, ProRes) have
+their codec only. Bit depth, chroma format and colour information are not read (the sequence parameter sets are not
+parsed for metadata).
+
+### L158. Macintosh language codes are not translated
+**Status:** Open  
+A track whose media header holds a Macintosh language code (below 0x400, as some writers such as mp4v2 write
+English) has no language; ffprobe translates it ("eng"). The text of QuickTime text atoms with such a code is read
+as ISO 8859-1, not in the Macintosh encoding it names.
+
+### L159. Only the common tags
+**Status:** Accepted (the user's P17 decision: technical metadata and common tags, no GPS)  
+The tags read are title, artist, album, genre, date and track number, from ID3v1, ID3v2 (TIT2, TPE1, TALB, TCON,
+TRCK, TDRC, TYER/TDAT/TIME), RIFF INFO, iTunes ilst items and QuickTime text atoms. Other frames and items
+(comments, album artist, composer, lyrics), APEv2 and Lyrics3 tags, 3GPP asset boxes (titl, perf, ...), QuickTime
+metadata keys (mdta: an iPhone's creation date, make and model), user data inside tracks, and GPS positions anywhere
+are not read.
+
+### L160. Durations are the headers' and the frames'
+**Status:** Open  
+An MP3's duration is its info tag's frame count, or its frames counted; an ADTS file's its frames counted; a WAV's
+its data over its block size; an MP4's its headers' or its samples' durations. Encoder delay and padding (LAME's
+tag, iTunes' priming) and edit lists are not applied, so a duration may differ from what a player plays by a frame
+or two (the reference tests allow 70 ms or 3% against ffprobe). Beyond `maxScanBytes` (64 MiB) frames are not
+counted but extrapolated (`durationEstimated`).
+
+### L161. Time zones are what files say
+**Status:** Open  
+Exif dates without an OffsetTime tag, ID3 and RIFF INFO dates are local times of an unknown place: they print
+without a zone and have no UTC instant. MP4 header times are taken as UTC, as the format defines them, though some
+cameras write their local time there.
+
+### L162. Rotation is a quarter turn of the track header
+**Status:** Open  
+A video's rotation is read from its track header's matrix when the matrix is a turn by a multiple of 90 degrees; a
+mirrored or skewed matrix is an issue and a rotation of 0. An image's orientation is its Exif orientation only (no
+XMP orientation).
+
+### L163. Duplicate groups are as complete as the candidates given
+**Status:** Open  
+`DuplicateGroups` follows P14's `duplicateOf` links in the candidates it is given. A page of a longer list gives the
+groups of that page: its duplicates with their original (named even when it is not on the page), but not the group's
+other members on other pages. Duplicates are exact copies (L127).
+
+### L164. Recovery status is a snapshot of the session
+**Status:** Open  
+`RecoveryJobIndex::fromSession` reads a session's jobs once: a job running meanwhile may have done more. A recovered
+file is reported with the path and report the job recorded; whether the file is still there (moved, deleted, changed
+since) is not checked.
+
+### L165. Text is cleaned and may be cut
+**Status:** Open  
+Tag and Exif text has its control characters replaced by spaces and its ends trimmed, and is cut at 1024 bytes of
+UTF-8 (`maxTextLength`). ID3 UTF-16 without a byte order mark is read as little-endian. Exif ASCII, RIFF INFO and
+ID3v1 text that is not valid UTF-8 is read as ISO 8859-1, so text in another code page (Windows-1251, Shift JIS)
+comes out wrong.
+
+### L166. A damaged file still offers its content as a preview
+**Status:** Open  
+The content is offered as a preview once its header was read, whatever its validation found: a platform decoder may
+fail on it, or show part of it. A user interface should look at the candidate's condition (`describeCandidate`)
+before it decodes a preview.
 ## Continuous integration
 
 ### L143. CI does not decode WebP or HEVC
@@ -1187,3 +1282,9 @@ usable WebP or HEVC decoder: HEVC is not installed, and a WebP decoder is regist
 development machine. The playability check takes that HRESULT as a missing codec (`Unsupported`); that WIC never
 returns it for damage in a file is assumed from its meaning, not verified. The other playability tests pass on the
 runners, so the gap lists of L123 hold on Windows Server 2025 for the test files.
+
+### L167. The testing notes are not in git
+**Status:** Open (found in P17; a one-line fix waits for the user's decision)  
+`.gitignore` ignores `Testing/` (CMake's test output folder). Git on Windows ignores case (`core.ignorecase`), so
+the pattern also matches `docs/testing/`: `docs/testing/testing.md` has never been committed, although the README
+and the other documents link to it. Anchoring the pattern to the root (`/Testing/`) would fix it.

@@ -3,7 +3,7 @@
 A read-only file recovery engine for Windows 11, written in C++20. It is aimed at deleted media on USB flash
 drives and other removable storage.
 
-> **Status: early development.** Phases P0–P16 are implemented: project skeleton, read-only storage
+> **Status: early development.** Phases P0–P17 are implemented: project skeleton, read-only storage
 > access, disk imaging with bad-sector handling, MBR/GPT partition detection, FAT32 and exFAT parsing,
 > the NTFS foundation (MFT, FILE records, resident and non-resident data, data runs), all including
 > deleted entries, and filesystem-based recovery: recovery candidates from FAT32, exFAT and NTFS metadata,
@@ -22,7 +22,10 @@ drives and other removable storage.
 > stage shares, cancellable, pausable, reporting progress and metrics, and resumable from the checkpoint updates it
 > hands out without doing the work again; a recovery job writes the candidates out the same way. P16 keeps a scan
 > and its recovery jobs in a session on disk, record by record, so that both survive a restart or a crash and resume
-> from where they were. There is no report or user-facing recovery command yet. Passing builds and tests do **not**
+> from where they were. P17 gives a future user interface what it shows, without depending on any user interface
+> library: each file's condition, duplicates under different names, its media metadata (image size and Exif,
+> audio and video streams, durations, tags) and previews read on demand, and what recovery jobs did with it.
+> There is no report or user-facing recovery command yet. Passing builds and tests do **not**
 > mean the engine is production-ready.
 
 ## Safety model
@@ -54,11 +57,12 @@ drives and other removable storage.
 | `include/evaluation`, `src/evaluation` | Candidate evaluation (P14): one evaluated candidate per file, content identity, duplicates |
 | `include/scan`, `src/scan` | Scanning (P15): the scan coordinator, the scan's source (pause gate, block cache), updates and checkpoints, the recovery job |
 | `include/session`, `src/session` | Recovery sessions (P16): the session, its journal, the encoding of its records, the source's fingerprint |
+| `include/metadata`, `src/metadata` | Metadata for a user interface (P17): candidate descriptions and conditions, duplicate groups, media metadata and previews read from a candidate's content, recovery status |
 | `tools/recovery_cli` | `recovery` CLI (skeleton only) |
-| `tests/unit`, `tests/integration`, `tests/filesystem`, `tests/corruption`, `tests/recovery`, `tests/carving`, `tests/formats`, `tests/validation`, `tests/evaluation`, `tests/scan`, `tests/session` | GoogleTest suites; `tests/support` holds the simulated devices, volume and image file builders, samples from other encoders, and test-only carving formats |
+| `tests/unit`, `tests/integration`, `tests/filesystem`, `tests/corruption`, `tests/recovery`, `tests/carving`, `tests/formats`, `tests/validation`, `tests/evaluation`, `tests/scan`, `tests/session`, `tests/metadata` | GoogleTest suites; `tests/support` holds the simulated devices, volume and image file builders, samples from other encoders, and test-only carving formats |
 | `docs/` | Architecture, recovery and testing notes; known limitations in `docs/limitations.md` |
 
-Directories for later phases (`session`, ...) already exist and are empty.
+Directories for later phases (`tools/disk_image_tool`, `tools/test_image_generator`) already exist and are empty.
 
 ## Building on Windows 11
 

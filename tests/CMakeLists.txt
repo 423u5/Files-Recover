@@ -355,6 +355,36 @@ gtest_discover_tests(recovery_session_tests
 )
 
 # ---------------------------------------------------------------------------
+# Metadata tests (P17): media metadata of builder files and of files of
+# independent writers checked against exiftool and ffprobe, previews, invalid
+# media (damage, truncation, fuzzing), missing metadata; conditions,
+# duplicates under different names, and recovery status over sessions on the
+# scan tests' card.
+# ---------------------------------------------------------------------------
+add_executable(recovery_metadata_tests
+    metadata/candidate_metadata_test.cpp
+    metadata/media_metadata_test.cpp
+    metadata/metadata_reference_test.cpp
+    metadata/metadata_robustness_test.cpp
+    metadata/metadata_samples.cpp
+    metadata/metadata_samples.hpp
+    metadata/metadata_test_helpers.cpp
+    metadata/metadata_test_helpers.hpp
+    scan/scan_test_support.cpp
+    scan/scan_test_support.hpp
+)
+target_link_libraries(recovery_metadata_tests PRIVATE
+    recovery::metadata
+    recovery_test_support
+    GTest::gtest_main
+    recovery_build_options
+)
+gtest_discover_tests(recovery_metadata_tests
+    PROPERTIES LABELS metadata
+    DISCOVERY_TIMEOUT 60
+)
+
+# ---------------------------------------------------------------------------
 # CLI smoke tests.
 # ---------------------------------------------------------------------------
 add_test(NAME cli.version COMMAND recovery_cli --version)

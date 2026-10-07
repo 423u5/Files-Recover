@@ -333,3 +333,29 @@ target_link_libraries(recovery_session
     PUBLIC recovery::scan
     PRIVATE recovery_engine_options
 )
+
+# ---------------------------------------------------------------------------
+# recovery_metadata: metadata for a user interface (P17): what a candidate's
+# content says about itself (image, audio and video metadata, tags) read on
+# demand, its previews (the content, Exif thumbnails, cover art), its
+# condition and duplicates, and what recovery jobs did with it. No user
+# interface library: previews are described and handed out as bytes.
+# ---------------------------------------------------------------------------
+add_library(recovery_metadata STATIC
+    metadata/audio_metadata.cpp
+    metadata/candidate_metadata.cpp
+    metadata/exif.cpp
+    metadata/extraction.cpp
+    metadata/extraction.hpp
+    metadata/id3.cpp
+    metadata/image_metadata.cpp
+    metadata/media_metadata.cpp
+    metadata/metadata_types.cpp
+    metadata/mp4_metadata.cpp
+    metadata/recovery_status.cpp
+)
+add_library(recovery::metadata ALIAS recovery_metadata)
+target_link_libraries(recovery_metadata
+    PUBLIC recovery::session
+    PRIVATE recovery_engine_options
+)

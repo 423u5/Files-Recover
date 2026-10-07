@@ -1,6 +1,6 @@
 # Architecture overview
 
-This file covers what is implemented (P0–P16). The target architecture for all phases is in the project plan.
+This file covers what is implemented (P0–P17). The target architecture for all phases is in the project plan.
 
 ## Modules and dependencies
 
@@ -19,6 +19,7 @@ recovery_playability ─► recovery_validation (Windows Imaging Component, Medi
 recovery_evaluation ──► recovery_validation, recovery_mp4, recovery_fragments
 recovery_scan       ──► recovery_evaluation, recovery_partition
 recovery_session    ──► recovery_scan
+recovery_metadata   ──► recovery_session
 ```
 
 The partition and filesystem modules are independent of each other, and carving is independent of both: it reads
@@ -36,7 +37,10 @@ cancellable, pausable and resumable from the updates it hands out; and writes ca
 stages it drives gained step interfaces for it (`CarveSkipState`, `Mp4RecoverySteps`, `FragmentRecoverySteps`, the
 evaluation's pool and resume records); their own `run()` drives the same steps. P16's `recovery_session` keeps a
 scan and its recovery jobs on disk as they go: every update in an append-only journal, flushed before the scan or
-job goes on, so that a session opens again after a restart or a crash and resumes from its last update.
+job goes on, so that a session opens again after a restart or a crash and resumes from its last update. P17's
+`recovery_metadata` gives a user interface what it shows: a candidate's condition and duplicates, the media metadata
+and previews its content holds (read on demand), and what a session's recovery jobs did with it; it depends on no
+user interface library.
 
 | Library | Namespace | Responsibility |
 | --- | --- | --- |
@@ -55,6 +59,7 @@ job goes on, so that a session opens again after a restart or a crash and resume
 | `recovery_fragments` | `recovery` | Fragment reconstruction (P13): deleted files whose layout the metadata only guesses and carves that break, reconstructed from layout hypotheses that each format validates, ranked by the allocation and the evidence of other files, MP4 placed by its sample tables; COMPLETE, PARTIAL, CORRUPTED, AMBIGUOUS or UNRECOVERABLE ([../recovery/fragment_recovery.md](../recovery/fragment_recovery.md)) |
 | `recovery_scan` | `recovery::scan` | Scanning (P15): `ScanCoordinator` runs a Quick or Deep scan (volumes, MP4 examination, fragment seeds, one shared source pass, MP4 delivery, fragments, evaluation) on a bounded worker pool, cancellable and pausable, with progress and metrics, handing out `ScanUpdate`s that a `ScanCheckpoint` resumes from; `ScanSource` (pause gate, shared block cache, read counts); `RecoveryJob` writes candidates the same way ([../recovery/scanning.md](../recovery/scanning.md)) |
 | `recovery_session` | `recovery::session` | Recovery sessions (P16): `RecoverySession` keeps a scan of one source and its recovery jobs in an append-only journal (`JournalFile`, `JournalReader`: records with CRCs, flushed one by one, torn tails and damage told apart), opens them again after a restart or a crash, repairs what a crash or damage left, and resumes them from their last update; the binary encoding of the engine's values; the source's fingerprint; `listSessions` ([../recovery/sessions.md](../recovery/sessions.md)) |
+| `recovery_metadata` | `recovery::metadata` | Metadata for a user interface (P17): `describeCandidate` (name, path, kind, size, validation, the recovery condition and its reasons, SHA-256), `DuplicateGroups`, media metadata read on demand from a candidate's content (`extractMetadata`, `readMediaMetadata`: image size and colour, Exif orientation, date and camera, audio and video streams, MP4 movies and tracks, rotation, common tags) with previews (`PreviewSource`, `readPreview`, `openPreview`: the content, Exif thumbnails, cover art), and `RecoveryJobIndex` (recovery status from a session's jobs) ([../recovery/metadata.md](../recovery/metadata.md)) |
 
 Public headers live in `include/<module>/`. `<windows.h>` is only included from `src/storage/windows/` and
 `src/validation/windows/` (the playability level's WIC and Media Foundation code), never from a public header.
@@ -96,6 +101,8 @@ Public headers live in `include/<module>/`. `<windows.h>` is only included from 
 | `RecoverySession` | `runScan()` and `runRecovery()` on the calling thread, one operation at a time. `pause()`, `resume()`, `cancel()`, `progress()` and the accessors (which return copies) from any thread; `checkpoint()` only while nothing runs. The destructor cancels an operation under way and waits. |
 | `JournalFile` | `append()` from any thread (records written one after the other, threads waiting for a flush share one); the rest one owner. It holds the journal open for writing: one session object per session, in any process. |
 | `JournalReader` | One owner. Reads without locking, so a session in use can be read. |
+| `extractMetadata`, `readMediaMetadata` | Free functions without shared state; concurrent calls are safe on different content readers. A reader from `openPreview` views its content reader: one owner for both. |
+| `DuplicateGroups`, `RecoveryJobIndex` | Immutable once built (`addJob` has one owner); const members from any thread. |
 | `Mp4RecoverySteps` | `examine()` and `prepare()` concurrently with each other and with `commit()` of other hits; every other member one owner at a time. |
 | `FragmentRecoverySteps` | `examineSeed()` concurrently with itself; every other member one owner at a time. |
 | `CandidateEvaluation` with `EvaluationOptions::pool` | `run()` validates and hashes on the pool's workers (allocation queries under a lock per volume); the sink is called on the thread of `run()`. |

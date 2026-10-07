@@ -48,6 +48,17 @@ struct JpegOptions {
     // An APP1 Exif segment whose IFD1 points to a thumbnail: a complete
     // 16x16 JPEG (SOI to EOI) inside the segment.
     bool exifThumbnail = false;
+    // P17: Exif fields (an APP1 Exif segment is written when any is set,
+    // with the thumbnail too when exifThumbnail is set): IFD0's orientation
+    // (0: none), make and model, the Exif IFD's DateTimeOriginal
+    // ("YYYY:MM:DD HH:MM:SS") and OffsetTimeOriginal ("+02:00"), in
+    // big-endian (MM) or little-endian (II) byte order.
+    std::uint16_t exifOrientation = 0;
+    std::string exifMake;
+    std::string exifModel;
+    std::string exifDateTaken;
+    std::string exifOffsetTime;
+    bool exifBigEndian = false;
     // A COM segment with this text (none when empty).
     std::string comment;
     // 0xFF fill bytes written before every marker after SOI.

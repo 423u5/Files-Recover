@@ -189,6 +189,126 @@ struct JpegComponent {
     int scanBlocksHigh = 0;
 };
 
+// A TIFF structure for an Exif block (P17): IFD0 (make, model, orientation,
+// the Exif IFD's offset), the Exif IFD (date taken and its offset), IFD1 (a
+// JPEG thumbnail), then the values that do not fit in their entries, then
+// the thumbnail. Entries are in tag order, as TIFF requires.
+std::vector<std::byte> exifTiff(const JpegOptions& options, std::span<const std::byte> thumbnail) {
+    const bool big = options.exifBigEndian;
+    const auto put16 = [&](std::vector<std::byte>& out, std::uint32_t value) {
+        big ? putBe16(out, value) : putLe16(out, value);
+    };
+    const auto put32 = [&](std::vector<std::byte>& out, std::uint32_t value) {
+        big ? putBe32(out, value) : putLe32(out, value);
+    };
+    struct Entry {
+        std::uint16_t tag;
+        std::uint16_t type;
+        std::uint32_t count;
+        // ASCII text (written with its NUL), or a number.
+        std::string text;
+        std::uint32_t number;
+    };
+    const auto ascii = [](std::uint16_t tag, const std::string& text) {
+        return Entry{tag, 2, static_cast<std::uint32_t>(text.size() + 1), text, 0};
+    };
+    std::vector<Entry> ifd0;
+    std::vector<Entry> exif;
+    std::vector<Entry> ifd1;
+    if (!options.exifMake.empty()) {
+        ifd0.push_back(ascii(0x010F, options.exifMake));
+    }
+    if (!options.exifModel.empty()) {
+        ifd0.push_back(ascii(0x0110, options.exifModel));
+    }
+    if (options.exifOrientation != 0) {
+        ifd0.push_back(Entry{0x0112, 3, 1, {}, options.exifOrientation});
+    }
+    if (!options.exifDateTaken.empty()) {
+        exif.push_back(ascii(0x9003, options.exifDateTaken));
+        if (!options.exifOffsetTime.empty()) {
+            exif.push_back(ascii(0x9011, options.exifOffsetTime));
+        }
+        ifd0.push_back(Entry{0x8769, 4, 1, {}, 0});  // the Exif IFD's offset, set below
+    }
+    if (!thumbnail.empty()) {
+        ifd1.push_back(Entry{0x0103, 3, 1, {}, 6});
+        ifd1.push_back(Entry{0x0201, 4, 1, {}, 0});  // the thumbnail's offset, set below
+        ifd1.push_back(Entry{0x0202, 4, 1, {}, static_cast<std::uint32_t>(thumbnail.size())});
+    }
+    const auto ifdSize = [](const std::vector<Entry>& entries) {
+        return entries.empty() ? 0U : static_cast<std::uint32_t>(2 + 12 * entries.size() + 4);
+    };
+    const std::uint32_t ifd0At = 8;
+    const std::uint32_t exifAt = ifd0At + std::max(ifdSize(ifd0), 6U);
+    const std::uint32_t ifd1At = exifAt + ifdSize(exif);
+    std::uint32_t valuesAt = ifd1At + ifdSize(ifd1);
+    std::uint32_t valuesSize = 0;
+    for (const std::vector<Entry>* entries : {&ifd0, &exif, &ifd1}) {
+        for (const Entry& entry : *entries) {
+            if (entry.type == 2 && entry.count > 4) {
+                valuesSize += (entry.count + 1) & ~1U;
+            }
+        }
+    }
+    const std::uint32_t thumbnailAt = valuesAt + valuesSize;
+    for (Entry& entry : ifd0) {
+        entry.number = entry.tag == 0x8769 ? exifAt : entry.number;
+    }
+    for (Entry& entry : ifd1) {
+        entry.number = entry.tag == 0x0201 ? thumbnailAt : entry.number;
+    }
+    std::vector<std::byte> out;
+    putText(out, big ? "MM" : "II");
+    put16(out, 42);
+    put32(out, ifd0At);
+    std::vector<std::byte> values;
+    const auto writeIfd = [&](const std::vector<Entry>& entries, std::uint32_t next) {
+        put16(out, static_cast<std::uint32_t>(entries.size()));
+        for (const Entry& entry : entries) {
+            put16(out, entry.tag);
+            put16(out, entry.type);
+            put32(out, entry.count);
+            if (entry.type == 2) {
+                std::vector<std::byte> text;
+                putText(text, entry.text);
+                text.push_back(std::byte{0});
+                if (text.size() <= 4) {
+                    text.resize(4, std::byte{0});
+                    append(out, text);
+                } else {
+                    put32(out, valuesAt + static_cast<std::uint32_t>(values.size()));
+                    append(values, text);
+                    if ((values.size() & 1U) != 0) {
+                        values.push_back(std::byte{0});
+                    }
+                }
+            } else if (entry.type == 3) {
+                put16(out, entry.number);
+                put16(out, 0);
+            } else {
+                put32(out, entry.number);
+            }
+        }
+        put32(out, next);
+    };
+    if (ifd0.empty()) {
+        put16(out, 0);
+        put32(out, ifd1.empty() ? 0 : ifd1At);
+    } else {
+        writeIfd(ifd0, ifd1.empty() ? 0 : ifd1At);
+    }
+    if (!exif.empty()) {
+        writeIfd(exif, 0);
+    }
+    if (!ifd1.empty()) {
+        writeIfd(ifd1, 0);
+    }
+    append(out, values);
+    append(out, thumbnail);
+    return out;
+}
+
 class JpegEncoder {
 public:
     explicit JpegEncoder(const JpegOptions& options);
@@ -498,6 +618,12 @@ std::vector<std::byte> JpegEncoder::exifSegment() const {
     const std::vector<std::byte> thumbnail = makeJpeg(thumbnailOptions);
     std::vector<std::byte> payload;
     putText(payload, std::string_view("Exif\0\0", 6));
+    if (options_.exifOrientation != 0 || !options_.exifMake.empty() || !options_.exifModel.empty() ||
+        !options_.exifDateTaken.empty() || options_.exifBigEndian) {
+        append(payload, exifTiff(options_, options_.exifThumbnail ? std::span<const std::byte>(thumbnail)
+                                                                  : std::span<const std::byte>{}));
+        return payload;
+    }
     // TIFF header, IFD0 without entries, IFD1 with the thumbnail's offset and length.
     putText(payload, "II");
     putLe16(payload, 42);
@@ -534,7 +660,8 @@ std::vector<std::byte> JpegEncoder::encode() {
         put8(jfif, 0);
         segment(out, 0xE0, jfif);
     }
-    if (options_.exifThumbnail) {
+    if (options_.exifThumbnail || options_.exifOrientation != 0 || !options_.exifMake.empty() ||
+        !options_.exifModel.empty() || !options_.exifDateTaken.empty()) {
         segment(out, 0xE1, exifSegment());
     }
     if (!options_.comment.empty()) {
