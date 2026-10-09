@@ -36,12 +36,13 @@ add_library(recovery_storage STATIC
     storage/windows/win32.hpp
     storage/windows/windows_destination_file.cpp
     storage/windows/windows_device_io.cpp
+    storage/windows/windows_disk_list.cpp
     storage/windows/windows_disk_resolver.cpp
 )
 add_library(recovery::storage ALIAS recovery_storage)
 target_link_libraries(recovery_storage
     PUBLIC recovery::core
-    PRIVATE recovery_engine_options
+    PRIVATE recovery_engine_options setupapi
 )
 
 # ---------------------------------------------------------------------------
@@ -358,4 +359,47 @@ add_library(recovery::metadata ALIAS recovery_metadata)
 target_link_libraries(recovery_metadata
     PUBLIC recovery::session
     PRIVATE recovery_engine_options
+)
+
+# ---------------------------------------------------------------------------
+# recovery_report: the session report (P18, shared with the API of P19): what
+# a session holds, as text for people and as JSON for programs, and the text
+# formatting both write with (sizes, times, sources, untrusted names made
+# safe to print).
+# ---------------------------------------------------------------------------
+add_library(recovery_report STATIC
+    report/json_writer.cpp
+    report/session_report.cpp
+    report/text_format.cpp
+)
+add_library(recovery::report ALIAS recovery_report)
+target_link_libraries(recovery_report
+    PUBLIC recovery::metadata
+    PRIVATE recovery_engine_options
+)
+
+# ---------------------------------------------------------------------------
+# recovery_api: the GUI-facing API (P19): sources, imaging, sessions, scans,
+# candidates with their metadata and previews, recovery and reports behind
+# one object, with operations on threads of its own and events on one more.
+# Its public headers (include/api/recovery_api.hpp, api_types.hpp) include
+# the standard library and the engine's structured errors only; the engine
+# is a private dependency.
+# ---------------------------------------------------------------------------
+add_library(recovery_api STATIC
+    api/api_session.cpp
+    api/api_session.hpp
+    api/api_sources.cpp
+    api/api_sources.hpp
+    api/api_types.cpp
+    api/conversions.cpp
+    api/conversions.hpp
+    api/event_dispatcher.cpp
+    api/event_dispatcher.hpp
+    api/recovery_api.cpp
+)
+add_library(recovery::api ALIAS recovery_api)
+target_link_libraries(recovery_api
+    PUBLIC recovery::core
+    PRIVATE recovery::report recovery::imaging recovery::playability recovery_engine_options
 )

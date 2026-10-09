@@ -1,70 +1,30 @@
-// RecoveryEngine command-line interface.
-//
-// Skeleton only: the commands are reserved but not wired to the engine yet
-// (the full CLI is phase P18).
+// RecoveryEngine command-line interface (P18). The commands are in cli/
+// (the recovery_cli_lib library); this is the program around them: the
+// command line as UTF-8, the console, Ctrl+C.
 
-#include "recovery/version.hpp"
+#include "cli/cli.hpp"
+#include "console.hpp"
 
-#include <array>
 #include <iostream>
-#include <string_view>
+#include <string>
+#include <vector>
 
-namespace {
+int wmain(int argc, wchar_t* argv[]) {
+    using namespace recovery::cli;
+    // Static: a console handler may still run while the program ends.
+    static Interrupt interrupt;
+    const console::ConsoleSession console(interrupt);
 
-constexpr int kExitSuccess = 0;
-constexpr int kExitUsage = 1;
-constexpr int kExitNotImplemented = 3;
+    Environment environment;
+    environment.out = &std::cout;
+    environment.err = &std::cerr;
+    environment.progress = console.errorIsConsole() ? ProgressStyle::Console : ProgressStyle::Lines;
+    environment.consoleWidth = console.consoleWidth();
+    environment.interrupt = &interrupt;
+    environment.defaultSessionsRoot = console::defaultSessionsRoot();
 
-constexpr std::string_view kUsage = R"(Usage: recovery <command> [options]
-
-Commands:
-  inspect    Show source, partition and filesystem information   (not yet available)
-  image      Create a read-only image of a source drive           (not yet available)
-  scan       Scan a source for recoverable files                  (not yet available)
-  recover    Write recovered files to a destination               (not yet available)
-  report     Export a recovery session report                     (not yet available)
-  help       Show this help
-  version    Show the engine version
-
-Options:
-  -h, --help       Show this help
-  --version        Show the engine version
-)";
-
-constexpr std::array<std::string_view, 5> kPlannedCommands = {"inspect", "image", "scan", "recover", "report"};
-
-bool isPlannedCommand(std::string_view command) {
-    for (const std::string_view planned : kPlannedCommands) {
-        if (planned == command) {
-            return true;
-        }
-    }
-    return false;
-}
-
-}  // namespace
-
-int main(int argc, char* argv[]) {
-    if (argc < 2) {
-        std::cerr << kUsage;
-        return kExitUsage;
-    }
-
-    const std::string_view command(argv[1]);
-
-    if (command == "--version" || command == "version") {
-        std::cout << recovery::kEngineName << ' ' << recovery::kEngineVersion << '\n';
-        return kExitSuccess;
-    }
-    if (command == "--help" || command == "-h" || command == "help") {
-        std::cout << kUsage;
-        return kExitSuccess;
-    }
-    if (isPlannedCommand(command)) {
-        std::cerr << "recovery: command '" << command << "' is not implemented in this build\n";
-        return kExitNotImplemented;
-    }
-
-    std::cerr << "recovery: unknown command '" << command << "'\n\n" << kUsage;
-    return kExitUsage;
+    const std::vector<std::string> arguments = console::utf8Arguments(argc, argv);
+    const ExitCode code = run(arguments, environment);
+    interrupt.finish();
+    return static_cast<int>(code);
 }

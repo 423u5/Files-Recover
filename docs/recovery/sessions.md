@@ -193,6 +193,15 @@ reads the session's record, its scan states and its jobs, and skips the updates 
 that for every folder below `root` that holds a journal. A journal that cannot be read gives a summary with its
 error (a newer format, for one).
 
+## Update hooks (P19)
+
+`SessionOptions::onScanUpdate` and `onJobUpdate` are told each update of the scan and of a recovery job once the
+session has recorded it: it is in the journal, and the accessors return what it added (candidates, recovered
+files). They run on the operation's thread, outside the session's locks, before the operation goes on. They are not
+told anything when a journal is replayed (`open()`). Both are empty by default; the API (P19) uses them to keep its
+candidate list and recovery states up to date and to raise its events. They must be quick and must not throw; they
+may call the accessors and `pause()`, `resume()` and `cancel()`.
+
 ## Threads
 
 | Object | Rule |

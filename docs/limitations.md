@@ -271,13 +271,17 @@ After a failed chunk, reconstruction reads the chunk sector by sector with retri
 block size as in imaging, so a region with many bad sectors takes long. Imaging the source first is preferable.
 
 ### L42. The recovered file does not record that it is incomplete
-**Status:** Open; P16 keeps each file's report in its session, the CLI report (P18) is to show it  
+**Status:** Open; P16 keeps each file's report in its session and P18's CLI shows it; nothing is written next to the file  
 Missing data inside a file is zero-filled and missing data at its end is left out, so the file's size can
 differ from the original. The `ReconstructionReport` says so, but it is only returned to the caller; nothing next
 to the file records it. Sessions (P16) and the CLI report (P18) are expected to persist it.
 
 P16: a session keeps every file's `ReconstructionReport` with its recovery job's updates
 (`RecoverySession::recoveredItems`), so it survives the application. Nothing is written next to the file itself.
+
+P18: `recovery recover` lists the files it wrote with bytes missing or unreadable, and what each lacks;
+`recovery report` shows it for every file of every job, and its JSON holds every file's whole
+`ReconstructionReport`. The file itself still carries no mark.
 
 ### L43. Sizes larger than the volume are cut to the volume
 **Status:** Accepted (safety)  
@@ -1115,6 +1119,14 @@ A Quick scan validates and hashes the filesystem candidates: it reads every byte
 active and deleted. It skips the source pass, MP4 recovery's carving and fragment reconstruction, not the reads of
 the files themselves.
 
+### L197. The scan's heap test can fail under load
+**Status:** Open (found in P19)  
+`ScanLargeImageTest.MemoryStaysBoundedWhateverTheImageSize` compares the heap peaks of scans of a 1.25 GiB and a
+5 GiB image and allows them to differ by 2 MiB. In one full debug run of P19 (`ctest -j 8`, every suite at once)
+they differed by 2.6 MB (19.6 MB and 22.2 MB); the test passed alone, in the full run after it, and in the full
+release run (AddressSanitizer skips it). The peak depends on how much work is in flight when the scheduler is busy
+(blocks read ahead, carves made ahead), not only on the image's size: the allowance is tight for a loaded machine.
+
 ## Sessions (P16)
 
 ### L144. The journal is never compacted
@@ -1271,6 +1283,197 @@ comes out wrong.
 The content is offered as a preview once its header was read, whatever its validation found: a platform decoder may
 fail on it, or show part of it. A user interface should look at the candidate's condition (`describeCandidate`)
 before it decodes a preview.
+
+## Command line (P18)
+
+### L168. Output folders are compared by text when they do not exist yet
+**Status:** Open  
+`recover` finds the jobs that write to its output folder with `std::filesystem::equivalent` when the folder and
+the job's destination both exist, and otherwise by their normalised text, with only ASCII letters case-folded. A
+job recorded for a folder it never created, then given again spelled with another case of non-ASCII letters,
+would count as another folder: a second job, and names with " (1)" in the end.
+
+P19: the API's recovery (`recoverCandidate`, `recoverCandidates`, `recoverAll`) compares folders the same way.
+
+### L169. Arguments that are not valid UTF-16 cannot be passed
+**Status:** Open  
+The CLI takes its arguments as UTF-8, converted from `wmain`'s UTF-16. An unpaired surrogate, which Windows allows
+in file names but UTF-8 cannot hold, becomes U+FFFD, so a source or folder whose path holds one cannot be named
+on the command line.
+
+### L170. Reading a report repairs the session
+**Status:** Open  
+`report` opens a session as every command does (`RecoverySession::open`), and opening repairs what a crash left: a
+torn last record is cut off, and damage is cut off after a copy is kept (P16). A report therefore writes to the
+session's folder when there is something to repair. A session in use by another command is only summarised
+(`readSessionSummary`, without its candidates and files).
+
+### L171. A scan does not count an image's known unreadable regions
+**Status:** Open (engine, P15)  
+The regions an image's metadata lists (`ScanConfiguration::knownBadRegions`) are not read, and the scan's metrics
+do not count them as unreadable: a scan of an image with gaps reports `0 B unreadable`. The CLI warns about them
+and exits with 4, and the report lists them with the scan's settings, but the session's unreadable regions and
+the metrics leave them out. Recovered files that cover them do count them (`ReconstructionReport`).
+
+### L172. Recovery needs a complete scan
+**Status:** Open (a P18 call, for review)  
+`recover` refuses a session whose scan is not complete, so that it never writes from a result the scan has not
+finished (the plan: do not promise recovery before the scan is complete). The engine can write the candidates
+delivered so far (`addRecoveryJob`, L151): a scan that cannot complete, on a source that fails for good during
+the evaluation, leaves the candidates it delivered out of the CLI's reach.
+
+P19: the API recovers whenever no other operation runs, also from a scan that did not complete (the candidates
+delivered so far); the CLI still refuses.
+
+### L173. Text and JSON reports only
+**Status:** Accepted (the user's P18 decision, 2026-10-08)  
+`report` writes text or JSON. There is no CSV or HTML report.
+
+### L174. Columns count code points
+**Status:** Open  
+Text tables and progress lines measure widths in code points. Wide East Asian characters take two columns on a
+console and combining marks none, so tables holding such names do not line up, and a progress line can wrap.
+
+### L175. The Ctrl+Break test needs a console
+**Status:** Open (testing)  
+`CliProcessTest.CtrlBreakStopsAScanCleanly` sends Ctrl+Break through the console the test shares with the
+program. A test process without a console makes a hidden one; where that fails too, the test is skipped, and the
+console handler's path is tested in-process only (through `Interrupt`).
+
+### L176. Recovered names keep characters that reorder text
+**Status:** Open (P7)  
+The CLI escapes bidirectional formatting characters when it prints a name, but P7's `safeFileName` keeps them in
+the names of the files it writes: a file recovered as `invoice<U+202E>txt.jpg` shows as `invoicegpj.txt` in
+Explorer.
+
+### L177. Disks are named by number only
+**Status:** Open  
+`--source` takes `\\.\PhysicalDriveN`. The CLI does not list the disks, and does not take a drive letter for the
+disk it is on; given a drive letter, its error names that disk when Windows can tell (Disk Management shows
+the numbers).
+
+P19: the API lists the disks with their drive letters (`listSources()`); the CLI does not use it yet.
+
+### L178. No pause from the command line
+**Status:** Open  
+The engine pauses and resumes scans and recovery jobs (P15, P16). The CLI offers Ctrl+C, which stops a command,
+and running the command again, which goes on: a pause cannot be held across commands.
+
+P19: the API pauses and resumes scans and recoveries (`pauseScan`, `pauseRecovery`, ...).
+
+### L179. Reports hold everything
+**Status:** Open  
+A report lists every candidate and every file of every job, built in memory before it is written: a scan with
+hundreds of thousands of candidates gives a report of that size, in text or JSON. There are no filters, pages or
+streaming.
+
+P19: the API's `exportReport` writes the same report, so the same holds; its candidate list is paged.
+
+### L180. Fixed log level and formats
+**Status:** Open  
+`--log` writes the engine's records of level Info and above, and `scan` always uses every format and validator the
+engine has (they are the scan's identity: a resumed scan must have them all the same). Neither can be chosen.
+
+## GUI API (P19)
+
+### L181. Recovered files can be left out of events
+**Status:** Open  
+The event queue holds at most 100,000 recovered files. When a user interface falls further behind, `FilesRecovered`
+events are dropped; the next `FilesRecovered` or `OperationFinished` event of the session says how many
+(`filesDropped`), and the user interface must read their state again from `getCandidates`. Progress and candidates
+are merged, never dropped.
+
+### L182. A scan's candidates come at its end
+**Status:** Open  
+A scan delivers its candidates in its last stage, the evaluation (P14, P15): during a deep scan a user interface can
+show the counts (`ScanMetrics::filesFound`, `carves`, ...) but no file until the evaluation begins, and a scan
+stopped before it has nothing to list or recover.
+
+### L183. The candidate list is kept in memory once more
+**Status:** Open  
+The API keeps every candidate of an open session as a list shows it (`CandidateInfo`, a few hundred bytes each) and
+a record per recovery job that lists it, besides the session's own candidates (all in memory, P16). Memory grows
+with the candidates of every open session.
+
+### L184. No sorting or searching
+**Status:** Open  
+`getCandidates` pages the candidates in id order, with filters (kind, condition, recovery state, deleted,
+duplicates). There is no sorting by name, size or date and no text search: a user interface that sorts the whole
+list fetches all of it.
+
+### L185. No recovery while a scan runs
+**Status:** Open  
+A session runs one operation at a time: while its scan runs (or is paused), recovery is refused as busy. A user
+interface cannot recover a file it sees before the scan ends (and a deep scan's files come at its end, L182).
+
+### L186. The session list cannot tell an interrupted session
+**Status:** Open  
+`listSessions` reads each session's summary without opening it. A session whose last record says its scan runs shows
+`Running`, whether another program runs it or its program ended without recording an end; only `openSession` tells
+(`Interrupted`).
+
+### L187. Imaging has no pause and no list
+**Status:** Open  
+An imaging can be cancelled (and resumed with `ImagingOptions::resume`), not paused (P2's `ImageWriter` has no
+pause). The API does not list or remember images: an imaging is known by its `ImagingId` while the API lives; an
+unfinished image is found again by its file.
+
+### L188. Previews are read one at a time per session
+**Status:** Open  
+`getCandidateDetails` with media and `readPreview` of a session run one at a time (they share the session's preview
+source and metadata cache), and each `readPreview` call opens the candidate's content again. A video streamed in
+small pieces costs a content reader per piece; the metadata of up to 8 candidates is kept.
+
+### L189. C++ only
+**Status:** Accepted (the user's P19 decision, 2026-10-09)  
+The API is a C++20 library. A user interface in another language (C#, through P/Invoke) needs a C interface layered
+on it, which does not exist.
+
+### L190. The disk list asks Windows only
+**Status:** Open  
+`listSources` lists the present `GUID_DEVINTERFACE_DISK` interfaces: a disk without one (some virtual disks) is not
+listed. Only drive letters are mapped to disks (folders a volume is mounted on are not), a volume spanning disks
+shows its letter on each, and a disk is `system` or `holdsSessions` by the disks of `%SystemRoot%` and the sessions
+folder. The automated tests list the computer's disks without checking them against a removable disk of known
+contents.
+
+### L191. Progress is an estimate
+**Status:** Open  
+`ScanProgress::fraction` weighs a scan's stages by fixed shares of its time (the source pass 70% of a deep scan); a
+source with many files and little free space spends its time elsewhere, and the bar moves unevenly. There is no
+time-remaining estimate.
+
+### L192. Callbacks can stall the API
+**Status:** Open  
+`onLog` is called on the engine's threads with the logger's lock held: a slow log callback slows the engine.
+`onEvent` runs on the event thread, which never makes an operation wait, but destroying the API waits for the
+callback under way: a callback that waits for the thread destroying the API (a sent window message) deadlocks it. A
+user interface must post events to its own thread. The callbacks, and what they refer to, must stay valid until the
+destructor returns (the API's threads may call them until then): nothing checks it.
+
+### L193. Session ids the API takes are the engine's
+**Status:** Open  
+The API takes session ids of letters, digits, `-` and `_` (at most 128): the engine's are always so. A folder below
+the sessions folder with another name is listed by `listSessions` but cannot be opened through the API.
+
+### L194. The platform hooks are reachable
+**Status:** Open  
+`api/api_platform.hpp` (test hooks, engine headers) lives in `include/api/` next to the GUI-facing headers, and the
+engine's libraries export `include/` as one tree: nothing in the build keeps a user interface from including engine
+headers. The tests prove the API can be used without them (the workflow is compiled against the GUI-facing headers
+alone), not that a user interface does.
+
+### L195. The CLI and the API each open sources and plan recovery
+**Status:** Open  
+P19 shares the report with the CLI but not the rest: opening sources with their hints and the recovery that
+converges on a folder are written in both (`tools/recovery_cli/cli/sources.cpp`, `command_recover.cpp`;
+`src/api/api_sources.cpp`, `api_session.cpp`). The CLI is not built on the API.
+
+### L196. A failed operation's thread start leaves a recorded job
+**Status:** Open  
+A recovery request records its new job before it starts the operation's thread. If the thread cannot be started (no
+resources), the request fails and the job stays recorded, not started: `resumeRecovery` runs it.
+
 ## Continuous integration
 
 ### L143. CI does not decode WebP or HEVC
@@ -1284,7 +1487,9 @@ returns it for damage in a file is assumed from its meaning, not verified. The o
 runners, so the gap lists of L123 hold on Windows Server 2025 for the test files.
 
 ### L167. The testing notes are not in git
-**Status:** Open (found in P17; a one-line fix waits for the user's decision)  
+**Status:** Resolved (P18: anchored as `/Testing/`, the user's decision of 2026-10-08)  
 `.gitignore` ignores `Testing/` (CMake's test output folder). Git on Windows ignores case (`core.ignorecase`), so
 the pattern also matches `docs/testing/`: `docs/testing/testing.md` has never been committed, although the README
 and the other documents link to it. Anchoring the pattern to the root (`/Testing/`) would fix it.
+
+P18: `.gitignore` anchors the pattern; `docs/testing/` is no longer ignored.

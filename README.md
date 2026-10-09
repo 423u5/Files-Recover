@@ -3,7 +3,7 @@
 A read-only file recovery engine for Windows 11, written in C++20. It is aimed at deleted media on USB flash
 drives and other removable storage.
 
-> **Status: early development.** Phases P0–P17 are implemented: project skeleton, read-only storage
+> **Status: early development.** Phases P0–P19 are implemented: project skeleton, read-only storage
 > access, disk imaging with bad-sector handling, MBR/GPT partition detection, FAT32 and exFAT parsing,
 > the NTFS foundation (MFT, FILE records, resident and non-resident data, data runs), all including
 > deleted entries, and filesystem-based recovery: recovery candidates from FAT32, exFAT and NTFS metadata,
@@ -25,8 +25,11 @@ drives and other removable storage.
 > from where they were. P17 gives a future user interface what it shows, without depending on any user interface
 > library: each file's condition, duplicates under different names, its media metadata (image size and Exif,
 > audio and video streams, durations, tags) and previews read on demand, and what recovery jobs did with it.
-> There is no report or user-facing recovery command yet. Passing builds and tests do **not**
-> mean the engine is production-ready.
+> P18 adds the `recovery` command line: inspect a source, image it, scan it in a session, recover its files and
+> report what was found and written; a command stopped by Ctrl+C or a crash goes on when it is run again. P19 adds
+> the API a user interface builds on: one object that lists the disks, inspects, images, scans, lists and previews
+> what was found, recovers it and reports on it, with progress and events, through headers that hold nothing of the
+> filesystems or the engine's types. Passing builds and tests do **not** mean the engine is production-ready.
 
 ## Safety model
 
@@ -58,8 +61,10 @@ drives and other removable storage.
 | `include/scan`, `src/scan` | Scanning (P15): the scan coordinator, the scan's source (pause gate, block cache), updates and checkpoints, the recovery job |
 | `include/session`, `src/session` | Recovery sessions (P16): the session, its journal, the encoding of its records, the source's fingerprint |
 | `include/metadata`, `src/metadata` | Metadata for a user interface (P17): candidate descriptions and conditions, duplicate groups, media metadata and previews read from a candidate's content, recovery status |
-| `tools/recovery_cli` | `recovery` CLI (skeleton only) |
-| `tests/unit`, `tests/integration`, `tests/filesystem`, `tests/corruption`, `tests/recovery`, `tests/carving`, `tests/formats`, `tests/validation`, `tests/evaluation`, `tests/scan`, `tests/session`, `tests/metadata` | GoogleTest suites; `tests/support` holds the simulated devices, volume and image file builders, samples from other encoders, and test-only carving formats |
+| `include/report`, `src/report` | The session report (text and JSON) and the text formatting the CLI and the API write with |
+| `include/api`, `src/api` | The GUI-facing API (P19): `recovery_api.hpp` and `api_types.hpp` (what a user interface includes), `api_platform.hpp` (test hooks) |
+| `tools/recovery_cli` | The `recovery` command line (P18): `cli/` holds the commands (library `recovery_cli_lib`), `main.cpp` and `windows/` the program (the console, Ctrl+C) |
+| `tests/unit`, `tests/integration`, `tests/filesystem`, `tests/corruption`, `tests/recovery`, `tests/carving`, `tests/formats`, `tests/validation`, `tests/evaluation`, `tests/scan`, `tests/session`, `tests/metadata`, `tests/cli`, `tests/api` | GoogleTest suites; `tests/support` holds the simulated devices, volume and image file builders, samples from other encoders, and test-only carving formats |
 | `docs/` | Architecture, recovery and testing notes; known limitations in `docs/limitations.md` |
 
 Directories for later phases (`tools/disk_image_tool`, `tools/test_image_generator`) already exist and are empty.
@@ -87,6 +92,50 @@ Other presets:
 
 Warnings are errors (`/W4 /WX`). To run only one group of tests: `ctest --preset msvc-debug -L unit`,
 `-L integration`, `-L filesystem`, `-L corruption`, `-L recovery`, `-L carving`, `-L formats`, `-L validation`,
-`-L evaluation`, `-L scan` or `-L cli`.
+`-L evaluation`, `-L scan`, `-L session`, `-L metadata`, `-L cli` or `-L api`.
 
 See [docs/testing/testing.md](docs/testing/testing.md) for how to test safely.
+
+## Using the command line
+
+`build\msvc-release\tools\recovery_cli\recovery.exe` (`recovery help <command>` shows every option):
+
+```powershell
+recovery inspect --source card.img                         # size, partitions, filesystems
+recovery image --source \\.\PhysicalDrive2 --output D:\card.img   # as an administrator; --resume goes on
+recovery scan --source D:\card.img --mode deep             # prints the session's id
+recovery recover --session <id> --output D:\Recovered      # every file found; --kind, --ids, ... to choose
+recovery report --session <id> --format json --output D:\card-report.json
+recovery report                                            # the sessions
+```
+
+The source is only read, and nothing is written on its disk. Sessions are kept in
+`%LOCALAPPDATA%\RecoveryEngine\Sessions` unless `--sessions-dir` names another folder. After Ctrl+C or a crash, run
+the same command again (`recovery scan --session <id>` for a scan) and it goes on where it stopped. Exit codes:
+0 done, 1 wrong command line, 2 failed, 3 stopped, 4 done but not everything could be read or written. See
+[docs/recovery/cli.md](docs/recovery/cli.md).
+
+## Using the API
+
+A user interface links `recovery_api` and includes `api/recovery_api.hpp` only:
+
+```cpp
+#include "api/recovery_api.hpp"
+
+using namespace recovery::api;
+
+ApiOptions options;
+options.onEvent = [](const Event& event) { /* post to the UI thread */ };
+auto api = RecoveryApi::create(options).value();
+auto disks = api->listSources();                                   // disks, letters, which holds Windows
+auto session = api->startScan(SourceRef::physicalDisk(2)).value(); // a deep scan, as an administrator
+api->waitForOperation(session, std::chrono::minutes(60));          // or follow the events
+auto page = api->getCandidates(session);                           // names, kinds, conditions, duplicates
+RecoveryOptions to;
+to.destination = L"D:\\Recovered";
+api->recoverAll(session, to);                                      // never on the source disk
+api->exportReport(session, L"D:\\card-report.json");
+```
+
+Every long operation runs on a thread of the API's; `getProgress()` and every query may be called from any thread,
+and the events come on one more thread, in order. See [docs/recovery/api.md](docs/recovery/api.md).

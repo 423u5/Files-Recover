@@ -17,6 +17,11 @@ IStorageSource                 read() / readExact() / readSectors()  — non-vir
 Physical disks and images share `DeviceBackedSource`, so the same request gets the same answer from both.
 `tests/integration/storage/source_contract_test.cpp` runs one test suite against every source type.
 
+`DiskLister` (`include/storage/disk_list.hpp`, P19) lists the physical disks attached, by number, with their
+vendor, product, removability, bus, size and the drive letters of their volumes, for a user interface to choose a
+source from. `makePlatformDiskLister()` asks Windows through handles that cannot read or change anything (desired
+access 0); see `src/storage/windows/windows_disk_list.cpp` for its Windows assumptions.
+
 ## Read contract
 
 Every source validates reads the same way, in `IStorageSource::read`, before the implementation sees the

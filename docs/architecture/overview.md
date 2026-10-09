@@ -1,11 +1,10 @@
 # Architecture overview
 
-This file covers what is implemented (P0–P17). The target architecture for all phases is in the project plan.
+This file covers what is implemented (P0–P19). The target architecture for all phases is in the project plan.
 
 ## Modules and dependencies
 
 ```
-tools/recovery_cli  ──► recovery_core
 recovery_imaging    ──► recovery_storage ──► recovery_core
 recovery_partition  ──► recovery_storage
 recovery_filesystem ──► recovery_storage
@@ -20,6 +19,11 @@ recovery_evaluation ──► recovery_validation, recovery_mp4, recovery_fragme
 recovery_scan       ──► recovery_evaluation, recovery_partition
 recovery_session    ──► recovery_scan
 recovery_metadata   ──► recovery_session
+recovery_report     ──► recovery_metadata
+recovery_cli_lib    ──► recovery_report, recovery_imaging, recovery_playability
+tools/recovery_cli  ──► recovery_cli_lib (the program: wmain, the console, Ctrl+C)
+recovery_api        ──► recovery_core (public: its headers hold the standard library and the errors only);
+                        recovery_report, recovery_imaging, recovery_playability (private)
 ```
 
 The partition and filesystem modules are independent of each other, and carving is independent of both: it reads
@@ -40,7 +44,12 @@ scan and its recovery jobs on disk as they go: every update in an append-only jo
 job goes on, so that a session opens again after a restart or a crash and resumes from its last update. P17's
 `recovery_metadata` gives a user interface what it shows: a candidate's condition and duplicates, the media metadata
 and previews its content holds (read on demand), and what a session's recovery jobs did with it; it depends on no
-user interface library.
+user interface library. P18's `recovery_cli_lib` is the command line on all of it, through the public headers
+only: `recovery.exe` inspects sources, images them, scans them in sessions, recovers their files and reports
+them, and goes on with a session after Ctrl+C or a crash. P19's `recovery_api` is what a user interface builds on:
+one object that lists the disks, inspects, images, scans, lists and previews, recovers and reports, with its
+operations on threads of its own and events on one more, through headers that hold nothing of the engine but its
+error types; the report the CLI writes moved to `recovery_report`, shared by both.
 
 | Library | Namespace | Responsibility |
 | --- | --- | --- |
@@ -61,8 +70,13 @@ user interface library.
 | `recovery_session` | `recovery::session` | Recovery sessions (P16): `RecoverySession` keeps a scan of one source and its recovery jobs in an append-only journal (`JournalFile`, `JournalReader`: records with CRCs, flushed one by one, torn tails and damage told apart), opens them again after a restart or a crash, repairs what a crash or damage left, and resumes them from their last update; the binary encoding of the engine's values; the source's fingerprint; `listSessions` ([../recovery/sessions.md](../recovery/sessions.md)) |
 | `recovery_metadata` | `recovery::metadata` | Metadata for a user interface (P17): `describeCandidate` (name, path, kind, size, validation, the recovery condition and its reasons, SHA-256), `DuplicateGroups`, media metadata read on demand from a candidate's content (`extractMetadata`, `readMediaMetadata`: image size and colour, Exif orientation, date and camera, audio and video streams, MP4 movies and tracks, rotation, common tags) with previews (`PreviewSource`, `readPreview`, `openPreview`: the content, Exif thumbnails, cover art), and `RecoveryJobIndex` (recovery status from a session's jobs) ([../recovery/metadata.md](../recovery/metadata.md)) |
 
+| `recovery_report` | `recovery::report` | The session report (P18, shared with P19): `gatherReport`, `textReport`, `jsonReport` (`recovery-session-report`), session summaries and lists, the JSON writer, and the text formatting both write with (sizes, times, sources, stages, tables, untrusted names made safe to print) ([../recovery/cli.md](../recovery/cli.md)) |
+| `recovery_api` | `recovery::api` | The GUI-facing API (P19): `RecoveryApi` (`include/api/recovery_api.hpp`) with its own value types (`api_types.hpp`): `listSources`, `inspectSource`, `createImage`, sessions (`startScan`, `openSession`, `listSessions`, ...), scans paused, resumed and cancelled, `getProgress`, `getCandidates`, details and previews, recovery converging on its folder, `exportReport`; operations on threads of its own, events on one more (`EventDispatcher`: ordered, merged, bounded); `api_platform.hpp` replaces the platform in tests ([../recovery/api.md](../recovery/api.md)) |
+| `recovery_cli_lib` | `recovery::cli` | The command line (P18), headers in `tools/recovery_cli/cli/`: `cli::run` and the commands inspect, image, scan, recover and report; argument parsing, sources and sessions opened with explained errors, progress, Ctrl+C (`Interrupt`), text and JSON reports, output made safe to print. `recovery.exe` (`tools/recovery_cli`) adds the console ([../recovery/cli.md](../recovery/cli.md)) |
+
 Public headers live in `include/<module>/`. `<windows.h>` is only included from `src/storage/windows/` and
-`src/validation/windows/` (the playability level's WIC and Media Foundation code), never from a public header.
+`src/validation/windows/` (the playability level's WIC and Media Foundation code), never from a public header. The
+CLI's console code (`tools/recovery_cli/windows/console.cpp`) is the one place of the program that includes it.
 
 ## Error handling
 
@@ -103,6 +117,11 @@ Public headers live in `include/<module>/`. `<windows.h>` is only included from 
 | `JournalReader` | One owner. Reads without locking, so a session in use can be read. |
 | `extractMetadata`, `readMediaMetadata` | Free functions without shared state; concurrent calls are safe on different content readers. A reader from `openPreview` views its content reader: one owner for both. |
 | `DuplicateGroups`, `RecoveryJobIndex` | Immutable once built (`addJob` has one owner); const members from any thread. |
+| `cli::run` | One command on the calling thread; the engine calls its progress back on that thread. |
+| `RecoveryApi` | Every member function from any thread at any time, also from its event callback (not the destructor). Each operation (scan, recovery, imaging) runs on a thread of its own; `onEvent` is called on one more thread, one event at a time, with no lock of the API held; `onLog` on the engine's threads. The destructor cancels the operations, waits for them and for the last reference to each session, then stops the event thread. |
+| `OpenSession` (API) | Shared: the API, the calls using it and its operation's thread hold references; the last one closes the session, on whichever thread drops it. Its operation's lock may be held while the session's own locks are taken, never the other way. |
+| `DiskLister` | A function without shared state; concurrent calls are safe. |
+| `cli::Interrupt` | Every member from any thread. The action runs on the requesting thread (Windows' console handler thread) under the object's lock, and `Scope`'s destructor waits for an action under way. |
 | `Mp4RecoverySteps` | `examine()` and `prepare()` concurrently with each other and with `commit()` of other hits; every other member one owner at a time. |
 | `FragmentRecoverySteps` | `examineSeed()` concurrently with itself; every other member one owner at a time. |
 | `CandidateEvaluation` with `EvaluationOptions::pool` | `run()` validates and hashes on the pool's workers (allocation queries under a lock per volume); the sink is called on the thread of `run()`. |
@@ -128,3 +147,11 @@ Each one is also documented where it is implemented.
   at most 255 UTF-16 units.
 - A destination directory is only used when `symlink_status` reports a plain directory. MSVC reports symbolic
   links and junctions as types of their own, so the writer never follows a link out of the destination.
+- The API (P19) lists disks through SetupAPI (`GUID_DEVINTERFACE_DISK`), each opened with desired access 0 (no
+  administrator rights, nothing can be read through it) and asked its number, description and geometry; drive
+  letters are resolved with critical-error dialogs turned off for the thread. It reads `%LOCALAPPDATA%` and
+  `%SystemRoot%` from the C runtime's environment.
+- The CLI (P18) takes its arguments from `wmain` in UTF-16, writes text to a console with `WriteConsoleW` (any
+  character, whatever the code page) and UTF-8 to files and pipes, and handles Ctrl+C in a console control handler,
+  which Windows runs on a thread of its own; returning FALSE for a second Ctrl+C lets the default handler end the
+  process ([../recovery/cli.md](../recovery/cli.md)).

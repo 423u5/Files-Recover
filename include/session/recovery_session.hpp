@@ -56,6 +56,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -192,6 +193,14 @@ struct SessionOptions {
     // Tells which physical disk a session folder is on, for the check that it
     // is not the source's (as for a recovery destination). Empty: the platform's.
     storage::DiskResolver diskResolver;
+    // P19: told each update of the scan and of a recovery job once the session
+    // has recorded it (it is in the journal, and the accessors return what it
+    // added), on the operation's thread, before the operation goes on. Empty:
+    // not told. They must be quick and must not throw; they may call the
+    // accessors and pause(), resume() and cancel(), not runScan() or
+    // runRecovery().
+    std::function<void(const scan::ScanUpdate& update)> onScanUpdate;
+    std::function<void(std::uint32_t job, const scan::RecoveryJobUpdate& update)> onJobUpdate;
 };
 
 // Thread safety: runScan() and runRecovery() run on the calling thread, one

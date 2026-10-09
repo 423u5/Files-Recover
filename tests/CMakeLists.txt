@@ -19,12 +19,14 @@ add_library(recovery_test_support STATIC
     support/audio_builders.cpp
     support/audio_samples.cpp
     support/candidate_helpers.cpp
+    support/card_fixtures.cpp
     support/carving_formats.cpp
     support/exfat_builder.cpp
     support/fake_device.cpp
     support/fat32_builder.cpp
     support/image_builders.cpp
     support/image_samples.cpp
+    support/json_reader.cpp
     support/memory_source.cpp
     support/mp4_builders.cpp
     support/mp4_samples.cpp
@@ -85,6 +87,7 @@ gtest_discover_tests(recovery_unit_tests
 add_executable(recovery_integration_tests
     integration/imaging/image_writer_test.cpp
     integration/storage/destination_file_test.cpp
+    integration/storage/disk_list_test.cpp
     integration/storage/disk_resolver_test.cpp
     integration/storage/disk_image_source_test.cpp
     integration/storage/source_contract_test.cpp
@@ -385,7 +388,43 @@ gtest_discover_tests(recovery_metadata_tests
 )
 
 # ---------------------------------------------------------------------------
-# CLI smoke tests.
+# CLI tests (P18): the recovery command line run in-process on the scan
+# tests' card written as an image file and on simulated physical disks: every
+# command, invalid arguments and paths, cancellation, error reporting and
+# sessions resumed; and the program itself run as a process (exit codes,
+# Unicode arguments, Ctrl+Break).
+# ---------------------------------------------------------------------------
+add_executable(recovery_cli_tests
+    cli/cli_arguments_test.cpp
+    cli/cli_cancellation_test.cpp
+    cli/cli_commands_test.cpp
+    cli/cli_errors_test.cpp
+    cli/cli_output_test.cpp
+    cli/cli_process_test.cpp
+    cli/cli_resume_test.cpp
+    cli/cli_test_support.cpp
+    cli/cli_test_support.hpp
+    scan/scan_test_support.cpp
+    scan/scan_test_support.hpp
+    session/session_test_support.cpp
+    session/session_test_support.hpp
+)
+target_link_libraries(recovery_cli_tests PRIVATE
+    recovery_cli_lib
+    recovery_test_support
+    GTest::gtest_main
+    recovery_build_options
+    shell32
+)
+target_compile_definitions(recovery_cli_tests PRIVATE RECOVERY_CLI_EXE="$<TARGET_FILE:recovery_cli>")
+add_dependencies(recovery_cli_tests recovery_cli)
+gtest_discover_tests(recovery_cli_tests
+    PROPERTIES LABELS cli
+    DISCOVERY_TIMEOUT 60
+)
+
+# ---------------------------------------------------------------------------
+# CLI smoke tests: the program as CTest runs it.
 # ---------------------------------------------------------------------------
 add_test(NAME cli.version COMMAND recovery_cli --version)
 set_tests_properties(cli.version PROPERTIES
@@ -403,5 +442,54 @@ set_tests_properties(cli.no_arguments_fails PROPERTIES WILL_FAIL TRUE LABELS cli
 add_test(NAME cli.unknown_command_fails COMMAND recovery_cli frobnicate)
 set_tests_properties(cli.unknown_command_fails PROPERTIES WILL_FAIL TRUE LABELS cli)
 
-add_test(NAME cli.unimplemented_command_fails COMMAND recovery_cli scan)
-set_tests_properties(cli.unimplemented_command_fails PROPERTIES WILL_FAIL TRUE LABELS cli)
+add_test(NAME cli.scan_without_source_fails COMMAND recovery_cli scan)
+set_tests_properties(cli.scan_without_source_fails PROPERTIES WILL_FAIL TRUE LABELS cli)
+
+# ---------------------------------------------------------------------------
+# API tests (P19): the GUI-facing API on the scan tests' card (an image file
+# and a simulated physical disk): sources, imaging, scans, candidates with
+# their details and previews, recovery, reports, events, concurrent queries,
+# cancellation and sessions restored. The acceptance test runs a user
+# interface's workflow compiled against the API's public headers alone.
+# ---------------------------------------------------------------------------
+# The GUI-facing headers, staged alone: the workflow's include path holds
+# them and nothing else of the engine.
+set(RECOVERY_API_ONLY_INCLUDE ${CMAKE_CURRENT_BINARY_DIR}/api_only_include)
+foreach(header api/api_types.hpp api/recovery_api.hpp recovery/error.hpp recovery/result.hpp)
+    configure_file(${PROJECT_SOURCE_DIR}/include/${header} ${RECOVERY_API_ONLY_INCLUDE}/${header} COPYONLY)
+endforeach()
+add_library(recovery_api_gui_client STATIC
+    api/gui_workflow.cpp
+    api/gui_workflow.hpp
+)
+target_include_directories(recovery_api_gui_client PUBLIC ${RECOVERY_API_ONLY_INCLUDE})
+target_link_libraries(recovery_api_gui_client PRIVATE recovery_build_options)
+
+add_executable(recovery_api_tests
+    api/api_cancellation_test.cpp
+    api/api_concurrency_test.cpp
+    api/api_details_test.cpp
+    api/api_events_test.cpp
+    api/api_recovery_test.cpp
+    api/api_scan_test.cpp
+    api/api_session_test.cpp
+    api/api_sources_test.cpp
+    api/api_test_support.cpp
+    api/api_test_support.hpp
+    api/api_workflow_test.cpp
+    scan/scan_test_support.cpp
+    scan/scan_test_support.hpp
+)
+target_link_libraries(recovery_api_tests PRIVATE
+    recovery_api_gui_client
+    recovery::api
+    recovery::session
+    recovery_test_support
+    GTest::gtest_main
+    recovery_build_options
+)
+target_compile_definitions(recovery_api_tests PRIVATE RECOVERY_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+gtest_discover_tests(recovery_api_tests
+    PROPERTIES LABELS api
+    DISCOVERY_TIMEOUT 60
+)

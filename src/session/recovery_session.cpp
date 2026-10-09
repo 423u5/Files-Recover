@@ -453,14 +453,19 @@ Status RecoverySession::Impl::takeScanUpdate(const scan::ScanUpdate& update) {
     if (Status appended = journal->append(RecordType::ScanUpdate, 0, time, encodePayload(update)); !appended.ok()) {
         return appended;
     }
-    const std::lock_guard lock(mutex);
-    if (Status applied = applyScanUpdate(update, time); !applied.ok()) {
-        journal->markBroken(applied.error());
-        return makeError(ErrorCode::InternalError,
-                         "session: the scan's update " + std::to_string(update.sequence) +
-                             " was written but could not be applied: " + applied.error().message);
+    {
+        const std::lock_guard lock(mutex);
+        if (Status applied = applyScanUpdate(update, time); !applied.ok()) {
+            journal->markBroken(applied.error());
+            return makeError(ErrorCode::InternalError,
+                             "session: the scan's update " + std::to_string(update.sequence) +
+                                 " was written but could not be applied: " + applied.error().message);
+        }
+        updated = time;
     }
-    updated = time;
+    if (options.onScanUpdate) {
+        options.onScanUpdate(update);
+    }
     return success();
 }
 
@@ -472,15 +477,20 @@ Status RecoverySession::Impl::takeJobUpdate(std::uint32_t id, const scan::Recove
     if (Status appended = journal->append(RecordType::JobUpdate, 0, time, encodePayload(record)); !appended.ok()) {
         return appended;
     }
-    const std::lock_guard lock(mutex);
-    if (Status applied = applyJobUpdate(id, update, time); !applied.ok()) {
-        journal->markBroken(applied.error());
-        return makeError(ErrorCode::InternalError,
-                         "session: recovery job " + std::to_string(id) + "'s update " +
-                             std::to_string(update.sequence) + " was written but could not be applied: " +
-                             applied.error().message);
+    {
+        const std::lock_guard lock(mutex);
+        if (Status applied = applyJobUpdate(id, update, time); !applied.ok()) {
+            journal->markBroken(applied.error());
+            return makeError(ErrorCode::InternalError,
+                             "session: recovery job " + std::to_string(id) + "'s update " +
+                                 std::to_string(update.sequence) + " was written but could not be applied: " +
+                                 applied.error().message);
+        }
+        updated = time;
     }
-    updated = time;
+    if (options.onJobUpdate) {
+        options.onJobUpdate(id, update);
+    }
     return success();
 }
 

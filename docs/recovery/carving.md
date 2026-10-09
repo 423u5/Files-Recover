@@ -273,7 +273,8 @@ All known limitations, with IDs for discussion, are listed in [../limitations.md
   they start in a volume's free space).
 - The whole range is carved, allocated or not, so files the filesystem already knows are found again (P14, P17;
   for MP4, P12 attaches such carves to the filesystem candidate).
-- Carved candidates cannot be written to a destination yet (P14, P18; MP4's can since P12).
+- Carved candidates are written as evaluated candidates since P14, named `recovered_<id>.<ext>` (MP4's since P12;
+  L48 resolved); P18's `recovery recover` writes them.
 - A carved file's bytes are read at least twice: by the carve, and again by the scan.
 - The image formats of P9 met the interface without changing it (L55). The audio formats of P10 needed the
   self-synchronizing rule (L51); the MP4 format of P12 needed nothing.

@@ -342,6 +342,56 @@ void pauseInThePass(scan::ScanRunOptions& options, RecoverySession& session, std
     };
 }
 
+// P19: the update hooks of SessionOptions are told each update of the scan
+// and of a job once the session has recorded it, in order, and nothing
+// when a journal is replayed.
+TEST(RecoverySessionTest, TheUpdateHooksAreToldEachUpdateOnceItIsRecorded) {
+    TempDir dir;
+    MemoryStorageSource source(card());
+    RECOVERY_ASSERT_OK(source.open());
+    const RecoverySession* live = nullptr;
+    std::uint64_t scanUpdates = 0;
+    std::uint64_t lastSequence = 0;
+    std::size_t delivered = 0;
+    std::map<std::uint32_t, std::size_t> jobItems;
+    bool recorded = true;
+    SessionOptions options;
+    options.onScanUpdate = [&](const scan::ScanUpdate& update) {
+        ++scanUpdates;
+        recorded = recorded && update.sequence == lastSequence + 1;
+        lastSequence = update.sequence;
+        delivered += update.candidates.size();
+        // Recorded: the accessors already return what it added.
+        recorded = recorded && live->candidateCount() == delivered && live->info().scan.updates == update.sequence;
+    };
+    options.onJobUpdate = [&](std::uint32_t job, const scan::RecoveryJobUpdate& update) {
+        jobItems[job] += update.items.size();
+        recorded = recorded && live->recoveredItems(job).size() == jobItems[job];
+    };
+    Result<std::unique_ptr<RecoverySession>> made = RecoverySession::create(dir.path(), source, {}, options);
+    RECOVERY_ASSERT_OK(made);
+    live = made->get();
+    const std::filesystem::path folder = (*made)->folder();
+    RECOVERY_ASSERT_OK(runScan(**made, source));
+    EXPECT_TRUE(recorded);
+    EXPECT_GT(scanUpdates, 1U);
+    EXPECT_EQ(scanUpdates, (*made)->info().scan.updates);
+    EXPECT_EQ(delivered, (*made)->candidateCount());
+    const Result<std::uint32_t> job = (*made)->addRecoveryJob(dir / "out");
+    RECOVERY_ASSERT_OK(job);
+    RECOVERY_ASSERT_OK((*made)->runRecovery(*job, source));
+    EXPECT_TRUE(recorded);
+    EXPECT_EQ(jobItems[*job], (*made)->candidateCount());
+    made->reset();
+
+    scanUpdates = 0;
+    jobItems.clear();
+    const Result<std::unique_ptr<RecoverySession>> reopened = RecoverySession::open(folder, options);
+    RECOVERY_ASSERT_OK(reopened);
+    EXPECT_EQ(scanUpdates, 0U);
+    EXPECT_TRUE(jobItems.empty());
+}
+
 TEST(RecoverySessionTest, APausedScanIsRecordedAndResumes) {
     TempDir dir;
     MemoryStorageSource source(card());
