@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -56,8 +57,11 @@ struct ScanOptions {
     // Data a larger alignment makes irrelevant is not read.
     std::uint32_t alignment = 1;
     // The scan stops (HitLimitReached) after the position at which the
-    // number of hits reaches this. At least 1.
-    std::uint64_t maxHits = 10'000'000;
+    // number of hits reaches this. At least 1; no limit by default. Every
+    // signature match counts, also those a header check rejects at once:
+    // the carving stages bound their work by the files they carve instead
+    // (CarveOptions::maxCarves).
+    std::uint64_t maxHits = std::numeric_limits<std::uint64_t>::max();
     SourceReadOptions reads;
     std::chrono::milliseconds progressInterval{250};
     ScanProgressCallback onProgress;

@@ -39,7 +39,8 @@ constexpr OptionSpec kNoFragmentsOption{"--no-fragments", "", "", "Deep scan: no
 constexpr OptionSpec kDeletedOnlyOption{"--deleted-only", "", "", "Only deleted files from filesystem metadata"};
 constexpr OptionSpec kAlignmentOption{"--alignment", "", "BYTES",
                                       "Carve files that start at multiples of BYTES only (default 1)"};
-constexpr OptionSpec kMaxHitsOption{"--max-hits", "", "N", "Stop carving after N signatures (default 10000000)"};
+constexpr OptionSpec kMaxHitsOption{"--max-hits", "", "N",
+                                    "Each deep-scan stage stops after carving N files (default 10000000)"};
 constexpr OptionSpec kSectorRetriesOption{"--sector-retries", "", "N",
                                           "Reads of a failing sector after the first (default 1)"};
 constexpr OptionSpec kNoMediaOption{"--no-media", "", "", "Check structure only, not the media data"};
@@ -177,6 +178,10 @@ void printScanSummary(std::ostream& out, const session::RecoverySession& session
             << " MP4 candidates, " << formatCount(metrics.fragmentCandidates) << " reconstructions";
     }
     out << '\n';
+    if (metrics.limitStops.any()) {
+        out << "Hit limit:       " << describeLimitStops(metrics.limitStops) << " (at most "
+            << formatCount(info.configuration.maxHits) << " carves per stage)\n";
+    }
 
     const std::vector<evaluation::EvaluatedCandidate> candidates = session.candidates();
     std::map<metadata::RecoveryCondition, std::uint64_t> conditions;
@@ -402,6 +407,14 @@ ExitCode runScan(const ParsedOptions& options, Context& context) {
         context.note("The scan was stopped; the session keeps what it did. To go on: recovery scan " + arguments);
         return ExitCode::Cancelled;
     }
+    bool incomplete = false;
+    if (summary->metrics.limitStops.any()) {
+        context.warning("the hit limit stopped " + describeLimitStops(summary->metrics.limitStops) +
+                        " of the source: files that start after that were not searched for by content. A new "
+                        "session with a higher --max-hits (now " +
+                        std::to_string(configuration->maxHits) + ") searches all of it");
+        incomplete = true;
+    }
     if (summary->metrics.unreadableBytes != 0) {
         context.warning(formatBytes(summary->metrics.unreadableBytes) +
                         " of the source could not be read (see recovery report " + arguments + ")");
@@ -418,7 +431,7 @@ ExitCode runScan(const ParsedOptions& options, Context& context) {
                                                 "image holds zeros there");
         return ExitCode::Incomplete;
     }
-    return ExitCode::Success;
+    return incomplete ? ExitCode::Incomplete : ExitCode::Success;
 }
 
 }  // namespace

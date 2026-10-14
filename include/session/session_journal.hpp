@@ -60,7 +60,8 @@
 namespace recovery::session {
 
 // The journal format this engine writes, and the oldest it reads.
-inline constexpr std::uint32_t kJournalFormatVersion = 1;
+// 2: the source pass's stage stops (PassState::stops, ScanMetrics::limitStops).
+inline constexpr std::uint32_t kJournalFormatVersion = 2;
 inline constexpr std::uint32_t kOldestJournalFormatVersion = 1;
 
 inline constexpr std::size_t kJournalHeaderSize = 16;
@@ -160,20 +161,32 @@ using RecordPayload = std::variant<SessionCreatedRecord, ScanStateRecord, scan::
                                    JobStateRecord, JobUpdateRecord, FileStartedRecord, DamageRecord>;
 
 [[nodiscard]] RecordType typeOf(const RecordPayload& payload) noexcept;
-// The payload's bytes. The overloads take each kind of payload as it is,
-// without copying it into a RecordPayload.
-[[nodiscard]] std::vector<std::byte> encodePayload(const RecordPayload& payload);
-[[nodiscard]] std::vector<std::byte> encodePayload(const SessionCreatedRecord& payload);
-[[nodiscard]] std::vector<std::byte> encodePayload(const ScanStateRecord& payload);
-[[nodiscard]] std::vector<std::byte> encodePayload(const scan::ScanUpdate& payload);
-[[nodiscard]] std::vector<std::byte> encodePayload(const JobCreatedRecord& payload);
-[[nodiscard]] std::vector<std::byte> encodePayload(const JobStateRecord& payload);
-[[nodiscard]] std::vector<std::byte> encodePayload(const JobUpdateRecord& payload);
-[[nodiscard]] std::vector<std::byte> encodePayload(const FileStartedRecord& payload);
-[[nodiscard]] std::vector<std::byte> encodePayload(const DamageRecord& payload);
-// Decodes a payload of a known type. Fails with InvalidFormat for bytes that
-// do not decode, and with InvalidInput for an unknown type.
-[[nodiscard]] Result<RecordPayload> decodePayload(RecordType type, std::span<const std::byte> bytes);
+// The payload's bytes in journal format `version` (a journal's records all
+// use its own). The overloads take each kind of payload as it is, without
+// copying it into a RecordPayload.
+[[nodiscard]] std::vector<std::byte> encodePayload(const RecordPayload& payload,
+                                                   std::uint32_t version = kJournalFormatVersion);
+[[nodiscard]] std::vector<std::byte> encodePayload(const SessionCreatedRecord& payload,
+                                                   std::uint32_t version = kJournalFormatVersion);
+[[nodiscard]] std::vector<std::byte> encodePayload(const ScanStateRecord& payload,
+                                                   std::uint32_t version = kJournalFormatVersion);
+[[nodiscard]] std::vector<std::byte> encodePayload(const scan::ScanUpdate& payload,
+                                                   std::uint32_t version = kJournalFormatVersion);
+[[nodiscard]] std::vector<std::byte> encodePayload(const JobCreatedRecord& payload,
+                                                   std::uint32_t version = kJournalFormatVersion);
+[[nodiscard]] std::vector<std::byte> encodePayload(const JobStateRecord& payload,
+                                                   std::uint32_t version = kJournalFormatVersion);
+[[nodiscard]] std::vector<std::byte> encodePayload(const JobUpdateRecord& payload,
+                                                   std::uint32_t version = kJournalFormatVersion);
+[[nodiscard]] std::vector<std::byte> encodePayload(const FileStartedRecord& payload,
+                                                   std::uint32_t version = kJournalFormatVersion);
+[[nodiscard]] std::vector<std::byte> encodePayload(const DamageRecord& payload,
+                                                   std::uint32_t version = kJournalFormatVersion);
+// Decodes a payload of a known type, encoded in journal format `version`.
+// Fails with InvalidFormat for bytes that do not decode, and with
+// InvalidInput for an unknown type or format.
+[[nodiscard]] Result<RecordPayload> decodePayload(RecordType type, std::span<const std::byte> bytes,
+                                                   std::uint32_t version = kJournalFormatVersion);
 
 // ---------------------------------------------------------------------------
 // Reading
@@ -303,8 +316,10 @@ public:
     // the journal.
     [[nodiscard]] Status append(RecordType type, std::uint16_t flags, SessionTime time,
                                 std::span<const std::byte> payload);
-    // The same, for a payload to encode.
-    [[nodiscard]] Status append(const RecordPayload& payload, SessionTime time);
+    // The same, for a payload to encode in journal format `version` (the
+    // journal's own).
+    [[nodiscard]] Status append(const RecordPayload& payload, SessionTime time,
+                                std::uint32_t version = kJournalFormatVersion);
     // Drops everything from `end` on (a torn tail, damage), flushed.
     [[nodiscard]] Status truncate(std::uint64_t end);
     // Refuses every later append with `error`: the journal holds something

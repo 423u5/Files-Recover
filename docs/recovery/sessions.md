@@ -180,13 +180,21 @@ reallocated bytes) is recorded next to where it went (L42).
 
 ## Versions
 
-* **Journal format**: version 1. An engine reads its own format and older ones, and refuses a newer one without
-  changing anything. Records of types it does not know are skipped when they are marked optional (an older reader
+* **Journal format**: version 2 (after P20: the source pass's stage stops, `PassState::stops` and
+  `ScanMetrics::limitStops`; L228). An engine reads its own format and older ones, and refuses a newer one without
+  changing anything. A journal keeps its format: records appended to a format-1 session are encoded in format 1
+  (the codec writes a field only in the formats that have it), so an older engine can still open it. The stops are
+  then not kept, which matters only to a scan run in it, and an unfinished format-1 scan does not resume anyway
+  (its checkpoint format is older). Records of types it does not know are skipped when they are marked optional (an older reader
   may skip them), and the journal is refused otherwise, as for flags it does not know.
 * **Engine**: a session another engine version created opens. Its candidates, recovered files and recovery jobs can
   be read and run. An unfinished scan resumes only with the engine that started it: P15's scan identity holds the
   engine version (L141), since two engines' results would mix in one scan. A scan that never recorded an update can
   be started by any engine.
+* **Checkpoint format**: an unfinished scan also resumes only in the checkpoint format it began in (2 since L228:
+  before it, the hit limit counted signatures). The session says so before anything runs (`ScanStatus::runnable`,
+  `notRunnable`: "start a new session"); its candidates are read and recovered as usual, and its report names its
+  limit as it counted (`ScanStatus::checkpointVersion`).
 
 ## Listing sessions
 
@@ -235,6 +243,7 @@ card (2 MiB, 10 candidates) it is 17.6 KB in 33 records.
   * every update of a deep scan, and every kind of value, comes back as it was: decoding and encoding again gives
     the same bytes, and the candidates explain themselves the same;
   * decoded updates make the same checkpoint;
+  * the stage stops come back in format 2, and format 1 encodes and decodes the rest as before;
   * payloads cut at every byte are refused, and so are values out of range, numbers not in their shortest form,
     lengths beyond the data, broken candidates and paths that are not UTF-8;
   * random damage never crashes the decoder.
@@ -254,8 +263,9 @@ card (2 MiB, 10 candidates) it is 17.6 KB in 33 records.
     names; a run complete but not recorded so;
   * corrupt data: damage in headers and payloads, damaged journal headers and session records, records that check
     but cannot be used, and random damage;
-  * version compatibility: newer formats, record types and flags refused untouched, optional records skipped, and a
-    session of another engine opened without resuming its scan;
+  * version compatibility: newer formats, record types and flags refused untouched, optional records skipped, a
+    session of another engine opened without resuming its scan, a format-1 session that keeps its format, and
+    an unfinished scan of checkpoint format 1 that says it does not resume;
   * besides those:
     * progress and results read from three threads all through a scan that is paused and resumed meanwhile;
     * only the session's source;
@@ -269,4 +279,4 @@ card (2 MiB, 10 candidates) it is 17.6 KB in 33 records.
 ## Known limitations
 
 L144–L152 in [../limitations.md](../limitations.md). L138 and L140 are resolved by P16; L40, L42, L99, L139 and L141
-changed with it.
+changed with it. L152 is resolved after P20: journal format 2 (L228), and format-1 sessions are read and kept.

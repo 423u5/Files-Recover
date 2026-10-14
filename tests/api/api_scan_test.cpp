@@ -109,6 +109,28 @@ TEST(ApiScanTest, SettingsOutOfRangeAreRefusedBeforeASessionIsMade) {
     EXPECT_EQ(sessions->size(), nothing.ok() ? 1u : 0u);
 }
 
+// L228: where the stages stopped at the limit is in the metrics.
+TEST(ApiScanTest, TheMetricsSayWhereTheStagesStoppedAtTheLimit) {
+    ApiWorld world;
+    ScanSettings settings;
+    settings.maxSignatures = 1;
+    const std::string id = world.startCardScan(settings);
+    const Progress done = world.waitIdle(id);
+    ASSERT_EQ(done.state, OperationState::Completed);
+    ASSERT_TRUE(done.scan.has_value());
+    const ScanMetrics& metrics = done.scan->metrics;
+    ASSERT_TRUE(metrics.carvingStoppedAt.has_value());
+    EXPECT_LT(*metrics.carvingStoppedAt, metrics.sourceSize);
+    EXPECT_EQ(metrics.carves, 1u);
+
+    const std::string whole = world.startCardScan();
+    const Progress all = world.waitIdle(whole);
+    ASSERT_EQ(all.state, OperationState::Completed);
+    EXPECT_FALSE(all.scan->metrics.carvingStoppedAt.has_value());
+    EXPECT_FALSE(all.scan->metrics.mp4StoppedAt.has_value());
+    EXPECT_FALSE(all.scan->metrics.fragmentsStoppedAt.has_value());
+}
+
 TEST(ApiScanTest, TheSettingsAreKeptWithTheSession) {
     ApiWorld world;
     ScanSettings settings;

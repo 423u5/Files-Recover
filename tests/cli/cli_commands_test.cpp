@@ -299,6 +299,40 @@ TEST_F(CliCommandsTest, ScanSettingsAreKeptInTheSession) {
     EXPECT_EQ(info.scan.metrics.candidates, 2u);
 }
 
+// L228: a scan whose stages reach the hit limit says where they stopped, in
+// its summary, a warning and the report, and ends as incomplete.
+TEST_F(CliCommandsTest, AScanStoppedByTheHitLimitSaysWhereAndIsIncomplete) {
+    const std::string id = scan(image, {"--max-hits", "1"}, ExitCode::Incomplete);
+    const session::SessionInfo info = infoOf(id);
+    const scan::StageStops& stops = info.scan.metrics.limitStops;
+    ASSERT_TRUE(stops.carving.has_value());
+    const std::string where = "carving at " + formatSize(*stops.carving);
+
+    const CliResult resumed = cli.run({"scan", "--session", id});
+    EXPECT_EQ(resumed.code, ExitCode::Success) << resumed;  // nothing left to do
+    EXPECT_TRUE(contains(resumed.out, "Hit limit:       " + where)) << resumed;
+    EXPECT_TRUE(contains(resumed.out, "(at most 1 carves per stage)")) << resumed;
+
+    const CliResult again = cli.run({"scan", "--source", arg(image), "--max-hits", "1"});
+    EXPECT_EQ(again.code, ExitCode::Incomplete) << again;
+    EXPECT_TRUE(contains(again.err, "the hit limit stopped " + where)) << again;
+    EXPECT_TRUE(contains(again.err, "--max-hits (now 1)")) << again;
+
+    const json::Value report = reportJson(id);
+    const json::Value& reported = report["scan"]["metrics"]["limitStops"];
+    EXPECT_EQ(reported["carving"].u64(), *stops.carving);
+    EXPECT_EQ(reported["mp4"].isNull(), !stops.mp4.has_value());
+    EXPECT_EQ(reported["fragments"].isNull(), !stops.fragments.has_value());
+    const CliResult text = cli.run({"report", "--session", id});
+    EXPECT_TRUE(contains(text.out, "Hit limit:     " + where)) << text;
+
+    // At the default limit nothing stops: no line, no warning, all null.
+    const std::string whole = scan(image);
+    EXPECT_FALSE(infoOf(whole).scan.metrics.limitStops.any());
+    const json::Value full = reportJson(whole);
+    EXPECT_TRUE(full["scan"]["metrics"]["limitStops"]["carving"].isNull());
+}
+
 TEST_F(CliCommandsTest, ScanInAnotherSessionsFolder) {
     const std::filesystem::path other = dir.path() / "my sessions";
     const CliResult result = cli.run({"scan", "--source", arg(image), "--sessions-dir", arg(other)});

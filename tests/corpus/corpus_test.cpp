@@ -17,6 +17,7 @@
 // to write the baselines again, and review the difference.
 
 #include "api/recovery_api.hpp"
+#include "recovery/byte_order.hpp"
 #include "recovery/sha256.hpp"
 #include "recovery/text.hpp"
 #include "support/corpus.hpp"
@@ -36,6 +37,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -361,6 +363,75 @@ bool holdsWhole(const ScanRun& run, const Original& original, const std::string&
     return false;
 }
 
+// The members stored (method 0) in a ZIP archive, by its central directory,
+// and those of ZIP archives stored in them (depth levels down). A scan finds
+// an image in an archive only where it is stored: compressed members hold no
+// image signature. Archives this does not read (ZIP64) give nothing.
+void storedMembers(std::span<const std::byte> zip, int depth, std::vector<Bytes>& out) {
+    constexpr std::size_t kEndSize = 22;
+    if (zip.size() < kEndSize) {
+        return;
+    }
+    std::size_t end = zip.size() - kEndSize + 1;
+    std::optional<std::size_t> found;
+    while (end-- > 0 && zip.size() - end <= kEndSize + 0xFFFF) {
+        if (loadLe32(zip, end) == 0x06054B50U) {
+            found = end;
+            break;
+        }
+    }
+    if (!found) {
+        return;
+    }
+    const std::uint16_t entries = loadLe16(zip, *found + 10);
+    std::size_t at = loadLe32(zip, *found + 16);
+    for (std::uint16_t i = 0; i < entries; ++i) {
+        if (at + 46 > zip.size() || loadLe32(zip, at) != 0x02014B50U) {
+            return;
+        }
+        const std::uint16_t method = loadLe16(zip, at + 10);
+        const std::uint32_t packed = loadLe32(zip, at + 20);
+        const std::uint32_t size = loadLe32(zip, at + 24);
+        const std::size_t name = loadLe16(zip, at + 28);
+        const std::size_t extra = loadLe16(zip, at + 30);
+        const std::size_t comment = loadLe16(zip, at + 32);
+        const std::size_t local = loadLe32(zip, at + 42);
+        at += 46 + name + extra + comment;
+        if (method != 0 || packed != size || local + 30 > zip.size() || loadLe32(zip, local) != 0x04034B50U) {
+            continue;
+        }
+        const std::size_t data = local + 30 + loadLe16(zip, local + 26) + loadLe16(zip, local + 28);
+        if (data > zip.size() || size > zip.size() - data) {
+            continue;
+        }
+        const std::span<const std::byte> member = zip.subspan(data, size);
+        out.emplace_back(member.begin(), member.end());
+        if (depth > 0 && size >= 4 && loadLe32(member, 0) == 0x04034B50U) {
+            storedMembers(member, depth - 1, out);
+        }
+    }
+}
+
+// A recovered Complete archive candidate holds `bytes` as a stored member (or
+// as a member of an archive stored in it).
+bool heldByRecoveredArchive(const ScanRun& run, const Bytes& bytes) {
+    for (const CandidateInfo& c : run.candidates) {
+        if (c.format != "zip" || c.condition != Condition::Complete) {
+            continue;
+        }
+        const auto file = run.recovered.find(c.id.value);
+        if (file == run.recovered.end()) {
+            continue;
+        }
+        std::vector<Bytes> members;
+        storedMembers(file->second, 3, members);
+        if (std::find(members.begin(), members.end(), bytes) != members.end()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void checkOriginals(const ScanRun& run, const std::vector<Original>& originals, bool deep) {
     for (const Original& original : originals) {
         SCOPED_TRACE(std::string(deep ? "deep" : "quick") + " scan, original " +
@@ -394,6 +465,16 @@ void checkOriginals(const ScanRun& run, const std::vector<Original>& originals, 
                 EXPECT_FALSE(anyCompleteAtPath) << "a candidate at its path is called Complete:" << listOf(named);
                 if (deep) {
                     EXPECT_TRUE(holdsWhole(run, original, {})) << "carving did not give its bytes back whole";
+                }
+                break;
+            case Outcome::InsideArchive:
+                if (deep) {
+                    const std::string digest = shaOf(original.bytes);
+                    EXPECT_FALSE(std::any_of(run.candidates.begin(), run.candidates.end(),
+                                             [&](const CandidateInfo& c) { return c.sha256 == digest; }))
+                        << "a candidate of its own: a needless copy of what an archive holds";
+                    EXPECT_TRUE(heldByRecoveredArchive(run, original.bytes))
+                        << "no recovered Complete archive holds it as a stored member";
                 }
                 break;
             case Outcome::Lost: {

@@ -49,8 +49,10 @@ struct Collector {
 // The stages of P7, P8, P12, P13 and P14 run one after the other on a source
 // that is one FAT32, exFAT or NTFS volume (or none): what a deep scan with
 // the default configuration delivers. Quick: the volume's candidates only.
-[[nodiscard]] std::vector<evaluation::EvaluatedCandidate> referenceScan(storage::IStorageSource& source,
-                                                                        ScanMode mode = ScanMode::Deep);
+// `maxCarves`: each carving stage's carve limit (a scan's maxHits).
+[[nodiscard]] std::vector<evaluation::EvaluatedCandidate> referenceScan(
+    storage::IStorageSource& source, ScanMode mode = ScanMode::Deep,
+    std::uint64_t maxCarves = carving::CarveOptions{}.maxCarves);
 
 // One line per candidate with everything a scan must reproduce (ids, names,
 // method, layout, validation, identity, duplicates, evidence).

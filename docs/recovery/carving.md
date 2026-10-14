@@ -150,7 +150,9 @@ indexes their signatures by offset and first byte. `scan(source, sink, options)`
   recorded in the report and never matched, even by a signature of zeros. Read failures other than I/O errors stop
   the scan with that error.
 - **Stopping.** The report's `outcome` is `Completed`, `Cancelled` (the token, or a sink returning `Cancelled`) or
-  `HitLimitReached` (`maxHits`, 10 million by default). `nextOffset` says where a later scan of the rest continues:
+  `HitLimitReached` (`maxHits`; no limit by default since L228: every signature match counts, also those a header
+  check rejects, so the carving stages bound their work by the files they carve instead, `CarveOptions::maxCarves`).
+  `nextOffset` says where a later scan of the rest continues:
   every file start before it has been examined and its hits delivered. When the sink cancelled, hits at
   `nextOffset` itself may have been delivered already.
 - **Progress** (`onProgress`, throttled by `progressInterval`) reports the position, bytes read, hits and
@@ -202,6 +204,13 @@ with the format's signature, so the members of an archive are its own hits
 piece: a carve that is `Found` but `Invalid` is then damaged where it lies, and fragment reconstruction does not take
 it as a seed ([fragment_recovery.md](fragment_recovery.md)). The carver itself does not use the flag.
 
+**The carve limit** (`CarveOptions::maxCarves`, 10 million by default; L133, L228): `run` stops after the offset of
+the hit at which it has made that many candidates (the other hits at that offset are still carved). Hits its header
+check rejects do not count: in a scan they cost no read of the source (L72). The report's scan outcome is then
+`HitLimitReached` and its `nextOffset` the offset after the last hit taken. `CarveLimit` is the rule as a value: MP4
+recovery counts its carves against it, and fragment reconstruction its carves and moov anchors, each on its own
+(scanning.md, "The hit limit").
+
 `CarveReport` holds the scan report, candidates per validation status, rejected hits per reason, skipped hits and
 the bytes the carves read. In a completed run every hit is accounted for: `hits = candidates + rejected + skipped`.
 
@@ -236,7 +245,7 @@ cannot be written by `RecoveryWriter` (L48), except MP4's: MP4 recovery (P12) tu
   could overflow. Tests cover offsets beyond 4 GiB and a 1 TiB image.
 - A format's own lengths never drive a read beyond its window, and a length beyond it is rejected.
 - A flood of false signatures costs one 4 KiB read per hit (`CarvingStreamingTest.AFloodOfFalseSignaturesCostsBoundedWork`),
-  and `maxHits` bounds the number of hits. A hit that passes its header check can still cost up to its format's
+  and the carve limit (`maxCarves`) bounds the files carved. A hit that passes its header check can still cost up to its format's
   maximum size in reads (L50).
 
 ## Logging
@@ -266,7 +275,7 @@ Label `carving`, executable `recovery_carving_tests` (see [../testing/testing.md
 | `tests/carving/content_reader_test.cpp` | Read bounds, the cache, bad, transient and known-bad sectors, fatal errors, cancellation, `findPattern` across chunk boundaries |
 | `tests/carving/signature_scanner_test.cpp` | Planted signatures in order, offsets and masks, overlapping matches, one hit per format and position, every position relative to a block boundary, alignment, ranges and adjacent ranges, source edges, invalid options, bad and known-bad sectors, fatal and sink errors, cancellation and continuing from `nextOffset`, the hit limit, progress, logging, sequential bounded reads, a disk enforcing 4 KiB alignment |
 | `tests/carving/file_carver_test.cpp` | Candidates of every test format compared with the originals, streaming delivery, every rejection reason, every end status, validation failures, skipping inside valid candidates, and inside any candidate of the same self-synchronizing format, unreadable and known-bad sectors, fatal errors, cancellation during a long carve, sink errors, ids, logging, a format defined in the test, disk image files, a disk enforcing alignment, `validateFileCandidate` |
-| `tests/carving/carving_streaming_test.cpp` | The tail of a 1 TiB image, a full 128 MiB scan read exactly once, a carving run over 200+ files, offsets beyond 4 GiB, a flood of false signatures; heap growth measured in each |
+| `tests/carving/carving_streaming_test.cpp` | The tail of a 1 TiB image, a full 128 MiB scan read exactly once, a carving run over 200+ files, offsets beyond 4 GiB, a flood of false signatures (which the carve limit does not count); the carve limit stopping after the files carved; heap growth measured in each |
 
 The test formats (`tests/support/carving_formats.hpp`) cover each end detection method: `SizedFormat` (size field
 and CRC), `MarkerFormat` (end marker), `BoxFormat` (structure walk, signature at offset 4), `SyncFormat` (masked

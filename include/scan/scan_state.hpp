@@ -72,7 +72,8 @@ inline constexpr std::size_t kScanStageCount = 8;
 // and one set of formats, by one engine. A scan resumes only from a
 // checkpoint of the same identity.
 struct ScanIdentity {
-    static constexpr std::uint32_t kCheckpointVersion = 1;
+    // 2: the source pass's hit limit counts each stage's carves (L133, L228).
+    static constexpr std::uint32_t kCheckpointVersion = 2;
 
     std::uint32_t checkpointVersion = kCheckpointVersion;
     std::string engineVersion;
@@ -111,6 +112,20 @@ struct VolumeRecord {
     std::optional<Error> error;
 };
 
+// Where the stages of the source pass stopped at the hit limit
+// (ScanConfiguration::maxHits): each counts the files it carves (as
+// CarveOptions::maxCarves) and takes no hit after the offset of the hit at
+// which its count reached the limit. None: the stage went on to the end of
+// the source, or does not take part.
+struct StageStops {
+    std::optional<std::uint64_t> carving;
+    std::optional<std::uint64_t> mp4;
+    std::optional<std::uint64_t> fragments;
+
+    [[nodiscard]] bool any() const noexcept { return carving || mp4 || fragments; }
+    friend bool operator==(const StageStops&, const StageStops&) = default;
+};
+
 // The source pass so far.
 struct PassState {
     // Every file start before this offset has been examined, and the hits
@@ -127,6 +142,9 @@ struct PassState {
     carving::CarveReport carving;
     carving::CarveSkipState skip;
     std::uint64_t nextCarveId = 1;
+    // The stages that reached the hit limit. The pass ends early (its
+    // scan.outcome HitLimitReached) once every stage taking part has.
+    StageStops stops;
 };
 
 // The metrics of a scan. Counts and times add up over every run of the scan
@@ -154,6 +172,9 @@ struct ScanMetrics {
     std::uint64_t duplicates = 0;
     // Source bytes that could not be read.
     std::uint64_t unreadableBytes = 0;
+    // The stages of the source pass that stopped at the hit limit, and where
+    // (the pass's stops): the source after it was not searched by them.
+    StageStops limitStops;
     // Running time: time paused is not counted.
     std::chrono::milliseconds elapsed{0};
 };

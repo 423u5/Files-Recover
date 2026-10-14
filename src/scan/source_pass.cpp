@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <deque>
 #include <exception>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -91,6 +92,15 @@ private:
     [[nodiscard]] Status commit(Entry& entry);
     [[nodiscard]] std::uint64_t cut();
     [[nodiscard]] Status consistentPoint(bool final);
+    // Whether each stage takes a hit at `offset`, given the hit limit.
+    [[nodiscard]] bool carvingTakes(std::uint64_t offset) const noexcept;
+    [[nodiscard]] bool mp4Takes(std::uint64_t offset) const noexcept;
+    [[nodiscard]] bool fragmentsTake(std::uint64_t offset) const noexcept;
+    // Every stage taking part has reached the hit limit (and one does).
+    [[nodiscard]] bool limitReached() const noexcept;
+    // Ends the pass once limitReached(): the hits after the last stop are
+    // not committed.
+    [[nodiscard]] Status endAtLimit();
     // Waits for the tasks in flight, ends the scanner, adds its report.
     void wind();
     [[nodiscard]] Status fail(Status error, bool reportPoint);
@@ -159,11 +169,31 @@ Status Pass::prepareRegistry() {
     return success();
 }
 
+bool Pass::carvingTakes(std::uint64_t offset) const noexcept {
+    return carving::CarveLimit{setup_.maxHits, state_.stops.carving}.takes(offset);
+}
+
+bool Pass::mp4Takes(std::uint64_t offset) const noexcept {
+    return carving::CarveLimit{setup_.maxHits, state_.stops.mp4}.takes(offset);
+}
+
+bool Pass::fragmentsTake(std::uint64_t offset) const noexcept {
+    return carving::CarveLimit{setup_.maxHits, state_.stops.fragments}.takes(offset);
+}
+
+bool Pass::limitReached() const noexcept {
+    // Fragment reconstruction without volumes takes no hit: it never stops.
+    const bool carving = !setup_.carve || state_.stops.carving.has_value();
+    const bool mp4 = setup_.mp4 == nullptr || state_.stops.mp4.has_value();
+    const bool fragments = setup_.fragments == nullptr || setup_.fragments->volumeCount() == 0 ||
+                           state_.stops.fragments.has_value();
+    return carving && mp4 && fragments && state_.stops.any();
+}
+
 void Pass::startScanner() {
     shared_->capacity = std::max<std::size_t>(setup_.window, 64);
     shared_->scanned = state_.position;
-    const std::uint64_t hits = state_.scan.hits;
-    if (!scanner_.has_value() || hits >= setup_.maxHits) {
+    if (!scanner_.has_value() || limitReached()) {
         // Nothing to scan for, or the hit limit was reached before.
         carving::ScanReport report;
         report.outcome = scanner_.has_value() ? carving::ScanOutcome::HitLimitReached : carving::ScanOutcome::Completed;
@@ -179,7 +209,7 @@ void Pass::startScanner() {
     carving::ScanOptions options = setup_.scan;
     options.startOffset = state_.position;
     options.endOffset.reset();
-    options.maxHits = setup_.maxHits - hits;
+    options.maxHits = std::numeric_limits<std::uint64_t>::max();
     options.progressInterval = std::chrono::milliseconds{0};
     std::shared_ptr<Shared> shared = shared_;
     options.onProgress = [shared](const carving::ScanProgress& progress) {
@@ -247,9 +277,10 @@ void Pass::admit(const SignatureHit& hit) {
 // decides, and prepares what is missing then).
 void Pass::decide(Entry& entry, const std::set<const carving::IFileFormat*>& earlier) {
     const SignatureHit& hit = entry.hit;
-    const bool general = entry.general && !state_.skip.skips(hit);
-    const bool fragment = entry.fragment && !fragmentOnly_.contains(hit.format) && setup_.fragments->wants(hit);
-    const bool mp4 = entry.mp4 && !setup_.mp4->skips(hit.fileOffset);
+    const bool general = entry.general && carvingTakes(hit.fileOffset) && !state_.skip.skips(hit);
+    const bool fragment = entry.fragment && fragmentsTake(hit.fileOffset) && !fragmentOnly_.contains(hit.format) &&
+                          setup_.fragments->wants(hit);
+    const bool mp4 = entry.mp4 && mp4Takes(hit.fileOffset) && !setup_.mp4->skips(hit.fileOffset);
     entry.held = false;
     if (!general && !fragment && !mp4) {
         return;
@@ -354,7 +385,8 @@ Status Pass::commit(Entry& entry) {
         prepared = &work->carve->value();
     }
     std::optional<CarveOutcome> made;
-    if (entry.general) {
+    const std::uint64_t offset = hit.fileOffset;
+    if (entry.general && carvingTakes(offset)) {
         if (state_.skip.skips(hit)) {
             ++state_.carving.skippedInsideCandidates;
         } else {
@@ -378,8 +410,11 @@ Status Pass::commit(Entry& entry) {
                 carves_.push_back(std::move(candidate));
             }
         }
+        carving::CarveLimit limit{setup_.maxHits, state_.stops.carving};
+        limit.counted(offset, state_.carving.candidates);
+        state_.stops.carving = limit.stoppedAt;
     }
-    if (entry.mp4) {
+    if (entry.mp4 && mp4Takes(offset)) {
         Mp4HitWork* mp4Work = nullptr;
         if (work != nullptr && work->mp4.has_value() && work->mp4->ok()) {
             mp4Work = &work->mp4->value();
@@ -387,11 +422,17 @@ Status Pass::commit(Entry& entry) {
         if (Status committed = setup_.mp4->commit(hit, mp4Work); !committed.ok()) {
             return committed;
         }
+        carving::CarveLimit limit{setup_.maxHits, state_.stops.mp4};
+        limit.counted(offset, setup_.mp4->carved());
+        state_.stops.mp4 = limit.stoppedAt;
     }
-    if (entry.fragment) {
+    if (entry.fragment && fragmentsTake(offset)) {
         if (Status committed = setup_.fragments->commit(hit, prepared); !committed.ok()) {
             return committed;
         }
+        carving::CarveLimit limit{setup_.maxHits, state_.stops.fragments};
+        limit.counted(offset, setup_.fragments->hitsTaken());
+        state_.stops.fragments = limit.stoppedAt;
     }
     ++state_.scan.hits;
     if (hit.formatIndex < state_.scan.hitsPerFormat.size()) {
@@ -416,6 +457,20 @@ Status Pass::consistentPoint(bool final) {
     lastPointPosition_ = state_.position;
     lastPointTime_ = Clock::now();
     return checkpoint_(state_, std::exchange(carves_, {}), final);
+}
+
+Status Pass::endAtLimit() {
+    wind();
+    window_.clear();
+    std::uint64_t last = 0;
+    for (const std::optional<std::uint64_t>& stop : {state_.stops.carving, state_.stops.mp4, state_.stops.fragments}) {
+        last = std::max(last, stop.value_or(0));
+    }
+    state_.scan.outcome = carving::ScanOutcome::HitLimitReached;
+    state_.scan.nextOffset = last + 1;
+    state_.position = std::max(state_.position, last + 1);
+    lastPointPosition_ = state_.position;
+    return checkpoint_(state_, std::exchange(carves_, {}), true);
 }
 
 void Pass::wind() {
@@ -497,6 +552,9 @@ Status Pass::run() {
                     return fail(committed, true);
                 }
                 window_.pop_front();
+            }
+            if (limitReached()) {
+                return endAtLimit();
             }
             progressed = true;
             releaseHeld();

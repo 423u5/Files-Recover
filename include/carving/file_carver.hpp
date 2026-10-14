@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <functional>
 #include <initializer_list>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -72,6 +73,11 @@ struct CarveOptions {
     // which are skipped whatever that candidate's end and verdict. False
     // turns both rules off.
     bool skipHitsInsideValidCandidates = true;
+    // run() stops after the offset of the hit at which it has made this many
+    // candidates (CarveLimit); hits its header check rejects do not count.
+    // At least 1. MP4 recovery and fragment reconstruction count their own
+    // carves against it the same way.
+    std::uint64_t maxCarves = 10'000'000;
     // Id of the first candidate; later candidates follow in carve order.
     std::uint64_t firstId = 1;
     // Cache size of each carve's content reader (SourceContentReader limits).
@@ -107,7 +113,29 @@ struct CarveSkipState {
     friend bool operator==(const CarveSkipState&, const CarveSkipState&) = default;
 };
 
+// The carve limit of one stage (CarveOptions::maxCarves) as a value: the
+// stage takes every hit up to and including the offset of the hit at which
+// its count reaches the limit (the other hits at that offset too), and none
+// after it.
+struct CarveLimit {
+    std::uint64_t limit = 10'000'000;
+    // The offset of the hit at which the count reached the limit.
+    std::optional<std::uint64_t> stoppedAt;
+
+    // Whether the stage takes a hit at `offset`.
+    [[nodiscard]] bool takes(std::uint64_t offset) const noexcept { return !stoppedAt || offset <= *stoppedAt; }
+    // The stage took the hit at `offset`, and its count is `count` now.
+    void counted(std::uint64_t offset, std::uint64_t count) noexcept {
+        if (!stoppedAt && count >= limit) {
+            stoppedAt = offset;
+        }
+    }
+};
+
 struct CarveReport {
+    // Its outcome is HitLimitReached when run() reached the carve limit
+    // (CarveOptions::maxCarves), and its nextOffset then the offset after the
+    // last hit taken.
     ScanReport scan;
     std::uint64_t candidates = 0;
     // Candidates per ValidationStatus, and rejected hits per RejectionReason

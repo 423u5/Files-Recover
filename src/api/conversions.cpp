@@ -357,6 +357,9 @@ ScanMetrics toApi(const scan::ScanMetrics& metrics) {
     out.validationFailures = metrics.validationFailures;
     out.duplicates = metrics.duplicates;
     out.unreadableBytes = metrics.unreadableBytes;
+    out.carvingStoppedAt = metrics.limitStops.carving;
+    out.mp4StoppedAt = metrics.limitStops.mp4;
+    out.fragmentsStoppedAt = metrics.limitStops.fragments;
     out.elapsed = metrics.elapsed;
     return out;
 }

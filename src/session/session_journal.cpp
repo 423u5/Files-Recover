@@ -384,10 +384,10 @@ Status JournalFile::append(RecordType type, std::uint16_t flags, SessionTime tim
     return success();
 }
 
-Status JournalFile::append(const RecordPayload& payload, SessionTime time) {
+Status JournalFile::append(const RecordPayload& payload, SessionTime time, std::uint32_t version) {
     const RecordType type = typeOf(payload);
     const std::uint16_t flags = type == RecordType::Damage ? kRecordOptional : 0;
-    return append(type, flags, time, encodePayload(payload));
+    return append(type, flags, time, encodePayload(payload, version));
 }
 
 Status JournalFile::truncate(std::uint64_t end) {

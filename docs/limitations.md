@@ -400,8 +400,9 @@ than the cache are still read twice (L136). `FileCarver::run` on its own is unch
 **Status:** Open (P20)  
 Every hit that passes its format's header check may read up to the format's maximum size. An image crafted with
 many such headers therefore costs about hits × maximum size in reads. Memory stays bounded, a rejected header costs
-one 4 KiB read, and `ScanOptions::maxHits` (10 million by default) bounds the number of hits, but there is no budget
-per scan in bytes or time. The audio formats' short frame-sync signatures make rejected hits much more frequent
+one 4 KiB read, and a scan's hit limit (`ScanConfiguration::maxHits`, 10 million by default) bounds the files each
+stage carves (L228; it no longer counts the hits a header check rejects), but there is no budget per scan in bytes or
+time. The audio formats' short frame-sync signatures make rejected hits much more frequent
 (L72).
 
 ### L51. Only hits strictly inside a validated candidate are skipped
@@ -1136,7 +1137,12 @@ reconstructed one after the other on the scan's thread, and a seed's layouts are
 Every other stage runs in parallel. A source with many fragmented deleted files spends most of a scan there.
 
 ### L133. The pass's hit limit counts every stage's hits
-**Status:** Open  
+**Status:** Resolved (after P20, the user's decision of 2026-10-14, with L228): the limit counts the files each stage
+carves, and each stage counts its own and stops on its own, in a scan as on its own: carving its candidates, MP4
+recovery its carves, fragment reconstruction its carves and moov anchors (`CarveOptions::maxCarves`, `CarveLimit`).
+The pass keeps where each stage stopped (`PassState::stops`) and ends once every stage taking part has stopped. Test:
+`ScanCoordinatorTest.EachStageStopsAtTheHitLimitAsItDoesOnItsOwn` (limits 1 to 8 on the scan tests' card, against
+the stages run alone) and `...AtTheHitLimitResumedAfterEveryUpdate...`  
 A scan's one signature scan stops at `ScanConfiguration::maxHits` hits of every format it scans for: the carving
 formats, the moov probe of fragment reconstruction, and a separate MP4 format when the registry has none. Each stage
 run on its own counts only its own hits, so a scan that reaches the limit can stop where one of the stages on its
@@ -1310,8 +1316,9 @@ the rest
 delivers more, which the job does not write: another job is needed for them.
 
 ### L152. Only the first journal format exists
-**Status:** Accepted (the user's review of 2026-10-14): there is no older format to read yet; the rule is tested when
-a second format comes  
+**Status:** Resolved (after P20, 2026-10-14): format 2 adds the source pass's stage stops (L228). A format-1 session
+opens, recovers and scans as before, and keeps its format: what is appended to it is encoded in format 1
+(`RecoverySessionTest.ASessionOfTheFirstFormatKeepsItsFormat`, `SessionCodecTest.TheStageStopsAreKeptFromTheSecondFormatOn`)  
 The journal is in format 1. An engine reads its own format and older ones, but there is no older one yet, so
 reading an older format (a newer engine keeping the readers of every format before its own) is a rule that is not
 tested. Records of an unknown type marked optional are skipped, and that part is tested.
@@ -1812,11 +1819,22 @@ stored images, audio and video that carving finds inside it (a damaged archive i
 every CRC-32 may refuse to open it, while others extract what is intact.
 
 ### L221. Files stored in a verified archive are not delivered on their own
-**Status:** Accepted (the user's decision of 2026-10-12)  
+**Status:** Accepted (the user's decisions of 2026-10-12 and 2026-10-14: no copy of their own, which would duplicate
+data, provided they are really in the archive; the corpus scenario `zip-archives` checks it, `inside-archive`, and
+on the test stick all 647 such files lay in the 9 recovered archives; see L229)  
 The images, audio and video stored in an archive that validated are part of it, and carving skips them (L51):
 someone looking for photos finds them by opening the archives. On the test stick that was 1,540 of 1,755 carved
 files (1,499 PNG icons of Android build output, inside project archives). In a damaged or unverifiable archive they
 are carved as before.
+
+### L229. An image in a verified archive's own records is skipped too
+**Status:** Open (2026-10-14, raised with the user: "only zip content should be inside zip")  
+Carving skips every hit strictly inside an archive that validated (L51, L221), not only the hits inside its
+members' data. An archive's own records hold bytes that are not files of it: the names and extra fields of its
+headers, the comments of its entries and of the archive, an APK signing block. An image whose signature lay
+there would be skipped, and opening the archive would not give it back (it is in the archive file's bytes,
+not a member). Archivers do not put images there, and none was on the test stick. Skipping only inside
+members' data (the archive would hand its members' places to the carver) would close it.
 
 ### L222. Incrementally linked debug executables failed Control Flow Guard checks
 **Status:** Resolved (2026-10-13: hardened builds link with `/INCREMENTAL:NO`, `cmake/RecoveryBuildOptions.cmake`)  
@@ -1835,7 +1853,16 @@ once (30.75 GB), and about 221 GB more is read after it, by the stages that read
 rather than an image file, each of those bytes is read from the device.
 
 ### L228. The default hit limit stops carving partway through a large drive, and only the log says so
-**Status:** Open (the review of 2026-10-14, from the test stick's scan log)  
+**Status:** Resolved (after P20, the user's decision of 2026-10-14, with L133): only files a stage carves count, not
+signatures: a hit its header check rejects costs no read of the source in a scan (L72) and no longer counts (the test
+stick's scan made 1,884 carves among 5,484,903 signatures). Where a stage stopped is in the scan's
+metrics (`ScanMetrics::limitStops`): the CLI's summary shows a `Hit limit:` line and a warning and exits with 4
+(incomplete), the report a `Hit limit:` line and `limitStops` in its JSON, the API `ScanMetrics::carvingStoppedAt`,
+`mp4StoppedAt` and `fragmentsStoppedAt`, the log a warning. The signature scanner's own limit (`ScanOptions::maxHits`)
+is now off by default. Sessions keep the stops from journal format 2 on (L152); an unfinished scan an earlier engine
+began does not resume (checkpoint format 2: its hits were counted the old way). Tests: `CarvingStreamingTest.TheCarveLimitStopsAfterTheFilesCarved`,
+`CliCommandsTest.AScanStoppedByTheHitLimitSaysWhereAndIsIncomplete`,
+`ApiScanTest.TheMetricsSayWhereTheStagesStoppedAtTheLimit`  
 A scan's source pass stops at `ScanConfiguration::maxHits` signature matches (10 million by default;
 `recovery scan --max-hits`, `ScanSettings::maxSignatures`), and every match counts, the ones the header check rejects
 included: in compressed data, by L72's rates, most are MP3 and ADTS frame-sync matches. The test stick's deep scan

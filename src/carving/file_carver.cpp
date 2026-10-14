@@ -119,6 +119,9 @@ Status FileCarver::validateOptions() const {
                                                       std::to_string(SourceContentReader::kMinCacheSize) + " and " +
                                                       std::to_string(IContentReader::kMaxReadLength));
     }
+    if (options_.maxCarves == 0) {
+        return makeError(ErrorCode::InvalidInput, "maxCarves must be at least 1");
+    }
     return validate(options_.scan.reads);
 }
 
@@ -303,10 +306,16 @@ Result<CarveReport> FileCarver::run(const SignatureScanner& scanner, const FileC
     // skipped, and so are a self-synchronizing format's own hits inside its
     // candidate reaching furthest, whatever its verdict.
     CarveSkipState skip;
+    CarveLimit limit{options_.maxCarves};
+    bool limitStopped = false;
     log(LogLevel::Info, "carving started",
         {field("formats", scanner.formats().size()), field("validate", options_.validate ? "yes" : "no")});
 
     const HitSink onHit = [&](const SignatureHit& hit) -> Status {
+        if (!limit.takes(hit.fileOffset)) {
+            limitStopped = true;
+            return makeError(ErrorCode::Cancelled, "carving reached its carve limit");
+        }
         if (options_.skipHitsInsideValidCandidates && skip.skips(hit)) {
             ++report.skippedInsideCandidates;
             return success();
@@ -323,6 +332,7 @@ Result<CarveReport> FileCarver::run(const SignatureScanner& scanner, const FileC
         ++report.candidates;
         ++report.validation[static_cast<std::size_t>(candidate.validation.status)];
         skip.record(hit, candidate);
+        limit.counted(hit.fileOffset, report.candidates);
         return sink(std::move(candidate));
     };
 
@@ -331,6 +341,10 @@ Result<CarveReport> FileCarver::run(const SignatureScanner& scanner, const FileC
         return scan.error();
     }
     report.scan = std::move(*scan);
+    if (limit.stoppedAt.has_value() && (limitStopped || report.scan.outcome == ScanOutcome::Completed)) {
+        report.scan.outcome = ScanOutcome::HitLimitReached;
+        report.scan.nextOffset = *limit.stoppedAt + 1;
+    }
     report.carveBytesRead = bytesRead_;
     report.elapsed =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);

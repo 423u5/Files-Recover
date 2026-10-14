@@ -941,6 +941,9 @@ Result<std::unique_ptr<Mp4RecoverySteps>> Mp4RecoverySteps::create(storage::ISto
                              std::to_string(carving::SourceContentReader::kMinCacheSize) + " and " +
                              std::to_string(carving::IContentReader::kMaxReadLength));
     }
+    if (options.carving.maxCarves == 0) {
+        return makeError(ErrorCode::InvalidInput, "maxCarves must be at least 1");
+    }
     if (Status valid = carving::validate(options.carving.scan.reads); !valid.ok()) {
         return valid.error();
     }
@@ -1093,6 +1096,10 @@ const carving::IFileFormat& Mp4RecoverySteps::format() const noexcept {
 
 bool Mp4RecoverySteps::skips(std::uint64_t fileOffset) const noexcept {
     return fileOffset > impl_->trustedStart && fileOffset < impl_->trustedEnd;
+}
+
+std::uint64_t Mp4RecoverySteps::carved() const noexcept {
+    return impl_->counts.carved;
 }
 
 Result<Mp4HitWork> Mp4RecoverySteps::prepare(const carving::SignatureHit& hit) const {
@@ -1375,14 +1382,29 @@ Result<Mp4RecoveryReport> Mp4Recovery::run(const Mp4CandidateSink& sink) {
         if (!scanner.ok()) {
             return scanner.error();
         }
+        carving::CarveLimit limit{options_.carving.maxCarves};
+        bool limitStopped = false;
         const carving::HitSink onHit = [&](const carving::SignatureHit& hit) -> Status {
-            return steps.commit(hit, nullptr);
+            if (!limit.takes(hit.fileOffset)) {
+                limitStopped = true;
+                return makeError(ErrorCode::Cancelled, "MP4 recovery reached its carve limit");
+            }
+            if (Status committed = steps.commit(hit, nullptr); !committed.ok()) {
+                return committed;
+            }
+            limit.counted(hit.fileOffset, steps.carved());
+            return success();
         };
         Result<carving::ScanReport> scan = scanner->scan(*source_, onHit, options_.carving.scan);
         if (!scan.ok()) {
             return scan.error();
         }
         report.scan = std::move(*scan);
+        if (limit.stoppedAt.has_value() &&
+            (limitStopped || report.scan.outcome == carving::ScanOutcome::Completed)) {
+            report.scan.outcome = carving::ScanOutcome::HitLimitReached;
+            report.scan.nextOffset = *limit.stoppedAt + 1;
+        }
         if (report.scan.outcome == carving::ScanOutcome::Cancelled) {
             return makeError(ErrorCode::Cancelled, "MP4 recovery cancelled");
         }

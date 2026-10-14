@@ -88,6 +88,10 @@ struct ScanStatus {
     // Updates recorded, and candidates delivered.
     std::uint64_t updates = 0;
     std::uint64_t candidates = 0;
+    // The checkpoint format the scan began with (ScanIdentity::
+    // checkpointVersion; 0 before its first update). Before format 2 the
+    // configuration's maxHits counted signatures, not carves per stage.
+    std::uint32_t checkpointVersion = 0;
     // Whether runScan() can start or resume it, and why not.
     bool runnable = true;
     std::string notRunnable;

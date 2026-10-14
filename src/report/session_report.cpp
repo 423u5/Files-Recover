@@ -48,7 +48,9 @@ std::string settingsText(const session::SessionInfo& info) {
     if (c.mode == ScanMode::Deep) {
         text += onOff(c.carving, "carving") + ", " + onOff(c.mp4, "MP4 recovery") + ", " +
                 onOff(c.fragments, "fragments") + ", alignment " + std::to_string(c.alignment) + ", at most " +
-                formatCount(c.maxHits) + " signatures; ";
+                formatCount(c.maxHits) +
+                // Scans begun before checkpoint format 2 counted signatures (L228).
+                (info.scan.checkpointVersion == 1 ? " signatures; " : " carves per stage; ");
     }
     text += c.includeActive ? (c.includeDeleted ? "active and deleted files" : "active files")
                             : (c.includeDeleted ? "deleted files" : "no filesystem files");
@@ -151,6 +153,13 @@ void jsonScanMetrics(JsonWriter& json, const scan::ScanMetrics& metrics) {
     json.field("validationFailures", metrics.validationFailures);
     json.field("duplicates", metrics.duplicates);
     json.field("unreadableBytes", metrics.unreadableBytes);
+    // Where the stages that reached the hit limit stopped (null: they did not).
+    json.key("limitStops");
+    json.beginObject();
+    json.field("carving", metrics.limitStops.carving);
+    json.field("mp4", metrics.limitStops.mp4);
+    json.field("fragments", metrics.limitStops.fragments);
+    json.endObject();
     json.field("elapsedMs", static_cast<std::int64_t>(metrics.elapsed.count()));
     json.endObject();
 }
@@ -440,6 +449,11 @@ std::string textReport(const SessionReport& report, bool details) {
     out << "  Found:         " << formatCount(metrics.filesFound) << " files in filesystem metadata, "
         << formatCount(metrics.carves) << " carves, " << formatCount(metrics.mp4Candidates) << " MP4 candidates, "
         << formatCount(metrics.fragmentCandidates) << " reconstructions\n";
+    if (metrics.limitStops.any()) {
+        out << "  Hit limit:     " << describeLimitStops(metrics.limitStops) << " (at most "
+            << formatCount(info.configuration.maxHits)
+            << " carves per stage): files that start after that were not searched for by content\n";
+    }
     out << "  Candidates:    " << formatCount(report.candidates.size()) << " (" << formatCount(metrics.duplicates)
         << " duplicates, " << formatCount(metrics.validationFailures) << " failed validation)\n";
 

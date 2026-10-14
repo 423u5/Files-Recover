@@ -217,6 +217,12 @@ struct RecoverySession::Impl {
         if (checkpoint.completed()) {
             return "the scan is complete";
         }
+        if (checkpoint.identity().has_value() &&
+            checkpoint.identity()->checkpointVersion != scan::ScanIdentity::kCheckpointVersion) {
+            return "the scan was started in checkpoint format " +
+                   std::to_string(checkpoint.identity()->checkpointVersion) + ", which this engine does not resume " +
+                   "(format " + std::to_string(scan::ScanIdentity::kCheckpointVersion) + "): start a new session";
+        }
         if (checkpoint.identity().has_value() && checkpoint.identity()->engineVersion != kEngineVersion) {
             return "the scan was started by engine " + checkpoint.identity()->engineVersion + "; engine " +
                    std::string(kEngineVersion) +
@@ -391,7 +397,8 @@ Result<RecoverySession::Impl::ReplayEnd> RecoverySession::Impl::replay(JournalRe
             return unreadable("the journal holds a record of type " + std::to_string(record.type) +
                               ", which this engine does not know: it is of a newer session format");
         }
-        Result<RecordPayload> payload = decodePayload(static_cast<RecordType>(record.type), record.payload);
+        Result<RecordPayload> payload =
+            decodePayload(static_cast<RecordType>(record.type), record.payload, reader.formatVersion());
         const Status applied = payload.ok() ? apply(std::move(*payload), record.time) : Status{payload.error()};
         if (!applied.ok()) {
             if (!hasCreated) {
@@ -412,7 +419,7 @@ Result<RecoverySession::Impl::ReplayEnd> RecoverySession::Impl::replay(JournalRe
 
 Status RecoverySession::Impl::record(RecordPayload payload) {
     const SessionTime time = sessionNow();
-    if (Status appended = journal->append(payload, time); !appended.ok()) {
+    if (Status appended = journal->append(payload, time, formatVersion); !appended.ok()) {
         return appended;
     }
     const std::lock_guard lock(mutex);
@@ -454,7 +461,7 @@ JobStateRecord RecoverySession::Impl::jobState(std::uint32_t id, SessionState st
 
 Status RecoverySession::Impl::takeScanUpdate(const scan::ScanUpdate& update) {
     const SessionTime time = sessionNow();
-    if (Status appended = journal->append(RecordType::ScanUpdate, 0, time, encodePayload(update)); !appended.ok()) {
+    if (Status appended = journal->append(RecordType::ScanUpdate, 0, time, encodePayload(update, formatVersion)); !appended.ok()) {
         return appended;
     }
     {
@@ -478,7 +485,7 @@ Status RecoverySession::Impl::takeJobUpdate(std::uint32_t id, const scan::Recove
     JobUpdateRecord record;
     record.job = id;
     record.update = update;
-    if (Status appended = journal->append(RecordType::JobUpdate, 0, time, encodePayload(record)); !appended.ok()) {
+    if (Status appended = journal->append(RecordType::JobUpdate, 0, time, encodePayload(record, formatVersion)); !appended.ok()) {
         return appended;
     }
     {
@@ -507,7 +514,7 @@ Status RecoverySession::Impl::fileStarted(std::uint32_t id, evaluation::Evaluate
     record.path = toUtf8(path);
     // Flushed before the file gets any data: a crash from here on leaves a
     // record of the file, which the job's resumption removes.
-    if (Status appended = journal->append(RecordType::FileStarted, 0, time, encodePayload(record));
+    if (Status appended = journal->append(RecordType::FileStarted, 0, time, encodePayload(record, formatVersion));
         !appended.ok()) {
         return appended;
     }
@@ -1288,6 +1295,9 @@ SessionInfo RecoverySession::info() const {
     }
     scan.updates = s.checkpoint.sequence();
     scan.candidates = s.candidates.size();
+    if (s.checkpoint.identity().has_value()) {
+        scan.checkpointVersion = s.checkpoint.identity()->checkpointVersion;
+    }
     scan.notRunnable = s.scanNotRunnable();
     scan.runnable = scan.notRunnable.empty();
 
@@ -1482,7 +1492,8 @@ Result<SessionSummary> readSessionSummary(const std::filesystem::path& folder) {
         if (!record.payloadRead) {
             continue;
         }
-        Result<RecordPayload> payload = decodePayload(static_cast<RecordType>(record.type), record.payload);
+        Result<RecordPayload> payload =
+            decodePayload(static_cast<RecordType>(record.type), record.payload, reader->formatVersion());
         if (!payload.ok()) {
             summary.error = payload.error();
             return summary;

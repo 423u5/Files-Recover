@@ -68,7 +68,20 @@ handed out every `checkpointBytes` of the source or `checkpointInterval`, before
 the pass's state (`PassState`: position, scan report so far, carving's counts and skip state, the next carve id),
 the carves committed since, MP4 recovery's changes since (`Mp4RecoverySteps::takeChanges`) and fragment
 reconstruction's pass events since (`FragmentRecoverySteps::takeEvents`: the hits and carves that changed its
-state, replayed on resume). On resume the scanner starts at the position with the hit limit minus the hits so far.
+state, replayed on resume). On resume the scanner starts at the position.
+
+### The hit limit
+
+`ScanConfiguration::maxHits` (10 million by default; `recovery scan --max-hits`, the API's
+`ScanSettings::maxSignatures`) is a carve limit per stage, as `CarveOptions::maxCarves` is for a stage run on its own
+(L133, L228): carving counts its candidates, MP4 recovery its carves, fragment reconstruction its carves and moov
+anchors. Signatures a header check rejects do not count. A stage takes every hit up to and including the offset of
+the hit at which its count reaches the limit, and none after it, exactly as it does on its own, so a scan delivers
+what the stages deliver at any limit (`ScanCoordinatorTest.EachStageStopsAtTheHitLimitAsItDoesOnItsOwn`). The pass
+keeps where each stage stopped (`PassState::stops`, in every update and checkpoint), and ends early once every stage
+taking part has stopped: its position and `nextOffset` are then the offset after the last stop, and its scan outcome
+`HitLimitReached`. A stage that stops alone leaves the pass running for the others. `ScanMetrics::limitStops` hands
+the stops out; the log warns about them at the end of the pass.
 
 ## Parallel processing and what it does not change
 
@@ -114,7 +127,7 @@ candidates: it keeps records of them (`EvaluationRecord`: id, method, status, co
 candidates themselves are the caller's.
 
 `run(sink, &checkpoint)` resumes. The checkpoint must be of the same scan: the same `ScanIdentity`, which is the
-engine version, the checkpoint format version, the source (type, path, size, sector size), the mode, the
+engine version, the checkpoint format version (2 since L228: the hit limit counts carves per stage), the source (type, path, size, sector size), the mode, the
 configuration (as text) and the ids of the carving formats and media validators. Run options (workers, cache,
 windows, checkpoint intervals) are not part of the identity: a scan may resume with others. A scan also checks the
 source against the checkpoint: the partitions planned must be the same, the volumes scanned must open again with
@@ -264,6 +277,8 @@ other, so it behaves as before (every earlier test passes unchanged):
   * Quick, and the stages turned off;
   * a cancellation in every stage, then resumed;
   * a resume after every update;
+  * the hit limit: each stage stops as it does on its own (limits 1 to 8), and a scan at the limit resumed after
+    every update ends as an uninterrupted one;
   * an update the sink failed to save;
   * a source that fails, then reads again;
   * pause, and cancellation while paused;
@@ -292,4 +307,4 @@ other, so it behaves as before (every earlier test passes unchanged):
 
 ## Known limitations
 
-L132–L142 in [../limitations.md](../limitations.md). L49, L54, L72, L97 and L114 changed with P15.
+L132–L142 in [../limitations.md](../limitations.md). L49, L54, L72, L97 and L114 changed with P15. L133 is resolved after P20, with L228: the hit limit counts each stage's carves.

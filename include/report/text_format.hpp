@@ -48,6 +48,9 @@ namespace recovery::report {
 [[nodiscard]] std::string formatRate(std::uint64_t bytesPerSecond);
 // "1:02:03" (hours, minutes, seconds).
 [[nodiscard]] std::string formatDuration(std::chrono::milliseconds duration);
+// The stages of a source pass that stopped at the hit limit and where:
+// "carving at 52.0 GiB, MP4 recovery at 60.3 GiB"; empty when none did.
+[[nodiscard]] std::string describeLimitStops(const scan::StageStops& stops);
 // "45.2%" of `done` out of `total` ("" when the total is unknown).
 [[nodiscard]] std::string formatPercent(std::uint64_t done, std::uint64_t total);
 // "2026-10-08 10:15:30 UTC"

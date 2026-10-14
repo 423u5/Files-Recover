@@ -11,6 +11,7 @@
 
 namespace recovery::cli {
 
+using report::describeLimitStops;
 using report::displayPath;
 using report::formatBytes;
 using report::formatCount;

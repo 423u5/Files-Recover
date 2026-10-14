@@ -323,7 +323,8 @@ Original with(std::string path, Bytes bytes, Outcome outcome, std::string note, 
     original.path = std::move(path);
     original.bytes = std::move(bytes);
     original.outcome = outcome;
-    original.deepOnly = deepOnly || outcome == Outcome::Carved || outcome == Outcome::NamedDamagedCarved;
+    original.deepOnly = deepOnly || outcome == Outcome::Carved || outcome == Outcome::NamedDamagedCarved ||
+                        outcome == Outcome::InsideArchive;
     original.note = std::move(note);
     return original;
 }
@@ -2016,7 +2017,9 @@ Image zipArchives() {
     files.push_back(named("/My App.apk", app, Expected::Complete, "deleted: an APK signing block"));
     files.push_back(named("/Stream backup.zip", streamed, Expected::Complete, "deleted: data descriptors"));
 
-    const Bytes icons = storedArchive({{"icons/app.png", png(2801, 96, 96)}, {"icons/logo.png", png(2802, 64, 32)}});
+    const Bytes appIcon = png(2801, 96, 96);
+    const Bytes logo = png(2802, 64, 32);
+    const Bytes icons = storedArchive({{"icons/app.png", appIcon}, {"icons/logo.png", logo}});
     v.place(1200, icons);
     files.push_back(with("", icons, Outcome::Carved, "no entry: two PNGs stored in it, which are part of it"));
     const Bytes photo = png(2803, 120, 90);
@@ -2030,6 +2033,18 @@ Image zipArchives() {
     const Bytes wide = sample("zip64_end");
     v.place(1600, wide);
     files.push_back(with("", wide, Outcome::Carved, "no entry: ZIP64 end records"));
+    // An archive stored in an archive, as the test stick had (an SDK's ZIP in
+    // a project's): a PNG inside the inner one.
+    const Bytes nestedPhoto = png(2805, 80, 60);
+    const Bytes inner = storedArchive({{"photos/nested.png", nestedPhoto}, {"photos/list.txt", makePattern(900, 2806)}});
+    const Bytes outer = storedArchive({{"sdk/inner.zip", inner}, {"readme.txt", makePattern(700, 2807)}});
+    v.place(1800, outer);
+    files.push_back(with("", outer, Outcome::Carved, "no entry: a ZIP stored in it holds a PNG"));
+    // What the intact archives hold is theirs: no file of its own.
+    files.push_back(with("", appIcon, Outcome::InsideArchive, "stored in the icons archive"));
+    files.push_back(with("", logo, Outcome::InsideArchive, "stored in the icons archive"));
+    files.push_back(with("", inner, Outcome::InsideArchive, "the ZIP stored in the outer archive"));
+    files.push_back(with("", nestedPhoto, Outcome::InsideArchive, "stored in the ZIP stored in the outer archive"));
 
     Image image;
     image.bytes = b.build();
@@ -2128,6 +2143,8 @@ std::string_view toString(Outcome outcome) noexcept {
             return "named-damaged-carved";
         case Outcome::Lost:
             return "lost";
+        case Outcome::InsideArchive:
+            return "inside-archive";
     }
     return "?";
 }

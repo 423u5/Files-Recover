@@ -102,7 +102,7 @@ unreadable regions (the first 20; all of them are in the metadata).
 | `--no-carving`, `--no-mp4`, `--no-fragments` | Deep scans: leave out that stage |
 | `--deleted-only` | Filesystem candidates: deleted files only (active files are left out) |
 | `--alignment BYTES` | Carve files that start at multiples of BYTES only (1) |
-| `--max-hits N` | Stop carving after N signatures (10,000,000) |
+| `--max-hits N` | Each deep-scan stage (carving, MP4 recovery, fragment reconstruction) stops after carving N files (10,000,000). Signatures that turn out not to start a file do not count. A stage that stops is shown (`Hit limit:`), and the scan exits with 4 |
 | `--sector-retries N` | Reads of a failing sector after the first (1) |
 | `--no-media` | Validate structure only, not the media data |
 | `--playability` | Also decode every file with Windows' decoders (P14's playability level; slow) |
@@ -185,7 +185,8 @@ names them (`toString`). Times are ISO 8601: UTC with `Z`, and FAT's local times
              fingerprint: {sha256, bytes, unreadableBytes}},
   "scan": {configuration: {mode, carving, mp4, fragments, includeActive, includeDeleted, alignment, maxHits,
                            sectorRetryCount, knownBadRegions[], media, playability, sha256, preliminaryHash},
-           state, interrupted, runnable, notRunnable, stage, updates, candidates, history[], metrics{...}},
+           state, interrupted, runnable, notRunnable, stage, updates, candidates, history[],
+           metrics{..., limitStops: {carving, mp4, fragments}, ...}},
   "partitionScheme": "...",
   "volumes": [{offset, size, partition, scanned, filesystem, label, serialNumber, clusterSize, files, error}],
   "candidates": [{id, name, path, extension, deleted, method, kind, format, mediaType, size, expectedSize,
@@ -203,6 +204,8 @@ names them (`toString`). Times are ISO 8601: UTC with `Z`, and FAT's local times
 }
 ```
 
+`limitStops` holds, per stage, the source offset where the hit limit stopped it (`--max-hits`), or null.
+
 A session in use gives `{"format": ..., "inUse": true, "summary": {...}}`, and the listing gives
 `{"format": "recovery-session-list", ..., "folder", "sessions": [summary, ...]}`. Integers are written as they are
 (64-bit). Strings are escaped, and invalid UTF-8 in them becomes U+FFFD, so a damaged disk's names always give a
@@ -216,7 +219,7 @@ valid document.
 | 1 | The command line is wrong: an unknown command or option, a missing or malformed value, options that do not go together. Nothing was done |
 | 2 | The command failed: the source, a session or a destination could not be used, or the engine reported an error. What was done is kept |
 | 3 | Stopped by the user (Ctrl+C). What was done is kept; the command says how to go on |
-| 4 | Done, but not everything could be read or written: `image` and `scan` met unreadable sectors (a scan of an image also when the image's metadata lists some), `recover` left selected files unwritten or wrote some with bytes missing or unreadable |
+| 4 | Done, but not everything could be read or written: `image` and `scan` met unreadable sectors (a scan of an image also when the image's metadata lists some), a `scan` stage stopped at the hit limit (`--max-hits`), `recover` left selected files unwritten or wrote some with bytes missing or unreadable |
 
 Exit code 1 is only for what the command line itself says, whatever the disks hold. `recover --ids 99` on a
 session with 10 candidates is an error (2), not a usage error.
@@ -303,8 +306,8 @@ byte ranges). A disk resolver says where folders are. No real device is opened. 
   (first and later requests, sticky requests, nested scopes, a scope waiting for an action under way).
 - `cli_commands_test.cpp`: every command. inspect on the card, three volumes, data without a filesystem and a disk.
   image, a byte-for-byte copy, then a disk with bad sectors whose zeros and metadata a later scan takes into
-  account. Deep and quick scans deliver the reference scan's candidates; settings kept in the session; another
-  sessions folder. End to end, `recover` gives back the files the card was made from, byte for byte, and the
+  account. Deep and quick scans deliver the reference scan's candidates; settings kept in the session; a scan stopped by
+  the hit limit (summary, warning, exit code 4, report); another sessions folder. End to end, `recover` gives back the files the card was made from, byte for byte, and the
   carved GIF, MP3 and MP4; then nothing on a second run. Filters, one folder converging, each folder its own copy.
   Text and JSON reports, the JSON checked against the engine's own descriptions; listings; a session in use. A
   recovered file with an unreadable sector says so in `recover`'s summary, the text report and the JSON (L42).

@@ -359,6 +359,7 @@ add_executable(recovery_session_tests
 )
 target_link_libraries(recovery_session_tests PRIVATE
     recovery::session
+    recovery::report
     recovery_test_support
     GTest::gtest_main
     recovery_build_options
@@ -455,6 +456,18 @@ set_tests_properties(cli.unknown_command_fails PROPERTIES WILL_FAIL TRUE LABELS 
 
 add_test(NAME cli.scan_without_source_fails COMMAND recovery_cli scan)
 set_tests_properties(cli.scan_without_source_fails PROPERTIES WILL_FAIL TRUE LABELS cli)
+
+# ---------------------------------------------------------------------------
+# tools/regression/compare_reports.py, which compares two builds' scans of
+# real data file by file (docs/testing/testing.md), checks itself: when CMake
+# finds Python 3.
+# ---------------------------------------------------------------------------
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME CompareReportsScript.SelfTest
+        COMMAND Python3::Interpreter -I "${PROJECT_SOURCE_DIR}/tools/regression/compare_reports.py" --self-test)
+    set_tests_properties(CompareReportsScript.SelfTest PROPERTIES LABELS unit)
+endif()
 
 # ---------------------------------------------------------------------------
 # API tests (P19): the GUI-facing API on the scan tests' card (an image file

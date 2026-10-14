@@ -464,6 +464,10 @@ public:
     // a reason other than an I/O error, and with InvalidInput for a carve
     // made at another offset.
     [[nodiscard]] Status commit(const carving::SignatureHit& hit, const carving::CarveOutcome* outcome);
+    // The hits the commits took so far: carves (the report's `carved`) and
+    // moov anchors. What the steps count against the carve limit
+    // (CarveOptions::maxCarves).
+    [[nodiscard]] std::uint64_t hitsTaken() const noexcept;
     // Events are only kept once recording is on.
     void recordEvents(bool on) noexcept;
     [[nodiscard]] std::vector<FragmentPassEvent> takeEvents();

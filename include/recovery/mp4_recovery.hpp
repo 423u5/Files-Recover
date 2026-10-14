@@ -465,6 +465,9 @@ public:
     // Skips the hit, or applies its work (`work` may be null). Hits must come
     // in increasing offset order. Fails like prepare().
     [[nodiscard]] Status commit(const carving::SignatureHit& hit, Mp4HitWork* work);
+    // The carves the commits made so far (the report's `carved`): what the
+    // steps count against the carve limit (CarveOptions::maxCarves).
+    [[nodiscard]] std::uint64_t carved() const noexcept;
 
     // The state for a checkpoint, and changes since the last call.
     [[nodiscard]] Mp4StepsState state() const;

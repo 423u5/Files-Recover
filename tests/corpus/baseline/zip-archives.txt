@@ -1,6 +1,6 @@
 # corpus scenario zip-archives: FAT32: named, deleted and unnamed ZIP archives (DOCX, APK, ZIP64, LZMA), images stored in intact and damaged archives
-# image 12328960 bytes, sha256 5bd2cabcb5ebbdbf, 9 originals
-# deep scan: 10 candidates
+# image 12328960 bytes, sha256 09f1e10037d2b80e, 14 originals
+# deep scan: 11 candidates
 #1 filesystem unverified(not-validated) archive/zip "/Packed.zip" size=763/763 valid=not-validated:unsupported/not-applicable sha=4eec012fbb38343a recovery=recovered "Packed.zip" => /Packed.zip
 #2 filesystem complete archive/zip "/My App.apk" size=2201/2201 deleted valid=valid:passed/not-applicable sha=31b2b6a954fb526a recovery=recovered "My App.apk" => /My App.apk
 #3 hybrid complete archive/zip "/Stream backup.zip" size=11987/11987 deleted valid=valid:passed/not-applicable sha=ade9e275c817cbd6 recovery=recovered "Stream backup.zip" => /Stream backup.zip
@@ -11,6 +11,7 @@
 #8 carving corrupted(validation-failed) archive/zip "recovered_000008.zip" size=35923/35923 valid=invalid:failed/not-run sha=49caf91eb8dc290f recovery=recovered "recovered_000008.zip" => (unnamed original 7)
 #9 carving complete image/png "recovered_000009.png" size=32713/32713 valid=valid:passed/passed sha=d15c684edb78973c recovery=recovered "recovered_000009.png" => (unnamed original 8)
 #10 carving complete archive/zip "recovered_000010.zip" size=3650/3650 valid=valid:passed/not-applicable sha=44bc4429a3c75bfb recovery=recovered "recovered_000010.zip" => (unnamed original 9)
+#11 carving complete archive/zip "recovered_000011.zip" size=16693/16693 valid=valid:passed/not-applicable sha=bbe382f35a3d121c recovery=recovered "recovered_000011.zip" => (unnamed original 10)
 # quick scan: 5 candidates
 #1 filesystem unverified(not-validated) archive/zip "/Packed.zip" size=763/763 valid=not-validated:unsupported/not-applicable sha=4eec012fbb38343a recovery=recovered "Packed.zip" => /Packed.zip
 #2 filesystem complete archive/zip "/My App.apk" size=2201/2201 deleted valid=valid:passed/not-applicable sha=31b2b6a954fb526a recovery=recovered "My App.apk" => /My App.apk

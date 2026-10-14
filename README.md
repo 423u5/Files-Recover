@@ -80,6 +80,7 @@ drives and other removable storage.
 | `tools/test_image_generator` | P20, development only: writes the corruption corpus's disk images with their original files, and the fuzzers' seeds |
 | `tools/benchmark` | P20, development only: `recovery_benchmark`, the engine's throughput and memory against the performance targets |
 | `tools/static_analysis` | P20: `run_clang_tidy.py`, the clang-tidy runs whose findings were triaged |
+| `tools/regression` | After P20: `compare_reports.py`, compares two scans of one source file by file, so that a change loses no file a build before it recovered ([docs/testing/testing.md](docs/testing/testing.md)) |
 | `fuzz/` | P20: the libFuzzer targets (preset `msvc-fuzz`), the script that runs them, and the inputs that once failed |
 | `tests/unit`, `tests/integration`, `tests/filesystem`, `tests/corruption`, `tests/recovery`, `tests/carving`, `tests/formats`, `tests/validation`, `tests/evaluation`, `tests/scan`, `tests/session`, `tests/metadata`, `tests/cli`, `tests/api`, `tests/corpus` | GoogleTest suites; `tests/support` holds the simulated devices, volume and image file builders, samples from other encoders, test-only carving formats and the corpus's scenarios; `tests/corpus/baseline` holds the corpus's expected results |
 | `docs/` | Architecture, recovery and testing notes; known limitations in `docs/limitations.md` |

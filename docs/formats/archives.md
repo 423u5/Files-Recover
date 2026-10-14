@@ -80,6 +80,19 @@ or one the engine cannot check, is never trusted, and the other formats carve in
 On the test stick, 1,540 of 1,755 carved files lay inside verified project archives (1,499 of them PNG icons
 stored by Android's build tools); they are now recovered with their names, inside the archives.
 
+What is skipped is only what lies inside a verified archive's own bytes: the archive comes back exactly as it was on
+the disk, nothing is added to it, and every image outside one (or inside a damaged one) is carved as a file of its
+own. The user confirmed on 2026-10-14 that the images stored in an archive need no copy of their own, provided they
+are really in it. Checked twice: the corpus scenario `zip-archives` marks the images stored in its intact archives,
+and the archive and image stored in an archive stored in another, `inside-archive`: no candidate may hold their
+bytes, and a recovered Complete archive must hold them byte for byte as a stored member (`CorpusTest`). On the test
+stick (2026-10-14), each of the 647 files the 2026-10-12 scan carved and the archive-aware scan no longer lists lies
+in one of the 9 recovered archives: 622 images are byte for byte members, one GIF a member of an SDK's archive
+stored in a project's archive, and 24 were broken carves of compressed member data (their files are members too).
+The archive's own records (names, extra fields, comments, an APK signing block) are not files of it: an image whose
+signature lay in one of them would be skipped as well (L229). Archivers do not put images there, and none was on the
+stick.
+
 Two descriptor flags shape how carving and reconstruction see archives:
 
 - `selfSynchronizing`: every member's local header is a hit of the format, inside the archive. The carver

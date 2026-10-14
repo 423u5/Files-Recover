@@ -222,8 +222,10 @@ struct ScanSettings {
     bool activeFiles = true;
     bool deletedFiles = true;
     // Deep scans: files are looked for where they start at multiples of
-    // `alignment` bytes (1: anywhere; 512: sector starts), and carving stops
-    // after `maxSignatures` signatures.
+    // `alignment` bytes (1: anywhere; 512: sector starts). Each stage that
+    // finds files by content (carving, MP4 recovery, fragment reconstruction)
+    // stops after it has carved `maxSignatures` files (ScanMetrics says
+    // where); signatures that turn out not to start a file do not count.
     std::uint32_t alignment = 1;
     std::uint64_t maxSignatures = 10'000'000;
     // Reads of a failing sector after the first.
@@ -298,6 +300,13 @@ struct ScanMetrics {
     std::uint64_t validationFailures = 0;
     std::uint64_t duplicates = 0;
     std::uint64_t unreadableBytes = 0;
+    // Deep scans: where carving, MP4 recovery and fragment reconstruction
+    // stopped because they reached `ScanSettings::maxSignatures` (a source
+    // offset: files that start after it were not searched for by them);
+    // none when they went on to the end.
+    std::optional<std::uint64_t> carvingStoppedAt;
+    std::optional<std::uint64_t> mp4StoppedAt;
+    std::optional<std::uint64_t> fragmentsStoppedAt;
     // Running time over every run (time paused is not counted).
     std::chrono::milliseconds elapsed{0};
 };

@@ -23,6 +23,7 @@
 #include "recovery/sha256.hpp"
 #include "recovery/text.hpp"
 #include "recovery/version.hpp"
+#include "report/session_report.hpp"
 #include "scan/scan_test_support.hpp"
 #include "session_test_support.hpp"
 #include "support/card_fixtures.hpp"
@@ -1155,6 +1156,123 @@ TEST(RecoverySessionTest, ASessionOfAnotherEngineOpensButItsScanDoesNotResume) {
     expectExpectedCandidates(*session);
     EXPECT_EQ(session->info().scan.history.front().engineVersion, kEngineVersion);
     EXPECT_EQ(session->info().engineVersion, "0.0.1");
+}
+
+// A session in journal format 1 (before the source pass's stage stops) opens,
+// recovers and scans as before, and keeps its format: every record appended to
+// it is encoded in format 1, so it still opens afterwards.
+TEST(RecoverySessionTest, ASessionOfTheFirstFormatKeepsItsFormat) {
+    const Scanned& full = scanned();
+    MemoryStorageSource source(card());
+    RECOVERY_ASSERT_OK(source.open());
+    TempDir dir;
+    const auto inFormat1 = [](const std::vector<JournalRecord>& records) {
+        std::vector<JournalRecord> older;
+        for (const JournalRecord& record : records) {
+            older.push_back(record);
+            older.back().payload = encodePayload(test::decoded(record), 1);
+        }
+        return test::buildJournal(older, 1);
+    };
+    const auto everyRecordDecodesInFormat1 = [](const std::filesystem::path& folder) {
+        for (const JournalRecord& record : test::readRecords(folder)) {
+            const Result<RecordPayload> payload =
+                decodePayload(static_cast<RecordType>(record.type), record.payload, 1);
+            EXPECT_TRUE(payload.ok()) << toString(static_cast<RecordType>(record.type));
+        }
+    };
+
+    // A completed scan: its candidates are recovered.
+    const std::filesystem::path folder = dir / "completed";
+    test::writeJournal(folder, inFormat1(full.records));
+    {
+        const std::unique_ptr<RecoverySession> session = opened(folder);
+        ASSERT_NE(session, nullptr);
+        EXPECT_EQ(session->info().formatVersion, 1U);
+        expectExpectedCandidates(*session);
+        const Result<std::uint32_t> job = session->addRecoveryJob(dir / "out");
+        RECOVERY_ASSERT_OK(job);
+        const Result<scan::RecoveryJobSummary> recovered = session->runRecovery(*job, source);
+        RECOVERY_ASSERT_OK(recovered);
+        EXPECT_GT(recovered->metrics.recoveredFiles, 0U);
+    }
+    everyRecordDecodesInFormat1(folder);
+    {
+        const std::unique_ptr<RecoverySession> again = opened(folder);
+        ASSERT_NE(again, nullptr);
+        EXPECT_EQ(again->info().formatVersion, 1U);
+        expectExpectedCandidates(*again);
+    }
+
+    // A session whose scan never ran: this engine runs it, in format 1.
+    const std::filesystem::path fresh = dir / "fresh";
+    test::writeJournal(fresh, inFormat1({full.records.front()}));
+    {
+        const std::unique_ptr<RecoverySession> session = opened(fresh);
+        ASSERT_NE(session, nullptr);
+        RECOVERY_ASSERT_OK(runScan(*session, source));
+        expectExpectedCandidates(*session);
+    }
+    everyRecordDecodesInFormat1(fresh);
+    const std::unique_ptr<RecoverySession> reopened = opened(fresh);
+    ASSERT_NE(reopened, nullptr);
+    EXPECT_EQ(reopened->info().formatVersion, 1U);
+    expectExpectedCandidates(*reopened);
+    // Its scan is this engine's: the limit counted carves per stage.
+    EXPECT_EQ(reopened->info().scan.checkpointVersion, scan::ScanIdentity::kCheckpointVersion);
+    const std::string text = report::textReport(report::gatherReport(*reopened), false);
+    EXPECT_NE(text.find("at most 10,000,000 carves per stage;"), std::string::npos) << text;
+}
+
+// A scan begun in checkpoint format 1 (its hit limit counted signatures) is
+// not resumed: the session says so before anything runs, its candidates can
+// still be read and recovered, and its report names its limit as it counted.
+TEST(RecoverySessionTest, AScanOfTheFirstCheckpointFormatDoesNotResume) {
+    const Scanned& full = scanned();
+    MemoryStorageSource source(card());
+    RECOVERY_ASSERT_OK(source.open());
+    TempDir dir;
+    // Cut where some candidates were delivered: in the evaluation.
+    std::size_t cut = full.records.size();
+    for (std::size_t k = 0; k < full.records.size(); ++k) {
+        const std::optional<scan::ScanUpdate> update = scanUpdateOf(full.records[k]);
+        if (update.has_value() && !update->candidates.empty()) {
+            cut = k + 1;
+            break;
+        }
+    }
+    ASSERT_LT(cut, full.records.size());
+    std::vector<JournalRecord> records(full.records.begin(), full.records.begin() + static_cast<std::ptrdiff_t>(cut));
+    for (JournalRecord& record : records) {
+        RecordPayload payload = test::decoded(record);
+        if (auto* update = std::get_if<scan::ScanUpdate>(&payload); update != nullptr && update->identity) {
+            update->identity->checkpointVersion = 1;
+        }
+        record.payload = encodePayload(payload, 1);
+    }
+    const std::filesystem::path folder = dir / "older";
+    test::writeJournal(folder, test::buildJournal(records, 1));
+
+    const std::unique_ptr<RecoverySession> session = opened(folder);
+    ASSERT_NE(session, nullptr);
+    const SessionInfo info = session->info();
+    EXPECT_EQ(info.scan.checkpointVersion, 1U);
+    EXPECT_FALSE(info.scan.runnable);
+    EXPECT_NE(info.scan.notRunnable.find("checkpoint format 1"), std::string::npos) << info.scan.notRunnable;
+    const Bytes before = test::journalBytes(folder);
+    const Result<scan::ScanSummary> refused = runScan(*session, source);
+    ASSERT_FALSE(refused.ok());
+    EXPECT_EQ(refused.error().code, ErrorCode::InvalidInput);
+    EXPECT_EQ(test::journalBytes(folder), before);
+    ASSERT_GT(session->candidateCount(), 0U);
+    const Result<std::uint32_t> job = session->addRecoveryJob(dir / "out");
+    RECOVERY_ASSERT_OK(job);
+    const Result<scan::RecoveryJobSummary> recovered = session->runRecovery(*job, source);
+    RECOVERY_ASSERT_OK(recovered);
+    EXPECT_GT(recovered->metrics.recoveredFiles, 0U);
+
+    const std::string text = report::textReport(report::gatherReport(*session), false);
+    EXPECT_NE(text.find("at most 10,000,000 signatures;"), std::string::npos) << text;
 }
 
 // ===========================================================================

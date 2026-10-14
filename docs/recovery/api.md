@@ -122,6 +122,11 @@ ended: `Completed`, `Cancelled`, `Failed` with `error`), and its figures. `getPr
 figures while an operation runs (concurrent queries are what P15's `progress()` is for). A session idle since it
 was opened reports what its scan recorded.
 
+`ScanMetrics::carvingStoppedAt`, `mp4StoppedAt` and `fragmentsStoppedAt` say where a deep scan's stages stopped
+because each had carved `ScanSettings::maxSignatures` files (L228): files that start after that offset were not
+searched for by that stage. They are empty when the stage went on to the end, as it does at the default limit on
+ordinary drives (signatures that turn out not to start a file do not count).
+
 `ScanProgress::fraction` is an estimate for a progress bar. The stages are weighted by their usual share of a
 scan's time: Deep: volumes 5%, MP4 examination 2%, fragment seeds 2%, the source pass 70%, MP4 delivery 1%,
 fragments 5%, evaluation 15%. Quick: volumes and evaluation 50% each. Within a stage the weight is shared by its
@@ -234,7 +239,7 @@ resolver that puts chosen folders on chosen disks and every other path on disk 0
 | File | What it shows |
 | --- | --- |
 | `api_workflow_test.cpp` | P19's acceptance: `gui_workflow.cpp` is compiled against the GUI-facing headers alone. Through the API alone it lists the disks, inspects, scans (pausing and resuming), lists, details and previews every candidate, recovers everything, exports the report and closes the session, on an image file and on a physical disk. The files written are the card's originals byte for byte. The headers include nothing of the engine |
-| `api_scan_test.cpp` | Deep and Quick scans deliver what the engine's stages deliver; the list's values; settings refused before a session is made, or kept with it; the events of a scan in order (progress never goes back, every candidate found once); one operation per session, two sessions at once; an idle session's progress |
+| `api_scan_test.cpp` | Deep and Quick scans deliver what the engine's stages deliver; the list's values; settings refused before a session is made, or kept with it; the events of a scan in order (progress never goes back, every candidate found once); one operation per session, two sessions at once; an idle session's progress; where the stages stopped at the hit limit (`maxSignatures`) |
 | `api_events_test.cpp` | One event at a time on one thread of the API's; the callback calls the API (and starts the recovery from the scan's last event); a callback blocked through a whole scan gets merged events and the scan does not wait; a full queue drops files and says how many; exceptions from the callback; no callback; the log callback |
 | `api_concurrency_test.cpp` | Eight threads query progress, candidates, the session, the session list and details while a scan and then a recovery run: consistent answers, nothing goes back; two sessions scanning at once |
 | `api_cancellation_test.cpp` | A scan cancelled in each of its 7 stages, then resumed, delivers the same candidates; a cancellation before the first report; pause, resume, cancellation while paused; a cancelled recovery finished by asking again, or by `resumeRecovery`, with no file written twice; the API destroyed while a scan runs, and the scan resumed by the next one |

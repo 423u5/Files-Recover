@@ -39,6 +39,12 @@ enum class Outcome : std::uint8_t {
     // Nothing gives it back whole: no candidate holds its bytes, and none at
     // its path is Complete.
     Lost,
+    // Stored in an archive the scan recovers (a member of a ZIP, or of a ZIP
+    // stored in one): no candidate holds its bytes on their own, which would
+    // be a needless copy, and a recovered Complete archive holds them, byte
+    // for byte, as a stored member (the user's decision of 2026-10-14).
+    // Always deep only.
+    InsideArchive,
 };
 
 // The condition the candidate holding the bytes (Named, Carved,

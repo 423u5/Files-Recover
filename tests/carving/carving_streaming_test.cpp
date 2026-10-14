@@ -244,7 +244,16 @@ TEST_F(CarvingStreamingTest, AFloodOfFalseSignaturesCostsBoundedWork) {
         EXPECT_LE(growth, static_cast<std::int64_t>(1 * kMiB + 256 * kKiB)) << growth;
     }
 
-    // The hit limit bounds the work of a scan whatever the image holds.
+    // The carve limit does not count them: the run goes on to the end.
+    CarveOptions fewCarves;
+    fewCarves.maxCarves = 1;
+    FileCarver counted(source, fewCarves);
+    Result<CarveReport> whole = counted.run(*scanner_, [](FileCandidate&&) { return success(); });
+    RECOVERY_ASSERT_OK(whole);
+    EXPECT_EQ(whole->scan.outcome, ScanOutcome::Completed);
+    EXPECT_EQ(whole->scan.hits, 32'768u);
+
+    // The scanner's own hit limit (none by default) bounds the hits whatever the image holds.
     CarveOptions limited;
     limited.scan.maxHits = 1000;
     FileCarver bounded(source, limited);
@@ -253,6 +262,51 @@ TEST_F(CarvingStreamingTest, AFloodOfFalseSignaturesCostsBoundedWork) {
     EXPECT_EQ(stopped->scan.outcome, ScanOutcome::HitLimitReached);
     EXPECT_EQ(stopped->scan.hits, 1000u);
     EXPECT_EQ(stopped->scan.nextOffset, 1 * kMiB + 999u * 8u + 1u);
+}
+
+TEST_F(CarvingStreamingTest, TheCarveLimitStopsAfterTheFilesCarved) {
+    // Five files, with false signatures before and between them.
+    VirtualSource source(4 * kMiB);
+    // A header declaring a length it cannot have, as in the flood above.
+    std::vector<std::byte> falseHeader = test::bytesOf("SZD1");
+    falseHeader.resize(8);
+    storeLe32(falseHeader, 4, 4);
+    std::vector<std::uint64_t> files;
+    for (std::uint64_t i = 0; i < 5; ++i) {
+        const std::uint64_t at = 1 * kMiB + i * 64 * kKiB;
+        source.plant(at - 8, falseHeader);
+        source.plant(at, test::makeSizedFile(100, i + 1));
+        files.push_back(at);
+    }
+    RECOVERY_ASSERT_OK(source.open());
+
+    for (const std::uint64_t limit : {1ULL, 3ULL, 5ULL, 6ULL}) {
+        SCOPED_TRACE(limit);
+        CarveOptions options;
+        options.maxCarves = limit;
+        FileCarver carver(source, options);
+        std::vector<std::uint64_t> carved;
+        Result<CarveReport> report = carver.run(*scanner_, [&](FileCandidate&& candidate) {
+            carved.push_back(candidate.sourceOffset);
+            return success();
+        });
+        RECOVERY_ASSERT_OK(report);
+        const std::size_t expected = std::min<std::size_t>(limit, files.size());
+        EXPECT_EQ(carved, std::vector<std::uint64_t>(files.begin(), files.begin() + static_cast<std::ptrdiff_t>(expected)));
+        EXPECT_EQ(report->count(RejectionReason::HeaderRejected), expected);
+        if (limit <= files.size()) {
+            EXPECT_EQ(report->scan.outcome, ScanOutcome::HitLimitReached);
+            EXPECT_EQ(report->scan.nextOffset, files[expected - 1] + 1);
+        } else {
+            EXPECT_EQ(report->scan.outcome, ScanOutcome::Completed);
+        }
+    }
+
+    CarveOptions none;
+    none.maxCarves = 0;
+    FileCarver refused(source, none);
+    EXPECT_EQ(refused.run(*scanner_, [](FileCandidate&&) { return success(); }).error().code,
+              ErrorCode::InvalidInput);
 }
 
 }  // namespace

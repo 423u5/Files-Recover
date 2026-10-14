@@ -665,7 +665,9 @@ closed it) and the card's originals, byte for byte. A crash is the session folde
 
 `tests/support/corpus.cpp` holds 28 scenarios (P20's 26; since then `fat16-card` and `zip-archives`): disk images built the same, byte for byte, every time, each with the
 original files it holds and what recovery must give back of each (found by the filesystem with its name, found by
-carving only, found but damaged, or lost; expected Complete, Unverified or either; some only in a deep scan).
+carving only, found but damaged, lost, or stored inside an archive that is recovered: then no file of its own, and
+byte for byte a stored member of a recovered Complete archive, also of an archive stored in one; expected Complete,
+Unverified or either; some only in a deep scan).
 Together they cover the plan's 16 categories (normal, deleted, large, small, fragmented and partially overwritten
 files, corrupt filesystem metadata, corrupt media, duplicates, Unicode and long names, cluster sizes, nearly full
 and quick-formatted drives, bad regions, multiple partitions) on FAT32, exFAT and NTFS, MBR and GPT disks, 512 and
@@ -688,6 +690,39 @@ test_image_generator list                                    # the scenarios and
 test_image_generator manifest fat32-deleted                  # what an image holds and what must come back
 test_image_generator write --output D:\corpus --originals    # every image, its manifest and its original files
 ```
+
+## Comparing two builds on real data (after P20)
+
+The corpus proves on built images that a change keeps what the engine finds. A change that can touch what a scan
+finds or recovers is also checked on real data: no file the build before it recovered may be lost, or come back in a
+worse condition (the user's rule of 2026-10-14). `tools/regression/compare_reports.py` compares two session reports of
+one source, file by file:
+
+```powershell
+# 1. Build the commit before the change in its own tree, and the change itself
+git worktree add ..\before HEAD                      # then cmake --preset msvc-release; cmake --build --preset msvc-release there
+# 2. Scan the same image with both, each into its own sessions folder
+..\before\build\msvc-release\tools\recovery_cli\recovery.exe scan --source D:\stick.img --sessions-dir D:\cmp\before
+build\msvc-release\tools\recovery_cli\recovery.exe scan --source D:\stick.img --sessions-dir D:\cmp\after
+# 3. Export both reports (the session ids are on the scans' first line)
+recovery report --session <id> --sessions-dir D:\cmp\before --format json --output D:\cmp\before.json
+recovery report --session <id> --sessions-dir D:\cmp\after --format json --output D:\cmp\after.json
+# 4. Compare them
+python -I tools\regression\compare_reports.py D:\cmp\before.json D:\cmp\after.json
+```
+
+It lists every file that is LOST (found before, not now), WORSE (in a worse condition), BETTER or NEW, then the other
+differences field by field. A file is its content (SHA-256), or where it starts and its name when it has none, so a
+file whose bytes changed shows as LOST and NEW. Exit code 0: nothing lost or worse; 1: review it before accepting the
+change; 2: the reports cannot be read or are of different sources. `--ignore-recovery` compares two reports of one
+session taken before and after a recovery job, `--all` lists everything, and `--self-test` checks the script itself
+(ctest runs it as `CompareReportsScript.SelfTest` when CMake finds Python 3).
+
+On 2026-10-14, on the test stick's image (28.6 GiB, read only): the builds before and after the hit-limit change
+(L133, L228) found the same 527 files, none lost or worse; the build before it, its limit lowered to 2.7 million
+signatures as a drive of about 55 GB would reach the default, missed 106 files the build after it finds (NEW); and
+the scans of 2026-10-12 and 2026-10-13 differ by 647 LOST files: the ZIP change, whose files all lie in the recovered
+archives (L221).
 
 ## Large drives (P20)
 

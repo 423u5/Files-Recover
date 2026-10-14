@@ -103,6 +103,41 @@ TEST(SessionCodecTest, EveryUpdateOfADeepScanComesBackAsItWas) {
     EXPECT_GE(candidates, 7U);
 }
 
+// The source pass's stage stops (format 2) come back; format 1, which has no
+// place for them, encodes and decodes everything else as before.
+TEST(SessionCodecTest, TheStageStopsAreKeptFromTheSecondFormatOn) {
+    const DeepScan& scan = deepScan();
+    ASSERT_TRUE(scan.ok);
+    const auto pass = std::find_if(scan.updates.begin(), scan.updates.end(),
+                                   [](const scan::ScanUpdate& update) { return update.pass.has_value(); });
+    ASSERT_NE(pass, scan.updates.end());
+    scan::ScanUpdate update = *pass;
+    update.pass->stops = {123, std::nullopt, 456789};
+    update.metrics.limitStops = update.pass->stops;
+
+    const scan::ScanUpdate back = roundTrip(update, RecordType::ScanUpdate);
+    ASSERT_TRUE(back.pass.has_value());
+    EXPECT_EQ(back.pass->stops, update.pass->stops);
+    EXPECT_EQ(back.metrics.limitStops, update.pass->stops);
+
+    const Bytes older = encodePayload(update, 1);
+    EXPECT_LT(older.size(), encodePayload(update).size());
+    Result<RecordPayload> decoded = decodePayload(RecordType::ScanUpdate, older, 1);
+    RECOVERY_ASSERT_OK(decoded);
+    const scan::ScanUpdate& oldBack = std::get<scan::ScanUpdate>(*decoded);
+    ASSERT_TRUE(oldBack.pass.has_value());
+    EXPECT_FALSE(oldBack.pass->stops.any());
+    EXPECT_FALSE(oldBack.metrics.limitStops.any());
+    EXPECT_EQ(oldBack.pass->position, update.pass->position);
+    EXPECT_EQ(oldBack.metrics.elapsed, update.metrics.elapsed);
+    EXPECT_EQ(encodePayload(oldBack, 1), older);
+
+    // Formats this engine does not know.
+    EXPECT_EQ(decodePayload(RecordType::ScanUpdate, older, 0).error().code, ErrorCode::InvalidInput);
+    EXPECT_EQ(decodePayload(RecordType::ScanUpdate, older, kJournalFormatVersion + 1).error().code,
+              ErrorCode::InvalidInput);
+}
+
 // A checkpoint made of the decoded updates is the checkpoint of the updates.
 TEST(SessionCodecTest, DecodedUpdatesMakeTheSameCheckpoint) {
     const DeepScan& scan = deepScan();

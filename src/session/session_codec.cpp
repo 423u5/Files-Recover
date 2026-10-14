@@ -15,6 +15,10 @@
 //   GUIDs, digests       16 and 32 raw bytes
 //   paths                UTF-8, as strings
 //
+// A journal holds the encoding of its format version: a field added in a
+// later format is written and read only in journals of that format or later
+// (`a.version()`), so a journal keeps one encoding as records are appended.
+//
 // Decoding trusts nothing: a count or length must fit in the bytes left (an
 // element takes at least one byte), an enumerator must be one of its type,
 // a number must fit its type, candidates must keep their invariants, and a
@@ -173,6 +177,11 @@ class Encoder {
 public:
     static constexpr bool kDecoding = false;
 
+    explicit Encoder(std::uint32_t version) noexcept : version_(version) {}
+
+    // The journal format written.
+    [[nodiscard]] std::uint32_t version() const noexcept { return version_; }
+
     template <class T>
     void operator()(const T& value) {
         if constexpr (std::is_same_v<T, bool>) {
@@ -240,6 +249,7 @@ private:
 
     void raw(std::span<const std::byte> data) { bytes_.insert(bytes_.end(), data.begin(), data.end()); }
 
+    std::uint32_t version_ = kJournalFormatVersion;
     std::vector<std::byte> bytes_;
 };
 
@@ -251,7 +261,10 @@ class Decoder {
 public:
     static constexpr bool kDecoding = true;
 
-    explicit Decoder(std::span<const std::byte> bytes) noexcept : bytes_(bytes) {}
+    Decoder(std::span<const std::byte> bytes, std::uint32_t version) noexcept : bytes_(bytes), version_(version) {}
+
+    // The journal format read.
+    [[nodiscard]] std::uint32_t version() const noexcept { return version_; }
 
     template <class T>
     void operator()(T& value) {
@@ -441,6 +454,7 @@ private:
     }
 
     std::span<const std::byte> bytes_;
+    std::uint32_t version_ = kJournalFormatVersion;
     std::size_t position_ = 0;
     std::optional<std::string> error_;
 };
@@ -1076,6 +1090,13 @@ void fields(A& a, V& v) {
     a(v.error);
 }
 
+template <class A, Of<scan::StageStops> V>
+void fields(A& a, V& v) {
+    a(v.carving);
+    a(v.mp4);
+    a(v.fragments);
+}
+
 template <class A, Of<scan::PassState> V>
 void fields(A& a, V& v) {
     a(v.position);
@@ -1083,6 +1104,9 @@ void fields(A& a, V& v) {
     a(v.carving);
     a(v.skip);
     a(v.nextCarveId);
+    if (a.version() >= 2) {
+        a(v.stops);
+    }
 }
 
 template <class A, Of<scan::ScanMetrics> V>
@@ -1099,6 +1123,9 @@ void fields(A& a, V& v) {
     a(v.validationFailures);
     a(v.duplicates);
     a(v.unreadableBytes);
+    if (a.version() >= 2) {
+        a(v.limitStops);
+    }
     a(v.elapsed);
 }
 
@@ -1282,15 +1309,15 @@ void fields(A& a, V& v) {
 // ---------------------------------------------------------------------------
 
 template <class T>
-std::vector<std::byte> encodeValue(const T& value) {
-    Encoder encoder;
+std::vector<std::byte> encodeValue(const T& value, std::uint32_t version) {
+    Encoder encoder(version);
     encoder(value);
     return std::move(encoder).take();
 }
 
 template <class T>
-Result<RecordPayload> decodeValue(RecordType type, std::span<const std::byte> bytes) {
-    Decoder decoder(bytes);
+Result<RecordPayload> decodeValue(RecordType type, std::span<const std::byte> bytes, std::uint32_t version) {
+    Decoder decoder(bytes, version);
     T value{};
     decoder(value);
     decoder.finish();
@@ -1340,60 +1367,63 @@ RecordType typeOf(const RecordPayload& payload) noexcept {
     return std::visit(Visitor{}, payload);
 }
 
-std::vector<std::byte> encodePayload(const RecordPayload& payload) {
-    return std::visit([](const auto& value) { return encodeValue(value); }, payload);
+std::vector<std::byte> encodePayload(const RecordPayload& payload, std::uint32_t version) {
+    return std::visit([version](const auto& value) { return encodeValue(value, version); }, payload);
 }
 
-std::vector<std::byte> encodePayload(const SessionCreatedRecord& payload) {
-    return encodeValue(payload);
+std::vector<std::byte> encodePayload(const SessionCreatedRecord& payload, std::uint32_t version) {
+    return encodeValue(payload, version);
 }
 
-std::vector<std::byte> encodePayload(const ScanStateRecord& payload) {
-    return encodeValue(payload);
+std::vector<std::byte> encodePayload(const ScanStateRecord& payload, std::uint32_t version) {
+    return encodeValue(payload, version);
 }
 
-std::vector<std::byte> encodePayload(const scan::ScanUpdate& payload) {
-    return encodeValue(payload);
+std::vector<std::byte> encodePayload(const scan::ScanUpdate& payload, std::uint32_t version) {
+    return encodeValue(payload, version);
 }
 
-std::vector<std::byte> encodePayload(const JobCreatedRecord& payload) {
-    return encodeValue(payload);
+std::vector<std::byte> encodePayload(const JobCreatedRecord& payload, std::uint32_t version) {
+    return encodeValue(payload, version);
 }
 
-std::vector<std::byte> encodePayload(const JobStateRecord& payload) {
-    return encodeValue(payload);
+std::vector<std::byte> encodePayload(const JobStateRecord& payload, std::uint32_t version) {
+    return encodeValue(payload, version);
 }
 
-std::vector<std::byte> encodePayload(const JobUpdateRecord& payload) {
-    return encodeValue(payload);
+std::vector<std::byte> encodePayload(const JobUpdateRecord& payload, std::uint32_t version) {
+    return encodeValue(payload, version);
 }
 
-std::vector<std::byte> encodePayload(const FileStartedRecord& payload) {
-    return encodeValue(payload);
+std::vector<std::byte> encodePayload(const FileStartedRecord& payload, std::uint32_t version) {
+    return encodeValue(payload, version);
 }
 
-std::vector<std::byte> encodePayload(const DamageRecord& payload) {
-    return encodeValue(payload);
+std::vector<std::byte> encodePayload(const DamageRecord& payload, std::uint32_t version) {
+    return encodeValue(payload, version);
 }
 
-Result<RecordPayload> decodePayload(RecordType type, std::span<const std::byte> bytes) {
+Result<RecordPayload> decodePayload(RecordType type, std::span<const std::byte> bytes, std::uint32_t version) {
+    if (version < kOldestJournalFormatVersion || version > kJournalFormatVersion) {
+        return makeError(ErrorCode::InvalidInput, "session: no journal format " + std::to_string(version));
+    }
     switch (type) {
     case RecordType::SessionCreated:
-        return decodeValue<SessionCreatedRecord>(type, bytes);
+        return decodeValue<SessionCreatedRecord>(type, bytes, version);
     case RecordType::ScanState:
-        return decodeValue<ScanStateRecord>(type, bytes);
+        return decodeValue<ScanStateRecord>(type, bytes, version);
     case RecordType::ScanUpdate:
-        return decodeValue<scan::ScanUpdate>(type, bytes);
+        return decodeValue<scan::ScanUpdate>(type, bytes, version);
     case RecordType::JobCreated:
-        return decodeValue<JobCreatedRecord>(type, bytes);
+        return decodeValue<JobCreatedRecord>(type, bytes, version);
     case RecordType::JobState:
-        return decodeValue<JobStateRecord>(type, bytes);
+        return decodeValue<JobStateRecord>(type, bytes, version);
     case RecordType::JobUpdate:
-        return decodeValue<JobUpdateRecord>(type, bytes);
+        return decodeValue<JobUpdateRecord>(type, bytes, version);
     case RecordType::FileStarted:
-        return decodeValue<FileStartedRecord>(type, bytes);
+        return decodeValue<FileStartedRecord>(type, bytes, version);
     case RecordType::Damage:
-        return decodeValue<DamageRecord>(type, bytes);
+        return decodeValue<DamageRecord>(type, bytes, version);
     }
     return makeError(ErrorCode::InvalidInput,
                      "session: no record type " + std::to_string(static_cast<unsigned>(type)));

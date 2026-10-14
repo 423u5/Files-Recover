@@ -149,7 +149,8 @@ ScanUpdateSink Collector::sink() {
     };
 }
 
-std::vector<evaluation::EvaluatedCandidate> referenceScan(storage::IStorageSource& source, ScanMode mode) {
+std::vector<evaluation::EvaluatedCandidate> referenceScan(storage::IStorageSource& source, ScanMode mode,
+                                                         std::uint64_t maxCarves) {
     std::vector<evaluation::EvaluatedCandidate> delivered;
     std::unique_ptr<FilesystemRecovery> volume;
     CandidateScan scan;
@@ -167,7 +168,9 @@ std::vector<evaluation::EvaluatedCandidate> referenceScan(storage::IStorageSourc
     if (mode == ScanMode::Deep) {
         Result<carving::SignatureScanner> scanner = carving::SignatureScanner::create(allFormats());
         EXPECT_TRUE(scanner.ok());
-        carving::FileCarver carver(source);
+        carving::CarveOptions carveOptions;
+        carveOptions.maxCarves = maxCarves;
+        carving::FileCarver carver(source, carveOptions);
         EXPECT_TRUE(carver
                         .run(*scanner,
                              [&](carving::FileCandidate&& carve) {
@@ -175,7 +178,9 @@ std::vector<evaluation::EvaluatedCandidate> referenceScan(storage::IStorageSourc
                                  return success();
                              })
                         .ok());
-        Mp4Recovery mp4Recovery(source);
+        Mp4RecoveryOptions mp4Options;
+        mp4Options.carving.maxCarves = maxCarves;
+        Mp4Recovery mp4Recovery(source, mp4Options);
         if (volume != nullptr) {
             EXPECT_TRUE(mp4Recovery.addVolume(*volume, scan).ok());
         }
@@ -185,7 +190,9 @@ std::vector<evaluation::EvaluatedCandidate> referenceScan(storage::IStorageSourc
                             return success();
                         })
                         .ok());
-        FragmentRecovery fragmentRecovery(source, allFormats());
+        FragmentRecoveryOptions fragmentOptions;
+        fragmentOptions.carving.maxCarves = maxCarves;
+        FragmentRecovery fragmentRecovery(source, allFormats(), fragmentOptions);
         if (volume != nullptr) {
             EXPECT_TRUE(fragmentRecovery.addVolume(*volume, scan).ok());
         }

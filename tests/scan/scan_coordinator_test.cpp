@@ -227,6 +227,92 @@ TEST(ScanCoordinatorTest, TheStagesTurnedOffAddNothing) {
     expectSameAs(test::describe(test::referenceScan(source, ScanMode::Quick)), collector.candidates);
 }
 
+// The hit limit (L133, L228): each stage counts the files it carves and stops
+// on its own, as it does when it runs alone; the pass ends once every stage
+// has stopped, and the metrics say where each one stopped.
+TEST(ScanCoordinatorTest, EachStageStopsAtTheHitLimitAsItDoesOnItsOwn) {
+    for (const std::uint64_t limit : {1ULL, 2ULL, 3ULL, 5ULL, 8ULL}) {
+        SCOPED_TRACE(limit);
+        ::recovery::test::MemoryStorageSource source(card());
+        RECOVERY_ASSERT_OK(source.open());
+        Collector collector;
+        ScanConfiguration configuration;
+        configuration.maxHits = limit;
+        const Result<ScanSummary> summary = runScan(source, collector, configuration, test::testRunOptions());
+        RECOVERY_ASSERT_OK(summary);
+        EXPECT_EQ(summary->outcome, ScanOutcome::Completed);
+        EXPECT_TRUE(collector.checkpoint.completed());
+        expectSameAs(test::describe(test::referenceScan(source, ScanMode::Deep, limit)), collector.candidates);
+
+        ASSERT_TRUE(collector.checkpoint.pass().has_value());
+        const PassState& pass = *collector.checkpoint.pass();
+        EXPECT_EQ(summary->metrics.limitStops, pass.stops);
+        EXPECT_EQ(collector.checkpoint.metrics().limitStops, pass.stops);
+        EXPECT_TRUE(pass.stops.carving.has_value());
+        EXPECT_EQ(collector.checkpoint.carves().size(), limit);
+        if (limit == 1) {
+            // The card has files for every stage: each stops, and so does the pass.
+            EXPECT_TRUE(pass.stops.mp4.has_value());
+            EXPECT_TRUE(pass.stops.fragments.has_value());
+        }
+        if (pass.stops.carving && pass.stops.mp4 && pass.stops.fragments) {
+            EXPECT_EQ(pass.scan.outcome, carving::ScanOutcome::HitLimitReached);
+            const std::uint64_t last = std::max({*pass.stops.carving, *pass.stops.mp4, *pass.stops.fragments});
+            EXPECT_EQ(pass.position, last + 1);
+            EXPECT_EQ(summary->metrics.bytesScanned, last + 1);
+        } else {
+            EXPECT_EQ(pass.scan.outcome, carving::ScanOutcome::Completed);
+            EXPECT_EQ(summary->metrics.bytesScanned, card().size());
+        }
+    }
+    // Signatures a header check rejects do not count: at the default limit no stage stops.
+    ::recovery::test::MemoryStorageSource source(card());
+    RECOVERY_ASSERT_OK(source.open());
+    Collector collector;
+    const Result<ScanSummary> summary = runScan(source, collector, {}, test::testRunOptions());
+    RECOVERY_ASSERT_OK(summary);
+    EXPECT_FALSE(summary->metrics.limitStops.any());
+}
+
+// Stopped after every one of its updates and resumed, a scan that reaches the
+// hit limit ends as an uninterrupted one: the stops are kept across resumes.
+TEST(ScanCoordinatorTest, AScanAtTheHitLimitResumedAfterEveryUpdateEndsAsAnUninterruptedOne) {
+    for (const std::uint64_t limit : {1ULL, 3ULL}) {
+        SCOPED_TRACE(limit);
+        ::recovery::test::MemoryStorageSource source(card());
+        RECOVERY_ASSERT_OK(source.open());
+        ScanConfiguration configuration;
+        configuration.maxHits = limit;
+        Collector uninterrupted;
+        RECOVERY_ASSERT_OK(runScan(source, uninterrupted, configuration, test::testRunOptions()));
+        ASSERT_TRUE(uninterrupted.checkpoint.pass().has_value());
+
+        Collector collector;
+        std::size_t runs = 0;
+        while (!collector.checkpoint.completed() && runs < 500) {
+            ++runs;
+            ScanRunOptions options = test::testRunOptions(3);
+            options.window = 1;
+            JobControl control = options.control;
+            const std::uint64_t stopAt = collector.checkpoint.sequence() + 1;
+            collector.hook = [control, stopAt](const ScanUpdate& update) mutable {
+                if (update.sequence >= stopAt) {
+                    control.requestCancellation();
+                }
+                return success();
+            };
+            const ScanCheckpoint resume = collector.checkpoint;
+            RECOVERY_ASSERT_OK(runScan(source, collector, configuration, options, &resume));
+        }
+        EXPECT_TRUE(collector.checkpoint.completed());
+        expectSameAs(test::describe(uninterrupted.candidates), collector.candidates);
+        ASSERT_TRUE(collector.checkpoint.pass().has_value());
+        EXPECT_EQ(collector.checkpoint.pass()->stops, uninterrupted.checkpoint.pass()->stops);
+        EXPECT_EQ(collector.checkpoint.pass()->position, uninterrupted.checkpoint.pass()->position);
+        EXPECT_EQ(collector.checkpoint.metrics().limitStops, uninterrupted.checkpoint.metrics().limitStops);
+    }
+}
+
 // ===========================================================================
 // Interruptions
 // ===========================================================================

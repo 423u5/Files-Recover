@@ -115,6 +115,19 @@ std::string formatDuration(std::chrono::milliseconds duration) {
     return std::format("{}:{:02}:{:02}", total / 3600, (total / 60) % 60, total % 60);
 }
 
+std::string describeLimitStops(const scan::StageStops& stops) {
+    std::string text;
+    const auto add = [&](const std::optional<std::uint64_t>& stop, std::string_view stage) {
+        if (stop.has_value()) {
+            text += (text.empty() ? "" : ", ") + std::string(stage) + " at " + formatSize(*stop);
+        }
+    };
+    add(stops.carving, "carving");
+    add(stops.mp4, "MP4 recovery");
+    add(stops.fragments, "fragment reconstruction");
+    return text;
+}
+
 std::string formatPercent(std::uint64_t done, std::uint64_t total) {
     if (total == 0) {
         return {};

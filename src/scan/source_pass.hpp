@@ -41,8 +41,11 @@ struct PassSetup {
     // Carves: validation on, the scan's reads (with the job's token).
     carving::CarveOptions carving;
     // The scan's settings: block size, alignment, reads; the pass sets the
-    // range, the hit limit and the progress callback.
+    // range, the scanner's hit limit (none) and the progress callback.
     carving::ScanOptions scan;
+    // Each stage stops after the offset of the hit at which it has carved
+    // this many files (as CarveOptions::maxCarves; PassState::stops), and
+    // the pass once every stage taking part has stopped.
     std::uint64_t maxHits = 10'000'000;
     // The stages that take part: carving, and the steps of MP4 recovery and
     // of fragment reconstruction (null when they do not).
@@ -61,8 +64,8 @@ struct PassSetup {
 
 // Called at each consistent point with the pass's state and the carves
 // committed since the last one (the caller takes the stages' changes itself).
-// `final` once the pass has ended (at the end of the source or the hit
-// limit). Not called again after it fails.
+// `final` once the pass has ended (at the end of the source, or once every
+// stage taking part reached the hit limit). Not called again after it fails.
 using PassCheckpoint =
     std::function<Status(const PassState& state, std::vector<carving::FileCandidate>&& carves, bool final)>;
 // Called at least every progressInterval with the pass's position.

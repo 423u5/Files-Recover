@@ -261,6 +261,7 @@ struct ScanCoordinator::Run {
     std::uint64_t duplicates = 0;
     std::uint64_t pending = 0;  // delivered, not handed out yet
     std::uint64_t passPosition = 0;
+    StageStops passStops;
     storage::BadRegionMap unreadable;
     // The sink failed: nothing more is handed out.
     bool sinkFailed = false;
@@ -282,7 +283,7 @@ carving::CarveOptions ScanCoordinator::Run::carveOptions() const {
     carving::CarveOptions carve;
     carve.scan.blockSize = options.blockSize;
     carve.scan.alignment = configuration.alignment;
-    carve.scan.maxHits = configuration.maxHits;
+    carve.maxCarves = configuration.maxHits;
     carve.scan.reads = reads();
     carve.scan.logger = options.logger;
     carve.validate = true;
@@ -329,6 +330,7 @@ Status ScanCoordinator::Run::prepare(const ScanCheckpoint* resume) {
     }
     if (checkpoint.pass().has_value()) {
         passPosition = checkpoint.pass()->position;
+        passStops = checkpoint.pass()->stops;
     }
 
     const std::uint32_t threads = effectiveWorkerThreads(EngineConfig{IoConfig{}, options.workerThreads});
@@ -400,6 +402,7 @@ ScanMetrics ScanCoordinator::Run::metrics() {
     const ScanSourceStats stats = source != nullptr ? source->stats() : ScanSourceStats{};
     metrics.sourceSize = owner.source_.size();
     metrics.bytesScanned = configuration.mode == ScanMode::Deep ? passPosition : 0;
+    metrics.limitStops = passStops;
     metrics.bytesRead = base.bytesRead + stats.bytesRead;
     const auto now = Clock::now();
     const Clock::duration running = now - started - pausedFor;
@@ -474,6 +477,7 @@ Status ScanCoordinator::Run::emit(ScanUpdate update) {
     }
     if (update.pass.has_value()) {
         passPosition = update.pass->position;
+        passStops = update.pass->stops;
     }
     const std::uint64_t delivered = update.candidates.size();
     update.metrics = metrics();
@@ -861,6 +865,15 @@ Status ScanCoordinator::Run::sourcePass() {
                 {field("outcome", carving::toString(now.scan.outcome)), field("hits", now.scan.hits),
                  field("carves", now.carving.candidates), field("bytes_read", now.scan.bytesRead),
                  field("unreadable_bytes", now.scan.unreadableBytes)});
+            if (now.stops.any()) {
+                const auto at = [](const std::optional<std::uint64_t>& stop) {
+                    return stop.has_value() ? std::to_string(*stop) : std::string("none");
+                };
+                log(LogLevel::Warning, "stages stopped at the hit limit: the source after their stop was not searched",
+                    {field("max_hits", configuration.maxHits), field("carving", at(now.stops.carving)),
+                     field("mp4", at(now.stops.mp4)), field("fragments", at(now.stops.fragments)),
+                     field("source_size", size)});
+            }
         }
         return emit(std::move(update));
     };

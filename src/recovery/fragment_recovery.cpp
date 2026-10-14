@@ -375,6 +375,7 @@ public:
     [[nodiscard]] Status commit(const carving::SignatureHit& hit, const carving::CarveOutcome* outcome) {
         return commitHit(hit, outcome, false);
     }
+    [[nodiscard]] std::uint64_t hitsTaken() const noexcept { return report_.carved + anchorCount_; }
     void recordEvents(bool on) noexcept { recording_ = on; }
     [[nodiscard]] std::vector<FragmentPassEvent> takeEvents() { return std::exchange(events_, {}); }
     [[nodiscard]] Status replay(const std::vector<FragmentPassEvent>& events);
@@ -439,6 +440,7 @@ private:
     std::vector<OwnerId> ownerBase_;
     OwnerId nextOwner_ = 1;
     std::vector<std::vector<std::uint64_t>> moovAnchors_;
+    std::uint64_t anchorCount_ = 0;
     std::vector<Seed> filesystemSeeds_;
     // (volume, first cluster) -> filesystem seed.
     std::map<std::pair<std::size_t, std::uint64_t>, std::size_t> seedStarts_;
@@ -771,6 +773,7 @@ Status RunState::commitHit(const carving::SignatureHit& hit, const carving::Carv
             return mismatch();
         }
         moovAnchors_[*v].push_back(hit.fileOffset);
+        ++anchorCount_;
         if (!replaying) {
             record(hit, nullptr);
         }
@@ -1376,6 +1379,9 @@ Result<std::unique_ptr<FragmentRecoverySteps>> FragmentRecoverySteps::create(sto
                              std::to_string(carving::SourceContentReader::kMinCacheSize) + " and " +
                              std::to_string(carving::IContentReader::kMaxReadLength));
     }
+    if (options.carving.maxCarves == 0) {
+        return makeError(ErrorCode::InvalidInput, "maxCarves must be at least 1");
+    }
     if (Status valid = carving::validate(options.carving.scan.reads); !valid.ok()) {
         return valid.error();
     }
@@ -1457,6 +1463,10 @@ Result<std::optional<FragmentCandidate>> FragmentRecoverySteps::reconstructNext(
 
 Status FragmentRecoverySteps::replayReconstruction(const FragmentCandidate& candidate) {
     return impl_->state.replayReconstruction(candidate);
+}
+
+std::uint64_t FragmentRecoverySteps::hitsTaken() const noexcept {
+    return impl_->state.hitsTaken();
 }
 
 FragmentRecoveryReport FragmentRecoverySteps::report() const {
@@ -1551,14 +1561,29 @@ Result<FragmentRecoveryReport> FragmentRecovery::run(const FragmentCandidateSink
         if (!scanner.ok()) {
             return scanner.error();
         }
+        carving::CarveLimit limit{options_.carving.maxCarves};
+        bool limitStopped = false;
         const carving::HitSink onHit = [&](const carving::SignatureHit& hit) -> Status {
-            return steps.commit(hit, nullptr);
+            if (!limit.takes(hit.fileOffset)) {
+                limitStopped = true;
+                return makeError(ErrorCode::Cancelled, "fragment reconstruction reached its carve limit");
+            }
+            if (Status committed = steps.commit(hit, nullptr); !committed.ok()) {
+                return committed;
+            }
+            limit.counted(hit.fileOffset, steps.hitsTaken());
+            return success();
         };
         Result<carving::ScanReport> scanned = scanner->scan(*source_, onHit, options_.carving.scan);
         if (!scanned.ok()) {
             return scanned.error();
         }
         scanReport = std::move(*scanned);
+        if (limit.stoppedAt.has_value() &&
+            (limitStopped || scanReport.outcome == carving::ScanOutcome::Completed)) {
+            scanReport.outcome = carving::ScanOutcome::HitLimitReached;
+            scanReport.nextOffset = *limit.stoppedAt + 1;
+        }
         if (scanReport.outcome == carving::ScanOutcome::Cancelled) {
             return makeError(ErrorCode::Cancelled, "fragment reconstruction cancelled");
         }
