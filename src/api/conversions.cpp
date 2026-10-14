@@ -195,6 +195,8 @@ FilesystemKind toApi(filesystem::FilesystemType type) noexcept {
         return FilesystemKind::Ntfs;
     case filesystem::FilesystemType::Fat16:
         return FilesystemKind::Fat16;
+    case filesystem::FilesystemType::Fat12:
+        return FilesystemKind::Fat12;
     }
     return FilesystemKind::Fat32;
 }

@@ -25,6 +25,7 @@ enum class FilesystemType : std::uint8_t {
     // After P20, read by the FAT32 module. Last, so the values sessions
     // recorded keep their meaning.
     Fat16,
+    Fat12,
 };
 
 [[nodiscard]] std::string_view toString(FilesystemType type) noexcept;

@@ -13,21 +13,31 @@ Each item has a fixed ID so it can be referred to in discussion. **Status** is o
 ## Storage and imaging (P1–P2)
 
 ### L1. Imaging computes no hash
-**Status:** Open  
+**Status:** Resolved (after P20, the user's production-readiness list of 2026-10-12): a complete image's SHA-256 is
+computed as it is written, recorded in its metadata (`sha256=`; metadata without it still reads), printed by
+`recovery image` and `recovery inspect`, and given by the API (`ImagingProgress::sha256`); a resumed image is hashed
+again from its file. It is the hash of the image, unreadable sectors as zeros: it shows that an image has not changed
+since it was made, and equals the source's only when nothing was unreadable. Tests:
+`ImageWriterTest.ACompleteImageGetsTheSha256OfItsFile`, `ImageWriterResumeTest.AResumedImageGetsTheSameSha256`,
+`ImageMetadataTest.TheSha256OfACompleteImageRoundTrips`, `CliCommandsTest.ImageCopiesASourceByteForByte`,
+`ApiImagingTest.ADiskWithBadSectorsIsImagedWithZerosAndTheirList`  
 No image hash (for example SHA-256) is computed while imaging. Integrity is only checked by the tests,
 which compare bytes. A user has no way to prove that an image matches the source.
 
 ### L2. Imaging is single-threaded
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): imaging is bound by the source device's speed, not the CPU,
+and one reader in order is the gentlest on failing media  
 Imaging uses one thread, and progress is reported at most every `progressInterval`.
 
 ### L3. The metadata replace is only atomic on NTFS and ReFS
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): images are normally written to NTFS (FAT32 cannot even hold
+one over 4 GiB), and the risk is one rename at each checkpoint  
 Image metadata is replaced with `MoveFileExW`. On FAT or exFAT destinations the replace is not atomic,
 so a crash at the wrong moment can leave damaged metadata.
 
 ### L4. Only raw images
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): raw images are what the engine and other recovery tools read;
+forensic containers such as E01 serve evidence handling, which is not this tool's purpose  
 There is no E01 or other forensic container format.
 
 ### L5. Some destinations are refused for physical-disk sources
@@ -57,7 +67,8 @@ than 65,535 clusters, such entries point to the wrong cluster. This is not detec
 Entries in later clusters of a deleted directory are not found.
 
 ### L9. Orphaned clusters are counted, not listed
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): carving covers the whole source, so their data is searched all
+the same; a list of the chains would add little  
 `ClusterUsage::allocated - FileScan::referencedClusters` gives the number of orphaned clusters (allocated
 but referenced by no entry). The orphaned chains themselves are not listed. The same applies to exFAT.
 
@@ -93,16 +104,18 @@ listed (`MetadataIncomplete`), but without attributes or timestamps. A deleted d
 is reported as a file and not searched.
 
 ### L14. Vendor allocation entries are skipped
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): rare on removable media, and nothing is lost: their clusters
+only count as orphaned, and carving still reads them  
 Benign secondary entries that own clusters are skipped, so their clusters count as orphaned.
 
 ### L15. TexFAT is barely supported
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): TexFAT is written only by Windows Embedded CE devices; Windows
+itself does not format it  
 With two FATs, only the active FAT and allocation bitmap are chosen. Transactions are not examined, and
 `ClusterUsage::mirrorMismatches` is always 0 because the second FAT is not a mirror.
 
 ### L16. Volume GUID and OEM parameters are not reported
-**Status:** Open
+**Status:** Accepted (the user's review of 2026-10-14): neither is needed to recover files
 
 ### L17. Name hashes need the volume's up-case table
 **Status:** Accepted  
@@ -110,7 +123,8 @@ If the up-case table is missing, unreadable or fails its checksum, a built-in ta
 Latin-1 is used. Names with other letters then can't be verified (`LongNameUnverified`).
 
 ### L18. Hostile boot sectors still cost some time
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): the cost is bounded (about 2 seconds in a debug build), and
+nothing outside the image is read  
 A boot sector can claim about 2^32 clusters on a tiny image. Every operation stays bounded, and nothing
 beyond the end of the image is read. Cluster analysis still steps through every FAT page (about
 262,000), which takes about 2 seconds in a debug build.
@@ -139,7 +153,7 @@ cross-check with pyfatfs cannot cover non-ASCII names or deleted files (see
 [testing/testing.md](testing/testing.md)).
 
 ### L22. exFAT tests borrow helpers from the FAT32 builder
-**Status:** Open (tidy-up)  
+**Status:** Accepted (tidy-up; the user's review of 2026-10-14): test code only, no effect on the engine  
 `readExtents` and `utf8ToUtf16` live in `tests/support/fat32_builder.hpp`, and the exFAT tests include
 that header for them. Moving them to a shared helper would change P4 test support, so it was not done.
 The NTFS tests and builder (P6) include it too.
@@ -163,23 +177,27 @@ Compressed data (LZNT1) is not decompressed (`CompressedData`), and EFS-encrypte
 run list, with the holes as zeros; compressed and encrypted data remains (L36).
 
 ### L25. Named data streams are ignored
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): alternate data streams hold small extra data
+(`Zone.Identifier` and the like), rarely what a user wants back  
 Only the unnamed `$DATA` stream is reported as a file's content. Alternate data streams (for example
 `Zone.Identifier`) are not listed; their clusters still count as referenced.
 
 ### L26. Directory indexes are not read
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): the tree is rebuilt from every record's parent reference;
+index slack would only add the names of files whose records were reused, and whose data is then usually gone too  
 The tree is rebuilt from `$FILE_NAME` parent references. Directory indexes are not used or checked
 against the records, and entries of deleted files left in index slack (useful when the file's record was
 reused) are not recovered.
 
 ### L27. $LogFile and $UsnJrnl are not read
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): the journals record names and changes, not file content;
+reading them is forensic work, beyond what recovery needs  
 The journals could tell more about recent deletions and renames. "Complex journaling recovery" is
 outside P6.
 
 ### L28. Only record 0 falls back to $MFTMirr
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): files are found through record 0, which does fall back to the
+mirror; damage confined to records 1-3 does not hide files  
 If record 0 is damaged, its copy in `$MFTMirr` locates the MFT. Damaged records 1-3 (`$MFTMirr`,
 `$LogFile`, `$Volume`) are not taken from the mirror, and the mirror is not compared with the MFT.
 
@@ -191,25 +209,28 @@ warning). The data of each resident file (at most one MFT record) is copied into
 the scan results.
 
 ### L30. Orphans are listed under a virtual "/$OrphanFiles"
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): the folder needs some name: a real root entry of that name is
+told apart (`ParentMissing`), and recovery writes both safely  
 Entries whose parent directory is gone get the path `/$OrphanFiles/<name>`. A real root entry with that
 name would share the prefix; the two are told apart by `ParentMissing`. Recovery output must not rely on
 the path alone (see also L10). P7: their candidates carry the warning `LocationUnknown`, and the recovery
 writer recreates `$OrphanFiles` as an ordinary directory in the output.
 
 ### L31. Some NTFS metadata is not reported
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): the times that matter are reported, and since L37 restored;
+the other metadata serves forensic work  
 Times come from `$STANDARD_INFORMATION` only. The copies in `$FILE_NAME` (useful to spot altered times),
 the MFT-change time, reparse points (symbolic links, junctions) and security descriptors are not
 reported. Reparse points are listed as ordinary files and directories.
 
 ### L32. NTFS borrows exFAT's page cache
-**Status:** Open (tidy-up)  
+**Status:** Accepted (tidy-up; the user's review of 2026-10-14): internal code layout only, no effect on results  
 The MFT and `$Bitmap` are read through `exfat::PagedRegion` (`src/filesystem/exfat/paged_region.hpp`).
 Moving it to a shared private helper would change P5 code, so it was not done.
 
 ### L33. The NTFS builder writes empty directory indexes
-**Status:** Open (testing)  
+**Status:** Accepted (testing; the user's review of 2026-10-14): test support only, needed only if directory indexes
+are ever read (L26)  
 `tests/support/ntfs_builder` writes empty `$I30` indexes, except that the root lists `$Secure`, which
 ntfs-3g needs to mount a volume. Its images cannot be listed by path with ntfs-3g or Windows, so the
 cross-check reads them by record number (`ntfscat`, `ntfsundelete`). `$AttrDef` holds no definitions.
@@ -225,7 +246,8 @@ the reference images are generated locally and not committed.
 ## Filesystem-based recovery (P7)
 
 ### L35. "Reallocated" is evidence, not proof
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): it is the best evidence the volume gives, and the formats'
+validation checks the content wherever a format allows it (P9-P14)  
 A cluster of a deleted file that is allocated again may still hold the old data (allocated but not yet
 written). A cluster that is free may have been overwritten by a file that was deleted in turn. Recovery reads
 both kinds as they are. Nothing in P7 checks that the recovered content is the original; format validation
@@ -237,18 +259,27 @@ Such candidates have every byte `Missing` (`DataNotDecoded`), and the writer ref
 LZNT1 decompression; EFS files cannot be decrypted without the user's keys (see L24).
 
 ### L37. Recovered files do not get their timestamps or attributes back
-**Status:** Open  
+**Status:** Resolved (after P20, the user's production-readiness list of 2026-10-12): a recovered file gets the
+creation, last write and last access times its filesystem recorded, set after its last write
+(`DestinationFile::setTimes`). FAT records local times without a time zone: they are taken as times of this computer's
+time zone, by the daylight saving rules of each date (`localTimeToUtc`), so a file shows the clock time it had on the
+card. A file whose times cannot be set is still recovered, with a warning in the log; carved files have no recorded
+times and keep the time of their recovery. Not restored: attributes (read-only, hidden, system; on purpose) and the
+times of folders. Tests: `RecoveryWriterTest.ARecoveredFileKeepsItsRecordedUtcTimes`,
+`RecoveryWriterTest.LocalTimesShowTheSameClockTimeAndCarvesKeepTheirRecoveryTimes`  
 The candidates carry the original times and attributes, but the written files get the time of recovery. FAT
 times are local time with no zone (`Timestamp::local`), so restoring them needs a decision about the time zone.
 
 ### L38. Directories whose names differ only in case share one output directory
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): Windows folders cannot differ by case alone, and the files
+never overwrite each other: they get numbered names  
 Windows destinations are case-insensitive, and `safeFileName` can map different names to the same one (`a:b`
 and `a_b`). Such original directories are merged in the output. Their files never overwrite each other (they
 get numbered names), but the tree no longer shows that they were separate.
 
 ### L39. Hard links are recovered once per name
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): each name was a file on the volume; the copies are marked as
+duplicates (`duplicateOf`), so a user interface can leave them out  
 Each name of an NTFS record is its own candidate with the same regions, so the data is written once per name.
 Content-based duplicate detection is planned for P17.
 
@@ -290,20 +321,41 @@ sparse holes become `Missing`. This bounds every reconstruction, but a genuine s
 volume (a sparse virtual disk, for example) loses its tail.
 
 ### L44. Returned paths may exceed MAX_PATH
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): the files are written whatever their depth; a program that
+cannot open a path over 260 characters needs Windows' long path support, or a shorter destination folder  
 The writer creates files through `\?\` paths, so deep trees work, but `RecoveredFile::path` is an ordinary path.
 Opening one longer than 260 characters needs the `\?\` prefix or Windows long-path support.
 
 ### L45. FAT12 and FAT16 are not supported
-**Status:** Open (found during P7; the plan only names FAT32)  
+**Status:** Resolved (after P20: FAT16 on the user's production-readiness list of 2026-10-12, FAT12 on the user's
+decision of 2026-10-14, L225): the FAT module reads FAT16 volumes (4,085 to 65,524 clusters) and FAT12 volumes (fewer
+than 4,085) as it reads FAT32: the fixed root directory, folders, deleted files and folders, fragmented chains.
+Results, sessions and the API call them FAT16 and FAT12 (`fat16`, `fat12`). Tests:
+`tests/filesystem/fat16_filesystem_test.cpp`, `fat12_filesystem_test.cpp`, the corpus scenarios `fat16-card` and
+`fat12-floppy`, and images written by mkfs.fat and mtools ([testing/testing.md](testing/testing.md)); see
+[architecture/filesystems.md](architecture/filesystems.md)  
 The FAT32 module rejects FAT12 and FAT16 volumes (`UnsupportedFilesystem`), and so does `openFilesystemRecovery`.
 SD cards up to 2 GB and many older USB sticks are formatted FAT16, so their files can only be carved.
+
+### L225. FAT12 volumes are not read
+**Status:** Resolved (after P20, the user's decision of 2026-10-14): the FAT module reads FAT12 as it reads FAT16,
+with 12-bit FAT entries, two in three bytes. An entry that lies across two FAT sectors is unreadable only when one of
+them is unreadable in every FAT copy. As for the other FAT types, a boot sector needs the 0x55AA signature and a BIOS
+parameter block, so disks of DOS 1 and of some other systems are not read. Tests:
+`tests/filesystem/fat12_filesystem_test.cpp` (a 1.44 MB floppy disk, entries across FAT sectors, a FAT sector
+unreadable in one copy and in every copy), the corpus scenario `fat12-floppy`, and images written by mkfs.fat and
+mtools: a floppy disk and an MBR partition ([testing/testing.md](testing/testing.md))  
+A FAT volume of fewer than 4,085 clusters is FAT12, which the FAT module refuses (`UnsupportedFilesystem`), so its
+files can only be carved. Formatters choose FAT12 only for very small volumes: floppy disks, and partitions or cards
+of a few megabytes.
 
 ## Carving framework (P8)
 
 ### L46. Carving extracts contiguous files only
 **Status:** Partly resolved (P13): carves that break in a volume's free space are reconstructed by fragment
-reconstruction (a subsystem of its own, not an extraction strategy: the carver still extracts one piece); see L110  
+reconstruction (a subsystem of its own, not an extraction strategy: the carver still extracts one piece); see L110.
+The rest is accepted (the user's review of 2026-10-14): outside a volume's free space there is no allocation evidence
+to search by  
 The only extraction strategy is `Contiguous`: the bytes from a file's start to its detected end, in one piece. A
 fragmented file is carved up to the point where its structure breaks (`StructureBroken`, or `Invalid` validation),
 and the rest of it is not searched for.
@@ -353,7 +405,8 @@ per scan in bytes or time. The audio formats' short frame-sync signatures make r
 (L72).
 
 ### L51. Only hits strictly inside a validated candidate are skipped
-**Status:** Open for overlapping candidates; competing carves at one start resolved (P14)  
+**Status:** Accepted for overlapping candidates (the user's review of 2026-10-14): both are delivered, so neither file
+is lost; competing carves at one start resolved (P14)  
 Hits inside a candidate whose end was not `Found` or that did not validate as `Valid` are carved, which gives
 overlapping candidates (for example a truncated file and a smaller file inside it). Hits of different formats at the
 same offset are all carved. Deciding between overlapping or competing candidates is left to P13/P14.
@@ -405,7 +458,8 @@ read and hits, but not the candidates carved or rejected so far. A long carve of
 reports no progress while it runs.
 
 ### L57. Format details are trusted not to contain content
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): every format module is the engine's own reviewed code, and
+`LoggingReviewTest` checks that file content stays out of the log  
 Candidates and log records carry the `detail` and `reason` strings that format modules return. The rule that they
 never contain file content is a convention for format modules, not something the carver can check.
 
@@ -466,7 +520,8 @@ is noticed, because the file is then longer than its headers say. Choosing betwe
 needs image data, not structure.
 
 ### L66. The maximum size per format is a judgement, not a measurement
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): far above any ordinary photo, and a larger file still comes
+out, as `Truncated`  
 JPEG 256 MiB, PNG 1 GiB, WEBP 1 GiB, GIF 256 MiB, BMP 2 GiB. They bound the work one hit can cost and are far above
 any ordinary photo, but a larger file is carved as `Truncated` and cannot be recovered whole. No corpus was
 measured to pick them.
@@ -476,6 +531,20 @@ measured to pick them.
 Apple's iOS build tools write PNGs whose first chunk is `CgBI` and whose image data is not a standard zlib stream.
 The header check requires IHDR as the first chunk, so such files are not carved as PNG. They only occur inside iOS
 application bundles, not on the media this engine targets, and standard decoders refuse them too.
+
+### L224. HEIC/HEIF photos are found only by name
+**Status:** Accepted (the user's decision of 2026-10-12: HEIC carving was not chosen for this release)  
+Phones save photos as HEIF files (`.heic`): iPhones by default, and some Android phones. HEIF is an ISO base media
+format, like MP4, but its image brands (heic, heix, mif1, ...) are carved neither as MP4 nor as M4A
+([formats/mp4.md](formats/mp4.md)): such a photo is recovered only while a filesystem entry names it, and then
+unverified (`FORMAT_UNKNOWN`, L128). Other photo formats: L226.
+
+### L226. TIFF, camera raw and other photo formats are found only by name
+**Status:** Open (found in the review of 2026-10-14)  
+Carving knows JPEG, PNG, WebP, GIF and BMP (P9); HEIF is L224. TIFF files, cameras' raw files (Canon CR2 and CR3,
+Nikon NEF, Sony ARW, Adobe DNG and others), AVIF and JPEG 2000 images are recovered only while a filesystem entry
+names them, and then unverified (`FORMAT_UNKNOWN`, L128). The JPEG previews most raw files hold may still be carved,
+as JPEG files of their own (a deep scan looks for files at every byte); that was not tried on a raw file.
 
 ## Audio formats (P10)
 
@@ -489,7 +558,9 @@ Info tag (LAME, FFmpeg and most encoders write one) the recorded frame count mak
 `AacFormatTest.FragmentsEndTheStreamAtTheGap`.
 
 ### L69. Frames of another stream inside an MP3 are only noticed by its checksums
-**Status:** Open: MP3 audio is not decoded in-house (the user's P14 scope); P13 relies on the frame chain (L106)  
+**Status:** Accepted (the user's review of 2026-10-14; MP3 audio is not decoded in-house, the user's P14 scope): the
+LAME tag's CRC, frame CRCs and the bit reservoir catch such frames where a file has them; P13 relies on the frame
+chain (L106)  
 Frames from another file with the same parameters (a fragment of another song by the same encoder) chain on like the
 file's own. The LAME tag's music CRC catches them, and so can the frame CRCs and the bit reservoir (main data that
 overlaps the previous frame's), but a stream without a LAME tag and without CRCs validates as `Valid`. Decoding the
@@ -497,7 +568,8 @@ audio (P14) or fragment reconstruction (P13) would be needed. Test:
 `Mp3FormatTest.FragmentsAreNoticedWhereTheStructureAllows`.
 
 ### L70. Adjacent ADTS streams with the same parameters are carved as one
-**Status:** Open
+**Status:** Accepted (the user's review of 2026-10-14): raw AAC files (.aac) are rare on removable media, two stored
+back to back with the same parameters rarer still, and both are recovered, as one file  
 Two raw AAC files with the same profile, sampling frequency and channels, stored one after the other, form one
 chain of frames, so they are carved as one file. MP3 streams are separated by a following file's ID3v2 tag or info
 tag, and by the first one's frame count; ADTS has neither. Only the headers of ADTS frames are checked: the raw data
@@ -523,7 +595,8 @@ P15: in a scan, a hit's header check reads the block the scanner has just read, 
 rejected hit costs no read of the source. `FileCarver::run` on its own is unchanged.
 
 ### L73. VBRI info tags are recognised but their counts are not used
-**Status:** Open
+**Status:** Accepted (the user's review of 2026-10-14): VBRI tags are rare (old Fraunhofer encoders), and the stream
+is still carved by its frames  
 Fraunhofer's VBRI tag marks the start of a stream (and ends the stream before it), but its frame and byte counts
 are not used to end the stream or to validate it: no sample file with a VBRI tag was available to confirm how they
 count. Xing and Info tags are used in full.
@@ -571,24 +644,27 @@ The plan lists "FLAC where practical" among the audio targets, but P10's priorit
 WMA and AMR files (voice notes, older players) are not carved either. AMR in a 3GP or M4A container is carved as M4A.
 
 ### L80. What is carved of a stream whose start is lost
-**Status:** Open
+**Status:** Accepted (the user's review of 2026-10-14): the frames that survive are delivered and reported
+(`Invalid`); the stream's start is gone in any case  
 The frames that survive after a lost start are carved as one file from the first whole frame, and validation
 reports the stream as `Invalid` ("its start is missing") when that frame's main data begins in an earlier (lost)
 frame. An ID3v2 tag with no frames after it is not carved at all (its cover picture is found as an image), and a
 lone frame header cut off by the end of the data is not a file.
 
 ### L81. The maximum size per audio format is a judgement
-**Status:** Open
+**Status:** Accepted (the user's review of 2026-10-14): far above ordinary files, and a larger file still comes out,
+as `Truncated`  
 MP3 1 GiB, AAC 1 GiB, M4A 4 GiB (audiobooks), WAV 4 GiB + 8 (the RIFF limit). As for the images (L66), they bound
 the work of one hit and were not measured on a corpus.
 
 ### L82. A stale info tag frame count splits a stream
-**Status:** Open
+**Status:** Accepted (the user's review of 2026-10-14): nothing is lost: the frames after the count are carved as a
+stream of their own  
 With a Xing or Info tag the stream ends after the number of frames the tag records. If a tool changed the file
 without updating the count, the frames after it are carved as a separate stream.
 
 ### L83. Some trailing tags cannot be found from the front
-**Status:** Open
+**Status:** Accepted (the user's review of 2026-10-14): only the tag is lost, not the audio  
 APEv1 tags and APEv2 tags without a header are recognised only by their footer, at the end of a file; a walk from
 the front does not find them, so the file ends before them and the tag is lost. ID3v1, APEv2 with a header,
 Lyrics3 and appended ID3v2 tags are kept.
@@ -605,7 +681,8 @@ is set, but none of its samples is located or checked. P12's test list names "fr
 fragments, P12 needs them parsed.
 
 ### L85. Edit lists, composition offsets, sync samples and data references are not read
-**Status:** Open
+**Status:** Accepted (the user's review of 2026-10-14): none of them says where samples are, and cameras do not store
+samples in another file  
 edts/elst, ctts, stss, stps, sdtp, sgpd/sbgp, subs and saiz/saio are skipped: they do not say where the samples
 are. dinf/dref is skipped too, so a track whose samples are in another file (a data reference that is not
 self-contained, which ISO allows and hardly any camera writes) has its chunk offsets checked against this file's
@@ -621,7 +698,8 @@ the samples themselves are not checked: that is media validation. P12 reads one 
 the NAL unit length fields, for the sample framing check (L95).
 
 ### L87. Every chunk must lie inside an mdat box
-**Status:** Open (decision to review)
+**Status:** Accepted (the user's review of 2026-10-14, of a P11 decision): no writer sampled puts sample data outside
+mdat, and a chunk elsewhere is far more often damage than design  
 A chunk outside the media data boxes (in moov, in a free box, in an ISO 2020 `imda` box, or across the boundary
 between two mdat boxes) makes the file `Invalid`. The standard allows sample data anywhere in the file; no writer
 sampled put it anywhere but mdat, and a chunk elsewhere is far more often damage than design.
@@ -647,7 +725,8 @@ to them is invisible: a vmhd whose size grew over the header of the dinf after i
 reaches a known box (a missing, misplaced or misaligned tkhd, stbl, stco, ...) is found.
 
 ### L90. The parse limits are a judgement
-**Status:** Open
+**Status:** Accepted (the user's review of 2026-10-14): they allow about ten hours at 30 frames per second, callers
+can raise them, and a file beyond them is still delivered, with a `LimitExceeded` issue  
 maxBoxes 1,000,000, maxTracks 256, maxSampleDescriptions 64 and maxTableEntries 2^22 (at most 128 MiB) bound the
 work and memory of one parse. They were not measured on a corpus of long recordings: a movie of more than about ten
 hours at 30 frames per second, or with a table entry per sample in every table, can pass maxTableEntries and is
@@ -667,7 +746,8 @@ carver's job (P12).
 ## MP4 recovery (P12)
 
 ### L92. A video track damaged before its handler makes the file look like sound only
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): the file is still carved once, by M4A (as `Invalid`): only its
+classification is wrong  
 Audio is told from video by the handler (mdia/hdlr) of each track. When a generic-brand file's video trak is
 damaged before its hdlr can be read (a tkhd whose size broke the trak, say), the parser keeps only the sound track,
 the file classifies as audio, and M4A carves it (`Invalid`) while MP4 rejects it. The file is still carved once, by
@@ -704,7 +784,8 @@ reported misframed. The check reads each NAL unit's header with the cache block 
 file's video data. `Mp4FormatOptions::checkSampleFraming` turns it off.
 
 ### L96. A moov whose file start is lost is not carved
-**Status:** Open (left out of P13 by decision, 2026-09-30: the recovered file would lack its ftyp and mdat header)  
+**Status:** Accepted (the user's review of 2026-10-14, after the decision of 2026-09-30 to leave it out of P13): the
+recovered file would lack its ftyp and its mdat header, so it would need a repair, which the engine does not do  
 Carving starts at an ftyp. When a file's first clusters are overwritten, its moov and media data are found only if a
 filesystem candidate still locates the rest of its data: moov discovery (`mp4::findMovie`) searches the data of that
 candidate, trying at most 64 occurrences of "moov". A moov with no filesystem candidate around it, and mdat data
@@ -761,7 +842,8 @@ Calls made in P12 without a sample that decided them:
   `Invalid` structure (it may end anywhere), except when its only issue is data after its last box.
 
 ### L101. The maximum MP4 size (256 GiB) is a judgement
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): far above what cameras write, and a larger file still comes
+out, as `Truncated`  
 It bounds the work of one hit, as for the other formats (L66, L81). Cameras split recordings at 4 GiB on FAT32 but
 not on exFAT or NTFS; no corpus of long recordings was measured to pick the bound.
 
@@ -788,6 +870,13 @@ carve lying entirely inside one active file gets that warning; one across severa
 A carve's clusters are checked one by one against the allocation, up to `Mp4RecoveryOptions::maxClusterChecks`
 (4,194,304) per file; beyond that the evidence says it is incomplete.
 
+### L227. Videos other than MP4 and QuickTime are found only by name
+**Status:** Open (found in the review of 2026-10-14)  
+Carving knows the ISO base media formats (MP4, MOV, M4V, 3GP; P12). AVI, Matroska and WebM, MPEG transport streams
+(AVCHD's MTS and M2TS), MPEG program streams (MPG, VOB), Windows Media (WMV, ASF) and Flash video (FLV) are recovered
+only while a filesystem entry names them, and then unverified (`FORMAT_UNKNOWN`, L128). On cards they come from
+camcorders (AVCHD) and older cameras (AVI).
+
 ## Fragment reconstruction (P13)
 
 ### L104. The fragment search is bounded
@@ -800,7 +889,8 @@ it. Every limit is a field of `FragmentSearchLimits`; a search that one stopped 
 when it ended without a valid layout, so does a list of candidates that was cut. None was measured on a corpus.
 
 ### L105. Every layout is validated from the start of the file
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): the search is bounded (4 GiB read per seed, L104), and MP4 is
+checked a window at a time; how much it adds to a scan's reads is measured under L223  
 The formats validate whole files, not a part of one, so the generic search validates each layout it tries from the
 file's first byte, reading and parsing the part before the break again each time: the cost grows with the file's
 size times the layouts tried (hundreds for a fragment across data no evidence explains). The reads are served from
@@ -842,7 +932,8 @@ boundary up to the moov is a layout: the reason gives how many, only `maxAlterna
 `AudioInMp4IsPlacedByTheAllocationOrReportedAmbiguous`.
 
 ### L109. What MP4 placement assumes
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): it covers how cameras and phones write (the movie before the
+media data, or right after it); other layouts still go to the generic search (L105)  
 The movie is taken from the first fragment (moov before the media data, parsed without issues), or found where the
 first mdat's size puts it (moov right after the first mdat, in one piece in free space, its media data in that mdat).
 Files with several mdat boxes before the moov, a moov split across fragments, movie fragments (moof) spread over
@@ -850,7 +941,8 @@ fragments of the disk, or no moov at all (L96) are left to the generic search, w
 Only AVC and HEVC samples are checked (L95).
 
 ### L110. Which files are seeds
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): the seeds are the files with evidence to search by; NTFS files
+cut short by an attribute list come with L23  
 Deleted files whose layout P7 guessed (FAT32, exFAT with a cleared chain) and carves that break at the start of a free
 cluster of an added volume. Not: files whose chain is cut short or damaged (`ChainShorterThanSize` and the like), NTFS
 files whose runs continue in an attribute list (L23), carves outside a volume's cluster area (a source without a
@@ -867,7 +959,8 @@ yet overwritten, or that stale evidence claims, is not found. The layouts skippi
 `SkipClaimed`) still read through nothing but the file's own.
 
 ### L112. Reconstructions claim their clusters in delivery order
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): a reconstruction claims only what its structure confirmed
+(L106), so a wrong claim is rare, and deciding all files together would cost far more than it gains  
 A reconstruction that places data claims its clusters for the rest of the run, so a later file cannot use them; an
 earlier wrong reconstruction can therefore keep a later file from its own clusters. Carves of two formats that start
 at the same cluster share their claims, and both are reconstructed.
@@ -911,7 +1004,8 @@ parameter sets and slice headers, not the slice data; ADPCM block headers. MP3 a
 The media level says `Partial` for them.
 
 ### L117. AVC and HEVC headers are checked as FFmpeg checks them
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): a file FFmpeg plays is not called damaged, and damage FFmpeg
+accepts usually plays too  
 A header fails where the specification forbids what it holds and FFmpeg 6.1 rejects it too, or where the syntax
 cannot be followed, plus a few rules FFmpeg does not enforce (forbidden NAL byte sequences, CABAC alignment bits,
 `nuh_temporal_id_plus1` 0, memory management and long-term reference errors, HEVC alignment zero bits). What FFmpeg
@@ -929,7 +1023,8 @@ FFmpeg drops zero bytes at the end of a NAL unit, and muxers that copied a byte 
 passes; one in the middle (zeros with data after them) fails.
 
 ### L119. Some ADTS CRCs are not checked
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): the frames left out are rare (program config elements, several
+raw data blocks, 5.1 read in part), and their other structure is still checked  
 The CRC rule (the header, then the first 192 bits of each channel element and 128 of a CPE's second stream, and every
 data stream element) was found by experiment on fdkaac's files; libfdk-aac's source agrees, but no other encoder that
 writes CRCs was at hand. The coverage of a program config element is not known, so frames with one are not checked;
@@ -959,7 +1054,8 @@ Foundation decoded the MP4 builder's pattern-byte H.264. Playability is not an i
 the engine's.
 
 ### L123. The playability gaps are what one Windows version showed
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): the playability check is optional and off by default; the
+engine's own media level is its check (L122)  
 Content Windows decodes wrongly or not at all although it is valid is excluded before decoding, from lists observed
 on Windows 10 22H2 (19045): JPEG other than Huffman-coded 8-bit baseline, extended and progressive; bitmaps of JPEG,
 PNG, Huffman 1D or RLE24 data; MP4 with `stz2`; AVC beyond Baseline, Main and High. Other gaps, or other Windows
@@ -967,7 +1063,8 @@ versions' decoders, can still make a valid file `Failed` at this level (and so `
 turned on).
 
 ### L124. A stalled platform decoder is abandoned, not cancelled
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): only with the optional playability check: Media Foundation
+cannot cancel a decoder, and a stuck one costs a thread until the program ends  
 Media Foundation has no way to cancel a decoder that neither delivers nor fails. After `sampleTimeout` (10 s) the
 check returns `Unsupported`, and the source reader is never released, because releasing it waits for the stuck
 decoder forever: its threads and memory stay until the process ends (the content stream is cut off from the reader,
@@ -981,7 +1078,7 @@ HEVC come from Microsoft Store extensions, ADTS sources may be missing. The test
 installed (HEVC on the development machine).
 
 ### L126. One candidate per file means one per start
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): both candidates are delivered, so nothing is lost  
 Inputs are merged by the source offset of their first byte. Files that overlap but start at different bytes (a
 thumbnail inside a carve that did not validate, two carves of a damaged stream) are separate candidates, and the
 content they share is not a duplicate. A carve that starts where a filesystem candidate starts is taken as the same
@@ -995,7 +1092,8 @@ Empty files are never duplicates, and without SHA-256 there is no duplicate dete
 tells files apart).
 
 ### L128. The format of a filesystem candidate is guessed from its content
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): a renamed file is checked as what it really is, and files of
+other formats are still recovered (`UNVERIFIED`)  
 A filesystem candidate is validated as the registered format whose header check accepts its content (its
 extension's when several do or none does). Files of formats the engine does not register (documents, archives,
 executables) are `NotValidated` with `FORMAT_UNKNOWN`; a renamed file is validated as what it contains.
@@ -1022,7 +1120,8 @@ Candidates without filesystem evidence are named `recovered_<id>.<ext>` after th
 MP4 recovery or fragment reconstruction runs gave them (their own numbering).
 
 ### L131. HYBRID needs the carve's verdict
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): the filesystem's layout stands when its own data validates; a
+file whose metadata records it too short is rare  
 A carve gives a filesystem candidate its layout only when the candidate's own data does not pass the structure and
 the carve validates (or the metadata locates no data). A carve that is longer than the metadata's own valid layout
 (a file the metadata records too short but whose truncated form still validates, as for formats that validate any
@@ -1042,6 +1141,8 @@ A scan's one signature scan stops at `ScanConfiguration::maxHits` hits of every 
 formats, the moov probe of fragment reconstruction, and a separate MP4 format when the registry has none. Each stage
 run on its own counts only its own hits, so a scan that reaches the limit can stop where one of the stages on its
 own would have gone on. Below the limit (10 million by default) a scan delivers exactly what the stages deliver.
+
+The review of 2026-10-14: the limit itself is reached on ordinary large drives, and only the log says so (L228).
 
 ### L134. What a resumed scan does again
 **Status:** Accepted (design)  
@@ -1134,7 +1235,8 @@ active and deleted. It skips the source pass, MP4 recovery's carving and fragmen
 the files themselves.
 
 ### L197. The scan's heap test can fail under load
-**Status:** Mitigated (after P20): a difference beyond the allowance is measured again  
+**Status:** Mitigated (after P20): a difference beyond the allowance is measured again; accepted as it is (the user's
+review of 2026-10-14): load only adds to a peak, so memory that grows with the image still fails the test  
 `ScanLargeImageTest.MemoryStaysBoundedWhateverTheImageSize` compares the heap peaks of scans of a 1.25 GiB and a
 5 GiB image and allows them to differ by 2 MiB. In one full debug run of P19 (`ctest -j 8`, every suite at once)
 they differed by 2.6 MB (19.6 MB and 22.2 MB); the test passed alone, in the full run after it, and in the full
@@ -1163,7 +1265,8 @@ of chosen candidates gets copies of them (one of every candidate uses the sessio
 number of files found, a few kilobytes each, as for P15's caller (L40, L99).
 
 ### L146. The source fingerprint covers the start of the source and of its partitions
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): a session must refuse a source that changed, clones are rare,
+and a device whose first sectors fail now and then should be imaged first anyway (its image is a stable source)  
 A session refuses a source whose fingerprint differs from the one it recorded: SHA-256 of the first 64 KiB of the
 source and of each partition its table lists. Two media identical there (clones) are taken for the same, and
 changes elsewhere (files written to a card since, when its boot region and FSInfo stayed the same) are not seen. A
@@ -1178,7 +1281,8 @@ another source for the session: its scan does not resume, and its candidates can
 path, then the fingerprint, must match). Disks are not identified by their serial number or their content alone.
 
 ### L148. A crash just after a file is created leaves it unknown
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): the window is one file's creation; the empty file left is
+harmless, and the candidate is written again  
 A recovery job's file is recorded (`FileStarted`, flushed) right after `RecoveryWriter` has created it, and before
 its data is written. A crash between the two leaves an empty file the session does not know: the resumed job
 writes the candidate under the next free name ("photo (1).jpg"), beside the empty "photo.jpg". Recording the
@@ -1192,19 +1296,22 @@ again. A recovery job's lost updates are not: files it wrote after the damage ar
 free names when the job resumes (the session no longer knows them).
 
 ### L150. One session object at a time, and a writable folder
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): one program works on a session at a time; a session on
+read-only media can be copied to a writable folder first  
 Opening a session takes its journal for writing (it is the session's lock), so a session another process has open
 can only be read through `readSessionSummary` and `listSessions`, which give its records' summary, not its
 candidates. For the same reason a session on read-only media (a disc, a read-only share or file) cannot be opened.
 There is no read-only way to open a session, and none to delete one or its damaged copies.
 
 ### L151. A recovery job writes the candidates it was given
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): a job writes what it was given, as asked; a later job writes
+the rest  
 `addRecoveryJob` with no candidates takes every candidate delivered so far. A scan resumed after the job was added
 delivers more, which the job does not write: another job is needed for them.
 
 ### L152. Only the first journal format exists
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): there is no older format to read yet; the rule is tested when
+a second format comes  
 The journal is in format 1. An engine reads its own format and older ones, but there is no older one yet, so
 reading an older format (a newer engine keeping the readers of every format before its own) is a rule that is not
 tested. Records of an unknown type marked optional are skipped, and that part is tested.
@@ -1304,7 +1411,8 @@ before it decodes a preview.
 ## Command line (P18)
 
 ### L168. Output folders are compared by text when they do not exist yet
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): it needs folders that differ only in the case of non-ASCII
+letters and do not exist yet, and costs a second job and numbered names, never an overwrite  
 `recover` finds the jobs that write to its output folder with `std::filesystem::equivalent` when the folder and
 the job's destination both exist, and otherwise by their normalised text, with only ASCII letters case-folded. A
 job recorded for a folder it never created, then given again spelled with another case of non-ASCII letters,
@@ -1313,13 +1421,15 @@ would count as another folder: a second job, and names with " (1)" in the end.
 P19: the API's recovery (`recoverCandidate`, `recoverCandidates`, `recoverAll`) compares folders the same way.
 
 ### L169. Arguments that are not valid UTF-16 cannot be passed
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): paths holding an unpaired surrogate are very rare, and such a
+folder or image can be renamed  
 The CLI takes its arguments as UTF-8, converted from `wmain`'s UTF-16. An unpaired surrogate, which Windows allows
 in file names but UTF-8 cannot hold, becomes U+FFFD, so a source or folder whose path holds one cannot be named
 on the command line.
 
 ### L170. Reading a report repairs the session
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): a repair only cuts off what a crash left, and keeps a copy of
+what it cuts  
 `report` opens a session as every command does (`RecoverySession::open`), and opening repairs what a crash left: a
 torn last record is cut off, and damage is cut off after a copy is kept (P16). A report therefore writes to the
 session's folder when there is something to repair. A session in use by another command is only summarised
@@ -1347,12 +1457,14 @@ delivered so far); the CLI still refuses.
 `report` writes text or JSON. There is no CSV or HTML report.
 
 ### L174. Columns count code points
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): only tables with wide or combining characters line up badly;
+what they say is right  
 Text tables and progress lines measure widths in code points. Wide East Asian characters take two columns on a
 console and combining marks none, so tables holding such names do not line up, and a progress line can wrap.
 
 ### L175. The Ctrl+Break test needs a console
-**Status:** Open (testing)  
+**Status:** Accepted (testing; the user's review of 2026-10-14): where the console test cannot run, the handler is
+still tested in-process  
 `CliProcessTest.CtrlBreakStopsAScanCleanly` sends Ctrl+Break through the console the test shares with the
 program. A test process without a console makes a hidden one; where that fails too, the test is skipped, and the
 console handler's path is tested in-process only (through `Interrupt`).
@@ -1372,14 +1484,16 @@ the numbers).
 P19: the API lists the disks with their drive letters (`listSources()`); the CLI does not use it yet.
 
 ### L178. No pause from the command line
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): Ctrl+C stops a command safely, and running it again goes on
+where it stopped  
 The engine pauses and resumes scans and recovery jobs (P15, P16). The CLI offers Ctrl+C, which stops a command,
 and running the command again, which goes on: a pause cannot be held across commands.
 
 P19: the API pauses and resumes scans and recoveries (`pauseScan`, `pauseRecovery`, ...).
 
 ### L179. Reports hold everything
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): reports are written on request, one at a time, and a session
+that large already needs its memory (L212)  
 A report lists every candidate and every file of every job, built in memory before it is written: a scan with
 hundreds of thousands of candidates gives a report of that size, in text or JSON. There are no filters, pages or
 streaming.
@@ -1533,7 +1647,16 @@ file, not against a fixed limit, so a damaged or hostile journal of N bytes can 
 bytes once. Journals are the session's own files, normally a few megabytes.
 
 ### L203. A removed device is recognized by nine Windows errors
-**Status:** Open (P20 I/O failure audit)  
+**Status:** Resolved (after P20, the user's production-readiness list of 2026-10-12): four errors that both a pulled
+device and a bad sector can give (`isAmbiguousDeviceError`: ERROR_GEN_FAILURE, ERROR_SEM_TIMEOUT,
+ERROR_OPERATION_ABORTED, ERROR_IO_DEVICE) now make the engine ask the device whether its media is still there
+(`IDeviceIo::mediaPresent`: `IOCTL_STORAGE_CHECK_VERIFY2`, a query). Gone, the operation stops at once (`DeviceLost`);
+still there, or the device cannot tell, it is a bad sector as before. Modelled on the test stick's failure (every read
+ERROR_SEM_TIMEOUT, then no media; [testing/validation.md](testing/validation.md)). Tests:
+`PhysicalDiskSourceTest.AnAmbiguousErrorAsksTheDeviceWhetherItIsStillThere`,
+`MediaCheckTest.AFailedCheckSaysTheDeviceIsGoneOnlyWhenItsErrorSaysSo`,
+`CliCommandsTest.ADeviceThatStopsAnsweringStopsImagingAtOnce`. Tried with a simulated device only: no device has been
+pulled out during a run of this build  
 A read that fails with ERROR_NOT_READY, ERROR_DEV_NOT_EXIST, ERROR_NO_SUCH_DEVICE, ERROR_FILE_INVALID,
 ERROR_MEDIA_CHANGED, ERROR_NO_MEDIA_IN_DRIVE, ERROR_DEVICE_NOT_CONNECTED, ERROR_DEVICE_REMOVED or
 ERROR_DEVICE_NOT_AVAILABLE stops the operation at once (`ReadStatus::DeviceLost`): it resumes when the device is
@@ -1567,7 +1690,13 @@ candidates the session holds when the job runs. A job run while a scan is unfini
 far) writes without volume folders; a later job, after the scan found more volumes, writes with them.
 
 ### L208. The executables need Media Foundation
-**Status:** Open (P20)  
+**Status:** Resolved (after P20, the user's production-readiness list of 2026-10-12): every executable that links the
+playability check delay-loads `mfplat.dll` and `mfreadwrite.dll` (`/DELAYLOAD`, `src/CMakeLists.txt`), so it starts
+without them. Before Media Foundation is first used, the check loads both, from System32 only; when they are missing,
+audio and video are `Unsupported` at the playability level ("Media Foundation is not installed"), and images still go
+to the Windows Imaging Component. Tests: `PlayabilityTest.WithoutMediaFoundationAudioAndVideoAreUnsupported`,
+`PlayabilityTest.TheExecutablesDelayLoadMediaFoundation` (it reads the test executable's own imports). Not tried on a
+Windows N edition  
 `recovery.exe` and the tests import `mfplat.dll` and `mfreadwrite.dll` (the playability check). Windows N editions
 without the Media Feature Pack do not have them, so the executables do not start there at all.
 
@@ -1641,26 +1770,30 @@ file: the formats built on ZIP are not told apart, although their first members 
 enough to open it with its program. Named files keep their names.
 
 ### L215. Archive members the engine cannot decode leave the archive unverified
-**Status:** Open (after P20)  
+**Status:** Accepted (the user's review of 2026-10-14): Windows' own ZIP writer uses DEFLATE, and an unverified
+archive is still recovered (`UNVERIFIED`), only not trusted  
 Only stored and DEFLATE data is decoded. An archive with an encrypted member, or one compressed with Deflate64,
 bzip2, LZMA, Zstandard, XZ or PPMd, is `UNVERIFIED` (its structural level `Unsupported`) and never trusted, even
 when its structure is consistent: a damaged copy and an intact one look alike. Windows' own ZIP writer uses DEFLATE;
 7-Zip and WinZip can write the others.
 
 ### L216. A member sized only by its data descriptor needs the descriptor's signature unless it is DEFLATE
-**Status:** Open (after P20)  
+**Status:** Accepted (the user's review of 2026-10-14): stored members sized only by a descriptor without its
+signature are rare, and such an archive is still carved up to that member  
 When a local header leaves the sizes to a data descriptor (flag 3), DEFLATE data is decoded to find where it ends,
 but stored, encrypted or otherwise compressed data is found only by the descriptor's signature `PK 07 08` (optional
 in the specification) followed by a size that matches. Without it the walk breaks there and the archive is carved
 only up to that member. An APK signing block cut short also breaks the walk (Broken, not Truncated).
 
 ### L217. DEFLATE members sized by data descriptors are decoded twice
-**Status:** Open (after P20)  
+**Status:** Accepted (the user's review of 2026-10-14): only archives of streaming writers (Java's `jar`, a pipe) pay
+it: about twice the decoding of other archives  
 End detection decodes them to find where they end and validation decodes them again for their CRC-32: about twice
 the work of other archives, for the archives of streaming writers (Java's `jar`, a pipe).
 
 ### L218. Limits on what one archive may hold
-**Status:** Open (after P20)  
+**Status:** Accepted (the user's review of 2026-10-14): far above ordinary archives, and a larger ZIP64 backup is
+still carved, only not verified  
 An archive with more than 1,048,576 members stops the walk (Broken: carved up to there), and members beyond 4 GiB
 unpacked in all are not decoded (the archive is `NotValidated`): they bound the memory (40 bytes per member's place)
 and the time (decoding at the inflater's speed) one hit can cost. A larger ZIP64 backup is carved but not verified.
@@ -1701,10 +1834,22 @@ once (30.75 GB), and about 221 GB more is read after it, by the stages that read
 (evaluation, MP4 recovery, fragment reconstruction). Which stage reads how much was not measured. On a device
 rather than an image file, each of those bytes is read from the device.
 
+### L228. The default hit limit stops carving partway through a large drive, and only the log says so
+**Status:** Open (the review of 2026-10-14, from the test stick's scan log)  
+A scan's source pass stops at `ScanConfiguration::maxHits` signature matches (10 million by default;
+`recovery scan --max-hits`, `ScanSettings::maxSignatures`), and every match counts, the ones the header check rejects
+included: in compressed data, by L72's rates, most are MP3 and ADTS frame-sync matches. The test stick's deep scan
+counted 5,484,903 for 28.6 GiB, about 187 per MiB: at that rate the limit is reached after about 52 GiB, and the rest
+of a larger drive is not carved, nor searched by MP4 recovery and fragment reconstruction, which take their hits from
+the same pass. The scan still ends as complete. Only the log says so (a warning: `signature scan ended` with
+`outcome=HitLimitReached`); the CLI's summary, the report and the API do not show where carving stopped. Files that a
+filesystem still names are found all the same.
+
 ## Continuous integration
 
 ### L143. CI does not decode WebP or HEVC
-**Status:** Open  
+**Status:** Accepted (the user's review of 2026-10-14): the runners lack those decoders; the tests skip there and run
+on the development machine, and playability is optional  
 The GitHub runners (`windows-latest`: Windows Server 2025, image `windows-2025-vs2026`, seen 2026-10-05) have no
 usable WebP or HEVC decoder: HEVC is not installed, and a WebP decoder is registered with WIC but cannot be created
 (`WINCODEC_ERR_COMPONENTINITIALIZEFAILURE`, 0x88982F8B). `PlayabilityTest.WebpDecodesWithItsExtension` and

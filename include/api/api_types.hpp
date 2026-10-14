@@ -161,6 +161,7 @@ enum class FilesystemKind : std::uint8_t {
     ExFat,
     Ntfs,
     Fat16,  // after P20
+    Fat12,  // after P20
 };
 
 struct VolumeInfo {

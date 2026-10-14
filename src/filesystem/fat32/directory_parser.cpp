@@ -204,8 +204,8 @@ bool DirectoryParser::feed(std::span<const std::byte> e, std::uint64_t volumeOff
     entry.attributes = {(attributes & kAttrReadOnly) != 0, (attributes & kAttrHidden) != 0,
                         (attributes & kAttrSystem) != 0, (attributes & kAttrArchive) != 0};
     entry.size = loadLe32(e, 28);
-    // FAT16 entries hold only the low 16 bits (bytes 20-21 are reserved there).
-    const std::uint64_t high = boot_.type == FatType::Fat16 ? 0 : loadLe16(e, 20);
+    // FAT12 and FAT16 entries hold only the low 16 bits (bytes 20-21 are reserved there).
+    const std::uint64_t high = boot_.hasFixedRoot() ? 0 : loadLe16(e, 20);
     entry.firstCluster = ClusterNumber{(high << 16) | loadLe16(e, 26)};
     entry.metadataOffset = volumeOffset;
 

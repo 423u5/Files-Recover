@@ -33,7 +33,7 @@ Run the same suite under AddressSanitizer with `msvc-asan`. Run static analysis 
 | --- | --- | --- |
 | `unit` | `tests/unit` | Memory only (core, storage, imaging metadata, partitions, reconstruction of hand-made candidates and their data as file content, output names), plus temporary files for the destination-guard tests |
 | `integration` | `tests/integration` | Temporary files under `%TEMP%\recovery-tests\<random>`, deleted afterwards; the Windows disk resolver; the Windows disk list (P19: disks opened with desired access 0, nothing read) |
-| `filesystem` | `tests/filesystem` | FAT32 (and FAT16, after P20), exFAT and NTFS volumes generated in memory: normal, deleted, fragmented, contiguous, resident, Unicode, different cluster, sector and record sizes |
+| `filesystem` | `tests/filesystem` | FAT32 (and FAT16 and FAT12, after P20), exFAT and NTFS volumes generated in memory: normal, deleted, fragmented, contiguous, resident, Unicode, different cluster, sector and record sizes |
 | `corruption` | `tests/corruption` | Damaged FAT32, exFAT and NTFS metadata: loops, cross-links, truncated chains, damaged entry sets, torn and damaged FILE records, invalid run lists, directory cycles, orphans, unreadable sectors, hostile boot sectors and sizes, random mutation (also of recovery candidates and their reconstruction) |
 | `recovery` | `tests/recovery` | Recovery candidates from generated FAT32, exFAT and NTFS volumes (contiguous, fragmented, deleted, partly overwritten, sparse, resident, Unicode and duplicate names, partitioned disks), their reconstructed data compared with the original files, and recovered files written below `%TEMP%\recovery-tests\<random>`. MP4 recovery (P12): FILESYSTEM, HYBRID and CARVING candidates from volumes and virtual sources larger than 4 GiB. Fragment reconstruction (P13): fragmented files on volumes whose free space holds old data, every status, mutation fuzzing |
 | `carving` | `tests/carving` | The carving framework with test-only formats: signatures, registration, scanning, candidate generation, boundaries, bad sectors, cancellation, and virtual images up to 1 TiB (memory only), plus one temporary disk image file |
@@ -45,7 +45,7 @@ Run the same suite under AddressSanitizer with `msvc-asan`. Run static analysis 
 | `metadata` | `tests/metadata` | P17: media metadata of builder files and of files of independent writers checked against exiftool and ffprobe, previews and their bytes, invalid media (garbage, truncation at every position, mutation fuzzing, damaged Exif and ID3), missing metadata; conditions, duplicates under different names, and recovery status, on the scan tests' card and a session written below `%TEMP%\recovery-tests\<random>` |
 | `cli` | `tests/cli`, `tests/CMakeLists.txt` | P18: the command line run in-process on the scan tests' card written as an image file, a disk with three volumes and simulated physical disks: every command, usage errors, invalid paths, errors, Ctrl+C at every stage, journals cut as crashes leave them; files and sessions below `%TEMP%\recovery-tests\<random>`. `recovery.exe` run as a process: exit codes, Unicode paths, a real Ctrl+Break |
 | `api` | `tests/api`, `tests/CMakeLists.txt` | P19: the GUI-facing API on the scan tests' card as an image file and as simulated physical disks, a disk of three volumes, a simulated disk list: a user interface's workflow compiled against the API's public headers alone, scans, events, concurrent queries, cancellation in every stage, pause and resume, recovery, sessions restored after a close and after a crash, reports, details and previews, imaging around bad sectors; files and sessions below `%TEMP%\recovery-tests\<random>` |
-| `corpus` | `tests/corpus`, `tests/support/corpus.cpp` | P20: the corruption corpus (28 generated disks: P20's 26, a FAT16 card and ZIP archives since, covering the plan's 16 categories, each scanned Deep and Quick through the API, recovered, checked against its original files and its recorded baseline), drives of up to 16 TiB as virtual sources, an opt-in sparse image of tens of GiB, and the logging review; images and sessions in memory or below `%TEMP%\recovery-tests\<random>` |
+| `corpus` | `tests/corpus`, `tests/support/corpus.cpp` | P20: the corruption corpus (29 generated disks: P20's 26, a FAT16 card, ZIP archives and a FAT12 floppy disk since, covering the plan's 16 categories, each scanned Deep and Quick through the API, recovered, checked against its original files and its recorded baseline), drives of up to 16 TiB as virtual sources, an opt-in sparse image of tens of GiB, and the logging review; images and sessions in memory or below `%TEMP%\recovery-tests\<random>` |
 
 ## Test images
 
@@ -91,6 +91,29 @@ Things pyfatfs gets wrong, found during the cross-check, and therefore not used 
 - It writes invalid 8.3 aliases (raw UTF-8 bytes) with mismatched checksums for non-ASCII names. Both
   the engine and pyfatfs itself reject those long names.
 - It compacts the directory on delete instead of marking entries 0xE5, so it can't produce deleted files.
+
+**FAT12 and FAT16 (after P20).** `tests/reference/make_mtools_fat_reference.py` makes three images with
+mkfs.fat (dosfstools) and mtools, which write, fragment and delete files in an image without mounting it: a
+1.44 MB FAT12 floppy disk, an MBR disk with a FAT12 partition of 4 KiB clusters, and a FAT16 volume of 2 KiB
+clusters. They hold folders, long and non-ASCII names, an empty file, fragmented files, files whose chains
+run through FAT12 entries that lie across two FAT sectors, and deleted files and folders. `fsck.fat -n`
+checks each volume. Neither tool needs root: unpack the Ubuntu packages in WSL, as for exiftool.
+
+```sh
+apt-get -o Dir::State::Lists=$HOME/apt/lists -o Dir::Cache=$HOME/apt/cache download dosfstools mtools
+for deb in *.deb; do dpkg -x "$deb" ~/fattools/root; done
+export PATH=~/fattools/root/usr/bin:~/fattools/root/usr/sbin:/usr/sbin:$PATH
+python3 tests/reference/make_mtools_fat_reference.py <dir>
+```
+
+```powershell
+$env:RECOVERY_FAT32_REFERENCE_DIR = "<dir>"; ctest --preset msvc-debug -R Reference
+```
+
+mtools puts a new entry into the slots of a deleted one when they are enough. The script therefore writes
+nothing more into a folder that holds a deleted entry, so that every deleted name its manifest lists is still
+there. On 2026-10-14 (dosfstools 4.2, mtools 4.0.43) `Fat32ReferenceImageTest` and
+`RecoveryReferenceImageTest` passed on all three images.
 
 Images formatted and populated by Windows itself are the preferred reference. Make them on a spare USB
 stick or a VHD, image them, and write a manifest.

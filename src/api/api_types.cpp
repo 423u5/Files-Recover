@@ -71,6 +71,8 @@ std::string_view toString(FilesystemKind kind) noexcept {
         return "ntfs";
     case FilesystemKind::Fat16:
         return "fat16";
+    case FilesystemKind::Fat12:
+        return "fat12";
     }
     return "unknown";
 }

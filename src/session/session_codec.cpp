@@ -111,7 +111,7 @@ template <> struct EnumLimit<partition::PartitionScheme>
 template <> struct EnumLimit<partition::PartitionIssueKind>
     : EnumLimitOf<partition::PartitionIssueKind, partition::PartitionIssueKind::GptUnavailable> {};
 template <> struct EnumLimit<filesystem::FilesystemType>
-    : EnumLimitOf<filesystem::FilesystemType, filesystem::FilesystemType::Fat16> {};
+    : EnumLimitOf<filesystem::FilesystemType, filesystem::FilesystemType::Fat12> {};
 template <> struct EnumLimit<filesystem::AllocationMethod>
     : EnumLimitOf<filesystem::AllocationMethod, filesystem::AllocationMethod::Resident> {};
 template <> struct EnumLimit<filesystem::AllocationIssue>

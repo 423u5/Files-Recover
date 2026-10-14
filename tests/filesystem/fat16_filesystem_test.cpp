@@ -1,7 +1,7 @@
 // FAT16 (after P20: the user's production-readiness list of 2026-10-12): the
 // FAT32 module reads FAT16 volumes as Windows formats them (cards of 2 GB and
 // less): 16-bit FAT entries, a root directory of fixed size before cluster 2,
-// no FSInfo and no backup boot sector. FAT12 is refused.
+// no FSInfo and no backup boot sector. FAT12: fat12_filesystem_test.cpp.
 
 #include "filesystem/fat32/fat32_boot_sector.hpp"
 #include "filesystem/fat32/fat32_filesystem.hpp"
@@ -74,7 +74,7 @@ TEST(Fat16BootSectorTest, ParsesTheLayoutWindowsWrites) {
     const Result<BootSector> boot = parseBootSector(std::span(image).first(512), image.size());
     RECOVERY_ASSERT_OK(boot);
     EXPECT_EQ(boot->type, FatType::Fat16);
-    EXPECT_EQ(boot->fatEntryBytes(), 2U);
+    EXPECT_EQ(boot->fatEntryBits(), 16U);
     EXPECT_EQ(boot->clusterCount, 4200U);
     EXPECT_EQ(boot->rootEntries, 512U);
     EXPECT_EQ(boot->rootDirOffset, builder.fatOffset(2));
@@ -86,16 +86,12 @@ TEST(Fat16BootSectorTest, ParsesTheLayoutWindowsWrites) {
     EXPECT_TRUE(boot->warnings.empty());
 }
 
-TEST(Fat16BootSectorTest, Fat12IsRefusedAndTooManyClustersAreCorrupt) {
+// Fewer than 4085 clusters is FAT12, which is read since L225 (fat12_filesystem_test.cpp).
+TEST(Fat16BootSectorTest, TooManyClustersOrNoRootDirectoryAreCorrupt) {
     Fat32ImageBuilder builder(fat16());
     std::vector<std::byte> sector = builder.build();
     sector.resize(512);
     const std::uint16_t total = loadLe16(sector, 19);
-    // 4084 clusters: FAT12 by the specification's count.
-    storeLe16(sector, 19, static_cast<std::uint16_t>(total - (4200 - 4084)));
-    const Result<BootSector> fat12 = parseBootSector(sector, 64 * kMiB);
-    RECOVERY_EXPECT_ERROR(fat12, ErrorCode::UnsupportedFilesystem);
-    EXPECT_NE(fat12.error().message.find("FAT12"), std::string::npos) << fat12.error().message;
     // 65525 clusters cannot have 16-bit entries.
     storeLe16(sector, 19, 0);
     storeLe32(sector, 32, total - 4200 + 65525);

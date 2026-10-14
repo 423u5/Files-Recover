@@ -34,7 +34,7 @@ drives and other removable storage.
 > every parser of untrusted data, clang-tidy and `/analyze` with every finding triaged, audits (RAII, threads,
 > integer overflow, bounds, error paths, cancellation, memory, I/O failures), a security review, benchmarks against
 > performance targets, multi-TiB drives and bad sectors; the executables are hardened (static C++ runtime, Control
-> Flow Guard, CET, DLLs from System32 only). Since P20, FAT16 volumes are read, and ZIP archives (with the DOCX,
+> Flow Guard, CET, DLLs from System32 only). Since P20, FAT16 and FAT12 volumes are read, and ZIP archives (with the DOCX,
 > XLSX, JAR and APK files built on ZIP) are carved and checked member by member, every CRC-32
 > ([docs/formats/archives.md](docs/formats/archives.md)). Passing builds and tests do **not** mean the engine is
 > production-ready: see [docs/testing/validation.md](docs/testing/validation.md) for what was checked and what is
@@ -65,7 +65,7 @@ drives and other removable storage.
 | `src/storage/windows` | All Win32 storage code (private) |
 | `include/imaging`, `src/imaging` | `ImageWriter` and image metadata |
 | `include/partition`, `src/partition` | MBR/GPT detection, `PartitionSource` |
-| `include/filesystem`, `src/filesystem` | Filesystem-independent model, FAT32 (and FAT16), exFAT, NTFS |
+| `include/filesystem`, `src/filesystem` | Filesystem-independent model, FAT32 (and FAT16, FAT12), exFAT, NTFS |
 | `include/recovery`, `src/recovery` | Also the `recovery_candidates` library: recovery candidates, filesystem-based recovery, reconstruction, recovery output; `recovery_mp4`: MP4 recovery (P12); `recovery_fragments`: fragment reconstruction (P13) |
 | `include/carving`, `src/carving` | Carving framework: signatures, format interface and registry, signature scanner, file carver, validators |
 | `include/formats`, `src/formats` | Carvable formats: the images of P9 (JPEG, PNG, WEBP, GIF, BMP), the audio of P10 (MP3, WAV, M4A, AAC), the MP4 video of P12 and ZIP archives (after P20); the MP4 parser of P11 |

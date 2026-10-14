@@ -116,6 +116,7 @@ add_executable(recovery_filesystem_tests
     filesystem/exfat_filesystem_test.cpp
     filesystem/exfat_names_test.cpp
     filesystem/exfat_reference_image_test.cpp
+    filesystem/fat12_filesystem_test.cpp
     filesystem/fat16_filesystem_test.cpp
     filesystem/fat32_boot_sector_test.cpp
     filesystem/fat32_filesystem_test.cpp

@@ -307,6 +307,34 @@ Bytes smallFat16() {
     return image;
 }
 
+// After P20 (L225): a FAT12 floppy-like volume whose fragmented file has a
+// chain through FAT entry 341, which lies across the FAT's first two
+// sectors; the seed keeps the first 64 KiB, as for FAT16.
+Bytes smallFat12() {
+    Fat32BuilderOptions options;
+    options.fat12 = true;
+    options.clusterCount = 360;
+    options.reservedSectors = 1;
+    options.rootEntries = 224;
+    options.media = 0xF0;
+    options.label = "SEED12";
+    Fat32ImageBuilder builder(options);
+    const std::uint32_t root = Fat32ImageBuilder::root();
+    JpegOptions jpeg;
+    jpeg.width = 16;
+    jpeg.height = 16;
+    (void)builder.addFile(root, "PHOTO.JPG", makeJpeg(jpeg));
+    const auto folder = builder.addDirectory(root, "A long folder name");
+    (void)builder.addFile(folder.clusters.front(), "Unicode ünïcode.png", makePng({}));
+    const auto deleted = builder.addFile(root, "DELETED.GIF", makeGif({}));
+    builder.deleteEntry(deleted);
+    const Bytes wav = makeWav({});
+    (void)builder.addFileInClusters(root, "FRAG.WAV", wav, twoPieces<std::uint32_t>(wav.size(), 512, 40, 334));
+    Bytes image = builder.build();
+    image.resize(std::min<std::size_t>(image.size(), 64 * 1024));
+    return image;
+}
+
 Bytes smallExFat() {
     ExFatBuilderOptions options;
     options.clusterCount = 256;
@@ -537,10 +565,11 @@ Status writeFuzzSeeds(const std::filesystem::path& folder) {
     }
     const Bytes fat32 = smallFat32();
     const Bytes fat16 = smallFat16();
+    const Bytes fat12 = smallFat12();
     const Bytes exfat = smallExFat();
     const Bytes ntfs = smallNtfs();
     for (const auto& [name, bytes] : std::vector<std::pair<std::string, const Bytes*>>{
-             {"fat32", &fat32}, {"fat16", &fat16}, {"exfat", &exfat}, {"ntfs", &ntfs}}) {
+             {"fat32", &fat32}, {"fat16", &fat16}, {"fat12", &fat12}, {"exfat", &exfat}, {"ntfs", &ntfs}}) {
         for (const std::string target : {"filesystem", "scan"}) {
             if (Status added = seeds.add(target, name, *bytes); !added.ok()) {
                 return added;

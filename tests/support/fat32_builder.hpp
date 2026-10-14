@@ -27,7 +27,13 @@ struct Fat32BuilderOptions {
     // and no backup boot sector, a root directory of `rootEntries` slots
     // between the FATs and cluster 2. clusterCount must be 4085 to 65524.
     bool fat16 = false;
+    // FAT12 (after P20): as FAT16, with 12-bit FAT entries (two in three
+    // bytes); clusterCount must be 1 to 4084. A 1.44 MB floppy disk has 1
+    // reserved sector, 224 root entries and 2847 clusters of one sector.
+    bool fat12 = false;
     std::uint16_t rootEntries = 512;
+    // The media descriptor, also kept in FAT entry 0 (floppy disks: 0xF0).
+    std::uint8_t media = 0xF8;
 };
 
 // Builds FAT32 volumes in memory the way Windows lays them out: boot sector
@@ -49,7 +55,7 @@ public:
     explicit Fat32ImageBuilder(Fat32BuilderOptions options = {});
 
     // The root directory's key for addFile and addDirectory (FAT32: its first
-    // cluster; FAT16: the fixed region, and cluster 2 is left unused).
+    // cluster; FAT12 and FAT16: the fixed region, and cluster 2 is left unused).
     [[nodiscard]] static constexpr std::uint32_t root() noexcept { return 2; }
 
     Entry addDirectory(std::uint32_t parent, std::string_view name);
@@ -83,7 +89,7 @@ private:
         std::vector<std::uint32_t> clusters;
         std::size_t nextSlot = 0;
         std::set<std::string> shortNames;
-        bool fixed = false;  // FAT16's root: the region before cluster 2
+        bool fixed = false;  // the root of FAT12 and FAT16: the region before cluster 2
     };
 
     std::uint32_t allocate();
@@ -95,7 +101,8 @@ private:
     void writeBootSector(std::uint32_t sector);
     void writeFsInfo(std::uint32_t sector);
 
-    void writeFat16BootSector();
+    void writeSmallFatBootSector();
+    [[nodiscard]] bool smallFat() const noexcept { return options_.fat16 || options_.fat12; }
     [[nodiscard]] std::uint32_t rootDirSectors() const noexcept;
 
     Fat32BuilderOptions options_;

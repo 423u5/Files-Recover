@@ -1912,6 +1912,78 @@ Image fat16Card() {
     return image;
 }
 
+// After P20 (the user's decision of 2026-10-14 on L225): a 1.44 MB floppy
+// disk, FAT12 without a partition table: files in the fixed root and in a
+// folder, a sound file whose chain runs through FAT entries that lie across
+// two FAT sectors (341 and 682), a fragmented file, deleted files with long
+// and 8.3 names, a deleted folder, and a deleted file in two pieces.
+Image fat12Floppy() {
+    Fat32BuilderOptions options = fatGeometry(1, 2847, "FLOPPY12");  // 512-byte clusters
+    options.fat12 = true;
+    options.reservedSectors = 1;
+    options.rootEntries = 224;
+    options.media = 0xF0;
+    FatVolume v(options, 0x1D01);
+    Fat32ImageBuilder& b = v.builder;
+    const std::uint32_t root = Fat32ImageBuilder::root();
+    std::vector<Original> files;
+
+    const Bytes scan = cameraJpeg(2901, 320, 240);
+    (void)b.addFile(root, "SCAN0001.JPG", scan);
+    files.push_back(named("/SCAN0001.JPG", scan));
+    const Bytes readme = text(2902, 2500);
+    (void)b.addFile(root, "README.TXT", readme);
+    files.push_back(named("/README.TXT", readme, Expected::Unverified, "no format checks text"));
+    const auto documents = b.addDirectory(root, "Documents");
+    const Bytes chart = png(2903, 160, 120);
+    (void)b.addFile(documents.clusters.front(), "Sales chart.png", chart);
+    files.push_back(named("/Documents/Sales chart.png", chart));
+    const Bytes tune = mp3(2904, 60);
+    (void)b.addFile(root, "Ringtone.mp3", tune);
+    files.push_back(named("/Ringtone.mp3", tune));
+    const Bytes memo = wav(2905, 55000);  // 430 clusters
+    (void)b.addFileInClusters(documents.clusters.front(), "Voice memo.wav", memo,
+                              run<std::uint32_t>(320, v.clustersFor(memo.size())));
+    files.push_back(named("/Documents/Voice memo.wav", memo, Expected::Complete,
+                          "its chain runs through FAT entries 341 and 682, which lie across two FAT sectors"));
+    const Bytes pages = jpeg(2906, 288, 216);
+    {
+        const std::uint32_t n = v.clustersFor(pages.size());
+        (void)b.addFileInClusters(documents.clusters.front(), "Fragmented scan.jpg", pages,
+                                  join(run<std::uint32_t>(1000, n / 2), run<std::uint32_t>(1100, n - n / 2)));
+        files.push_back(named("/Documents/Fragmented scan.jpg", pages, Expected::Complete, "in two pieces"));
+    }
+
+    const Bytes shot = jpeg(2907, 240, 180);
+    const auto e1 = b.addFile(root, "Deleted shot.jpg", shot);
+    const Bytes old = png(2908, 96, 72);
+    const auto e2 = b.addFile(root, "OLDCHART.PNG", old);
+    const auto letters = b.addDirectory(root, "Old letters");
+    const Bytes party = jpeg(2909, 200, 150);
+    const auto e3 = b.addFile(letters.clusters.front(), "Party.jpg", party);
+    for (const auto& entry : {e1, e2, e3, letters}) {
+        b.deleteEntry(entry);
+    }
+    files.push_back(named("/Deleted shot.jpg", shot, Expected::Complete, "deleted, long name"));
+    files.push_back(named("/_LDCHART.PNG", old, Expected::Complete, "deleted: an 8.3 name loses its first letter"));
+    files.push_back(named("/Old letters/Party.jpg", party, Expected::Complete, "deleted with its folder"));
+    const Bytes trip = jpeg(2910, 256, 192);
+    {
+        const std::uint32_t n = v.clustersFor(trip.size());
+        const auto e = b.addFileInClusters(root, "Broken trip.jpg", trip,
+                                           join(run<std::uint32_t>(1500, n / 2),
+                                                run<std::uint32_t>(1500 + n / 2 + 12, n - n / 2)));
+        b.deleteEntry(e);
+        files.push_back(with("/Broken trip.jpg", trip, Outcome::Named,
+                             "deleted in two pieces, 12 clusters of old data apart", true));
+    }
+
+    Image image;
+    image.bytes = b.build();
+    image.originals = std::move(files);
+    return image;
+}
+
 // After P20 (the user's decision to carve ZIP): archives on a FAT32 stick.
 // Named ones (DEFLATE, a DOCX, one with an LZMA member nothing can check),
 // deleted ones (an APK, one written with data descriptors), and ones no entry
@@ -2030,6 +2102,9 @@ const std::vector<Entry>& entries() {
             {"normal files", "deleted files"}, fat16Card);
         add("zip-archives", "FAT32: named, deleted and unnamed ZIP archives (DOCX, APK, ZIP64, LZMA), images stored "
             "in intact and damaged archives", {"normal files", "deleted files", "corrupt media"}, zipArchives);
+        add("fat12-floppy", "a 1.44 MB FAT12 floppy disk: the fixed root, a chain through FAT entries across two "
+            "sectors, fragmented and deleted files, a deleted folder",
+            {"normal files", "deleted files", "fragmented files"}, fat12Floppy);
         return list;
     }();
     return all;

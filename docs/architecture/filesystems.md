@@ -24,8 +24,9 @@ and `Resident` with `FileAllocation::residentData`, NTFS allocation issues (`Inv
 ### Opening
 
 - The boot sector is validated field by field (`parseBootSector`). The result is
-  `UnsupportedFilesystem` for anything that isn't FAT32 (including FAT12/16, exFAT and NTFS), and
-  `CorruptedFilesystem` for impossible FAT32 values.
+  `UnsupportedFilesystem` for anything that isn't FAT (exFAT and NTFS among them), and
+  `CorruptedFilesystem` for impossible values. Since after P20 the module reads FAT16 and FAT12 too (see
+  "FAT16 and FAT12" below).
 - If the primary boot sector is invalid, the backup at sector 6 is used, with a warning.
 - The layout (FAT offset, data offset, cluster count) is computed with checked arithmetic. If the FAT is
   too small for the cluster count, the count is limited to what the FAT covers.
@@ -95,6 +96,37 @@ The traversal is depth-first and limited by `ScanLimits`: maximum depth (64), ma
 (10 million), whether to include deleted entries, and whether to go into deleted directories. Directory
 cycles (entries pointing to an ancestor) are reported as `DirectoryLoop` and not followed. Cancellation is
 checked for every directory.
+
+### FAT16 and FAT12 (after P20)
+
+The same module reads FAT16 (the user's production-readiness list of 2026-10-12) and FAT12 (the user's
+decision of 2026-10-14, L225 in [../limitations.md](../limitations.md)): cards of 2 GB and less, older USB
+sticks, floppy disks and volumes of a few megabytes. They differ from FAT32 in their layout, not in their
+directories:
+
+- A boot sector with a 16-bit FAT size or root entry count is FAT12 or FAT16. The count of data clusters
+  decides which, as the specification says: fewer than 4,085 is FAT12, up to 65,524 FAT16, more is corrupt.
+  The type label at offset 54 is not trusted. Errors found before the count is known name both ("FAT12/16
+  boot sector: ...").
+- The root directory is a fixed region of `rootEntries` slots between the FATs and cluster 2, read sector by
+  sector, so an unreadable sector loses only its slots. Directory entries call it cluster 0, and so does the
+  module (`rootDirectory()`).
+- FAT16 entries are 16 bits. FAT12 entries are 12 bits, two in three bytes: an even entry is the low 12 bits
+  of the 16 at its first byte, an odd one the high 12. Both are widened to the FAT32 values of the same
+  meaning (free, next cluster, bad 0xFFF7 or 0xFF7, end of chain from 0xFFF8 or 0xFF8).
+- A FAT12 entry can lie across two FAT sectors (entries 341 and 682 of every 1,024, with 512-byte sectors).
+  When a page of the FAT is put together sector by sector, such an entry is unreadable if either of its
+  sectors is unreadable in every copy.
+- Directory entries hold only the low 16 bits of a start cluster (bytes 20-21 are reserved there).
+- There is no FSInfo, and normally no backup boot sector. The copies of the FAT have no flag for one active
+  copy, so they are read as mirrors.
+- `FilesystemInfo::type` is `Fat16` or `Fat12`. Both are appended to `FilesystemType`, so that the values
+  sessions recorded keep their meaning; the API's `FilesystemKind` is `fat16` or `fat12`.
+
+Tests: `tests/filesystem/fat16_filesystem_test.cpp` and `fat12_filesystem_test.cpp` (built volumes, a
+1.44 MB floppy disk among them), the corpus scenarios `fat16-card` and `fat12-floppy`, and images written by
+mkfs.fat and mtools (`tests/reference/make_mtools_fat_reference.py`, see
+[../testing/testing.md](../testing/testing.md)).
 
 ## Known limitations (P4)
 

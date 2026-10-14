@@ -100,7 +100,17 @@ Fat32Filesystem::Fat32Filesystem(storage::IStorageSource& volume, BootSector boo
     : volume_(volume), boot_(std::move(boot)), logger_(logger) {
     // FatTable keeps a reference to boot_; this object is heap-allocated and never moved.
     fat_ = std::make_unique<FatTable>(volume_, boot_, options.fatCacheBytes);
-    info_.type = boot_.type == FatType::Fat16 ? FilesystemType::Fat16 : FilesystemType::Fat32;
+    switch (boot_.type) {
+    case FatType::Fat32:
+        info_.type = FilesystemType::Fat32;
+        break;
+    case FatType::Fat16:
+        info_.type = FilesystemType::Fat16;
+        break;
+    case FatType::Fat12:
+        info_.type = FilesystemType::Fat12;
+        break;
+    }
     info_.label = boot_.volumeLabel;
     info_.serialNumber = boot_.volumeId;
     info_.bytesPerSector = boot_.bytesPerSector;
@@ -189,9 +199,9 @@ DirectoryEntry Fat32Filesystem::rootDirectory() const {
     DirectoryEntry root;
     root.isDirectory = true;
     root.state = EntryState::Active;
-    // FAT16's root is the fixed region, which FAT calls cluster 0 (as ".." of
-    // a top-level directory does).
-    root.firstCluster = ClusterNumber{boot_.type == FatType::Fat16 ? 0 : boot_.rootCluster};
+    // The root of FAT12 and FAT16 is the fixed region, which FAT calls
+    // cluster 0 (as ".." of a top-level directory does).
+    root.firstCluster = ClusterNumber{boot_.hasFixedRoot() ? 0 : boot_.rootCluster};
     return root;
 }
 
@@ -339,8 +349,8 @@ Result<DirectoryListing> Fat32Filesystem::listDirectory(const DirectoryEntry& di
     }
     const std::uint64_t first = directory.firstCluster.value();
     const bool deleted = directory.state == EntryState::Deleted;
-    // FAT16's root directory: the fixed region before cluster 2, read sector by sector.
-    const bool fixedRoot = boot_.type == FatType::Fat16 && first == 0 && !deleted;
+    // The root directory of FAT12 and FAT16: the fixed region before cluster 2, read sector by sector.
+    const bool fixedRoot = boot_.hasFixedRoot() && first == 0 && !deleted;
     if (!fixedRoot && !boot_.isValidCluster(first)) {
         return makeError(ErrorCode::CorruptedFilesystem,
                          "directory start cluster " + std::to_string(first) + " is out of range");
@@ -369,7 +379,7 @@ Result<DirectoryListing> Fat32Filesystem::listDirectory(const DirectoryEntry& di
         }
     }
 
-    // What the directory is read in: its clusters, or FAT16's root sectors.
+    // What the directory is read in: its clusters, or the fixed root's sectors.
     struct Piece {
         std::uint64_t offset = 0;
         std::uint32_t length = 0;
@@ -406,9 +416,9 @@ Result<DirectoryListing> Fat32Filesystem::listDirectory(const DirectoryEntry& di
             continue;
         }
         if (deleted && index == 0) {
-            // A directory's first entry is "." pointing at itself (FAT16: the low 16 bits only).
+            // A directory's first entry is "." pointing at itself (FAT12 and FAT16: the low 16 bits only).
             const std::span<const std::byte> dot(buffer.data(), kDirectoryEntrySize);
-            const std::uint64_t high = boot_.type == FatType::Fat16 ? 0 : loadLe16(dot, 20);
+            const std::uint64_t high = boot_.hasFixedRoot() ? 0 : loadLe16(dot, 20);
             const std::uint64_t self = (high << 16) | loadLe16(dot, 26);
             if (std::memcmp(dot.data(), ".          ", 11) != 0 || (loadU8(dot, 11) & 0x10) == 0 || self != first) {
                 return makeError(ErrorCode::InvalidFormat, "deleted directory's cluster no longer holds that directory");

@@ -207,7 +207,8 @@ All known limitations, with IDs for discussion, are listed in [../limitations.md
 - "Reallocated" is evidence, not proof. An allocated cluster may still hold the old data. A free cluster may have
   been overwritten and freed again. Nothing in P7 validates content (P9-P14).
 - Compressed and encrypted NTFS data is not recovered.
-- Recovered files do not get their original timestamps or attributes back.
+- Since after P20, recovered files get the times their filesystem recorded (L37, resolved; FAT's local times by this
+  computer's time zone), but not their attributes, and folders keep the time they were made.
 - Original directories whose names differ only in case, or that map to the same safe name, share one output
   directory. Their files still never overwrite each other.
 - Each name of an NTFS hard link is its own candidate, so the data is recovered once per name.

@@ -1,0 +1,24 @@
+# corpus scenario fat12-floppy: a 1.44 MB FAT12 floppy disk: the fixed root, a chain through FAT entries across two sectors, fragmented and deleted files, a deleted folder
+# image 1474560 bytes, sha256 f9c2b3a7c6f514e1, 10 originals
+# deep scan: 10 candidates
+#1 filesystem complete image/jpeg "/SCAN0001.JPG" size=19536/19536 valid=valid:passed/passed sha=db4fd57969eb6448 recovery=recovered "SCAN0001.JPG" => /SCAN0001.JPG
+#2 filesystem unverified(not-validated) other/- "/README.TXT" size=2500/2500 valid=not-validated:unsupported/not-run sha=dab5240adb16b061 recovery=recovered "README.TXT" => /README.TXT
+#3 filesystem complete audio/mp3 "/Ringtone.mp3" size=25739/25739 valid=valid:passed/unsupported sha=b06f7125ce2acf58 recovery=recovered "Ringtone.mp3" => /Ringtone.mp3
+#4 hybrid complete image/jpeg "/Deleted shot.jpg" size=11458/11458 deleted valid=valid:passed/passed sha=5526271479523a2c recovery=recovered "Deleted shot.jpg" => /Deleted shot.jpg
+#5 hybrid complete image/png "/_LDCHART.PNG" size=21007/21007 deleted valid=valid:passed/passed sha=94270e1bea19cee2 recovery=recovered "_LDCHART.PNG" => /_LDCHART.PNG
+#6 reconstruction complete image/jpeg "/Broken trip.jpg" size=12579/12579 deleted fragmented valid=valid:passed/passed sha=74407374325016d2 recovery=recovered "Broken trip.jpg" => /Broken trip.jpg
+#7 filesystem complete image/png "/Documents/Sales chart.png" size=58027/58027 valid=valid:passed/passed sha=d3c19ad0ff865b16 recovery=recovered "Documents/Sales chart.png" => /Documents/Sales chart.png
+#8 filesystem complete audio/wav "/Documents/Voice memo.wav" size=220100/220100 valid=valid:passed/not-applicable sha=113d4f04ecbca94c recovery=recovered "Documents/Voice memo.wav" => /Documents/Voice memo.wav
+#9 filesystem complete image/jpeg "/Documents/Fragmented scan.jpg" size=15769/15769 fragmented valid=valid:passed/passed sha=097dc623a63a9acb recovery=recovered "Documents/Fragmented scan.jpg" => /Documents/Fragmented scan.jpg
+#10 hybrid complete image/jpeg "/Old letters/Party.jpg" size=8661/8661 deleted valid=valid:passed/passed sha=4cf4dc43b9b4f747 recovery=recovered "Old letters/Party.jpg" => /Old letters/Party.jpg
+# quick scan: 10 candidates
+#1 filesystem complete image/jpeg "/SCAN0001.JPG" size=19536/19536 valid=valid:passed/passed sha=db4fd57969eb6448 recovery=recovered "SCAN0001.JPG" => /SCAN0001.JPG
+#2 filesystem unverified(not-validated) other/- "/README.TXT" size=2500/2500 valid=not-validated:unsupported/not-run sha=dab5240adb16b061 recovery=recovered "README.TXT" => /README.TXT
+#3 filesystem complete audio/mp3 "/Ringtone.mp3" size=25739/25739 valid=valid:passed/unsupported sha=b06f7125ce2acf58 recovery=recovered "Ringtone.mp3" => /Ringtone.mp3
+#4 hybrid complete image/jpeg "/Deleted shot.jpg" size=11458/11458 deleted valid=valid:passed/passed sha=5526271479523a2c recovery=recovered "Deleted shot.jpg" => /Deleted shot.jpg
+#5 hybrid complete image/png "/_LDCHART.PNG" size=21007/21007 deleted valid=valid:passed/passed sha=94270e1bea19cee2 recovery=recovered "_LDCHART.PNG" => /_LDCHART.PNG
+#6 filesystem corrupted(validation-failed) image/jpeg "/Broken trip.jpg" size=12579/12579 deleted valid=invalid:failed/not-run sha=7df41133c8a90b3a recovery=recovered "Broken trip.jpg"
+#7 filesystem complete image/png "/Documents/Sales chart.png" size=58027/58027 valid=valid:passed/passed sha=d3c19ad0ff865b16 recovery=recovered "Documents/Sales chart.png" => /Documents/Sales chart.png
+#8 filesystem complete audio/wav "/Documents/Voice memo.wav" size=220100/220100 valid=valid:passed/not-applicable sha=113d4f04ecbca94c recovery=recovered "Documents/Voice memo.wav" => /Documents/Voice memo.wav
+#9 filesystem complete image/jpeg "/Documents/Fragmented scan.jpg" size=15769/15769 fragmented valid=valid:passed/passed sha=097dc623a63a9acb recovery=recovered "Documents/Fragmented scan.jpg" => /Documents/Fragmented scan.jpg
+#10 hybrid complete image/jpeg "/Old letters/Party.jpg" size=8661/8661 deleted valid=valid:passed/passed sha=4cf4dc43b9b4f747 recovery=recovered "Old letters/Party.jpg" => /Old letters/Party.jpg

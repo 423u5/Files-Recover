@@ -97,8 +97,9 @@ Before anything is created, `storage::checkDestinationSafety` rejects:
 
 All known limitations, with IDs for discussion, are listed in [../limitations.md](../limitations.md).
 
-- No image hash (for example SHA-256) is computed yet. Integrity is currently checked by the tests
-  comparing bytes.
+- Since after P20, a complete image's SHA-256 is recorded in its metadata (`sha256=`) and printed by
+  `recovery image` and `recovery inspect` (L1, resolved). It is the hash of the image, unreadable sectors as
+  zeros, not of the source.
 - Imaging uses one thread, and progress is reported at most every `progressInterval`.
 - The metadata replace is only atomic on NTFS and ReFS destinations.
 - Only raw images are written. There is no E01 or other forensic container format.
