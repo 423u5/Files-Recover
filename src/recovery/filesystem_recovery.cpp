@@ -185,11 +185,22 @@ Result<CandidateScan> FilesystemRecovery::findCandidates(const CandidateOptions&
     result.volumeOffset = volumeOffset_;
     result.issues = std::move(scan->issues);
     result.complete = scan->complete;
+    const auto included = [&](const FileRecord& record) {
+        const bool deleted = record.entry.state == filesystem::EntryState::Deleted || record.parentDeleted;
+        return deleted ? options.includeDeleted : options.includeActive;
+    };
+    // The candidates take the records' place (L212): the list is made at its
+    // size, and what each record holds goes once it has been used.
+    result.candidates.reserve(static_cast<std::size_t>(
+        std::count_if(scan->records.begin(), scan->records.end(), [&](const FileRecord& record) {
+            return !record.entry.isDirectory && isUserFile(record) && included(record);
+        })));
     std::uint64_t nextId = options.firstId;
-    for (const FileRecord& record : scan->records) {
+    for (FileRecord& held : scan->records) {
         if (cancel.isCancellationRequested()) {
             return makeError(ErrorCode::Cancelled, "finding recovery candidates was cancelled");
         }
+        const FileRecord record = std::move(held);
         if (record.entry.isDirectory) {
             ++result.directories;
             continue;
@@ -198,11 +209,9 @@ Result<CandidateScan> FilesystemRecovery::findCandidates(const CandidateOptions&
             ++result.systemFiles;
             continue;
         }
-        const bool deleted = record.entry.state == filesystem::EntryState::Deleted || record.parentDeleted;
-        if (deleted ? !options.includeDeleted : !options.includeActive) {
-            continue;
+        if (included(record)) {
+            result.candidates.push_back(buildCandidate(record, CandidateId{nextId++}));
         }
-        result.candidates.push_back(buildCandidate(record, CandidateId{nextId++}));
     }
 
     if (logger_ != nullptr) {

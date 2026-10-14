@@ -108,11 +108,19 @@ bool listed(const std::vector<T>& values, T value) {
     return values.empty() || std::find(values.begin(), values.end(), value) != values.end();
 }
 
-bool matches(const CandidateFilter& filter, const CandidateInfo& info, RecoveryState recovery) {
-    return listed(filter.kinds, info.kind) && listed(filter.conditions, info.condition) &&
-           listed(filter.recovery, recovery) && (!filter.deleted.has_value() || *filter.deleted == info.deleted) &&
-           !(filter.skipDuplicates && info.duplicateOf.has_value());
+bool matches(const CandidateFilter& filter, const CandidateIndexEntry& entry, RecoveryState recovery) {
+    return listed(filter.kinds, entry.kind) && listed(filter.conditions, entry.condition) &&
+           listed(filter.recovery, recovery) && (!filter.deleted.has_value() || *filter.deleted == entry.deleted) &&
+           !(filter.skipDuplicates && entry.duplicate);
 }
+
+CandidateIndexEntry indexEntryOf(const evaluation::EvaluatedCandidate& candidate) {
+    const CandidateInfo info = describeCandidate(candidate);
+    return CandidateIndexEntry{info.kind, info.condition, info.deleted, info.duplicateOf.has_value()};
+}
+
+// Candidates taken from the session at once, to index or describe them.
+constexpr std::size_t kCandidatesAtOnce = 256;
 
 // What job `job` did with a candidate it is done with.
 RecoveryRecord recordOf(std::uint32_t job, const scan::RecoveredItem& item) {
@@ -259,13 +267,19 @@ void OpenSession::buildIndex() {
     playability_ = info.playability;
     knownBadRegions_ = info.configuration.knownBadRegions;
 
-    const std::vector<evaluation::EvaluatedCandidate> candidates = session_->candidates();
-    std::vector<CandidateInfo> index;
-    index.reserve(candidates.size());
-    for (const evaluation::EvaluatedCandidate& candidate : candidates) {
-        index.push_back(describeCandidate(candidate));
+    // A few candidates at a time: the session's are not copied all at once.
+    std::vector<CandidateIndexEntry> index;
+    index.reserve(session_->candidateCount());
+    for (;;) {
+        const std::vector<evaluation::EvaluatedCandidate> some = session_->candidates(index.size(), kCandidatesAtOnce);
+        for (const evaluation::EvaluatedCandidate& candidate : some) {
+            index.push_back(indexEntryOf(candidate));
+        }
+        if (some.size() < kCandidatesAtOnce) {
+            break;
+        }
     }
-    std::vector<std::vector<RecoveryRecord>> recoveries(candidates.size());
+    std::vector<std::vector<RecoveryRecord>> recoveries(index.size());
     for (const session::RecoveryJobStatus& job : info.jobs) {
         for (const evaluation::EvaluatedCandidateId id : job.candidates) {
             if (id.value() != 0 && id.value() <= recoveries.size()) {
@@ -304,7 +318,7 @@ void OpenSession::takeScanUpdate(const scan::ScanUpdate& update) {
             if (count == 0) {
                 first = candidate.id.value();
             }
-            index_.push_back(describeCandidate(candidate));
+            index_.push_back(indexEntryOf(candidate));
             recoveries_.emplace_back();
             ++count;
         }
@@ -661,16 +675,16 @@ Result<RecoveryStart> OpenSession::recover(const RecoverySelection& selection, c
     };
 
     // The candidates asked for, by id.
+    // A session without candidates has nothing to recover: everything asked
+    // for is nothing (an empty start, as for a filter that matches nothing;
+    // L199), and an id asked for does not exist.
     std::vector<std::uint64_t> requested;
     {
         const std::lock_guard lock(indexMutex_);
-        if (index_.empty()) {
-            return fail(refused("session " + id_ + " has no candidates to recover (yet)"));
-        }
         if (selection.all) {
             for (std::size_t i = 0; i < index_.size(); ++i) {
                 if (matches(selection.filter, index_[i], recoveryOf(recoveries_[i]).state)) {
-                    requested.push_back(index_[i].id.value);
+                    requested.push_back(i + 1);
                 }
             }
         } else {
@@ -1058,21 +1072,54 @@ CandidateInfo OpenSession::withRecovery(CandidateInfo info, const std::vector<Re
     return info;
 }
 
+Result<std::vector<CandidateInfo>> OpenSession::describeIndexed(
+    const std::vector<std::pair<std::size_t, std::vector<RecoveryRecord>>>& chosen) const {
+    std::vector<CandidateInfo> described;
+    described.reserve(chosen.size());
+    for (std::size_t k = 0; k < chosen.size();) {
+        // A run of consecutive candidates, a few at a time.
+        std::size_t end = k + 1;
+        while (end < chosen.size() && end - k < kCandidatesAtOnce && chosen[end].first == chosen[end - 1].first + 1) {
+            ++end;
+        }
+        const std::vector<evaluation::EvaluatedCandidate> some = session_->candidates(chosen[k].first, end - k);
+        if (some.size() != end - k) {
+            return makeError(ErrorCode::InternalError, "candidate " + std::to_string(chosen[k].first + 1) +
+                                                           " is listed but the session does not have it");
+        }
+        for (std::size_t i = 0; i < some.size(); ++i) {
+            described.push_back(withRecovery(describeCandidate(some[i]), chosen[k + i].second));
+        }
+        k = end;
+    }
+    return described;
+}
+
 Result<CandidatePage> OpenSession::candidates(const CandidateQuery& query) const {
     const std::uint64_t count = std::min(query.count, CandidateQuery::kMaxPage);
     CandidatePage page;
-    const std::lock_guard lock(indexMutex_);
-    page.total = index_.size();
-    for (std::size_t i = 0; i < index_.size(); ++i) {
-        const RecoveryState state = recoveryOf(recoveries_[i]).state;
-        if (!matches(query.filter, index_[i], state)) {
-            continue;
+    // The page's candidates and their recovery records, chosen under the
+    // lock; described from the session's candidates after it.
+    std::vector<std::pair<std::size_t, std::vector<RecoveryRecord>>> chosen;
+    {
+        const std::lock_guard lock(indexMutex_);
+        page.total = index_.size();
+        for (std::size_t i = 0; i < index_.size(); ++i) {
+            const RecoveryState state = recoveryOf(recoveries_[i]).state;
+            if (!matches(query.filter, index_[i], state)) {
+                continue;
+            }
+            if (page.matching >= query.first && chosen.size() < count) {
+                chosen.emplace_back(i, recoveries_[i]);
+            }
+            ++page.matching;
         }
-        if (page.matching >= query.first && page.candidates.size() < count) {
-            page.candidates.push_back(withRecovery(index_[i], recoveries_[i]));
-        }
-        ++page.matching;
     }
+    Result<std::vector<CandidateInfo>> described = describeIndexed(chosen);
+    if (!described.ok()) {
+        return described.error();
+    }
+    page.candidates = std::move(described).value();
     return page;
 }
 
@@ -1107,7 +1154,6 @@ Result<CandidateDetails> OpenSession::candidateDetails(CandidateId candidate, bo
             return refused("there is no candidate " + std::to_string(candidate.value) + ": session " + id_ + " has " +
                            std::to_string(index_.size()));
         }
-        details.candidate = withRecovery(index_[candidate.value - 1], recoveries_[candidate.value - 1]);
         details.recoveries = recoveries_[candidate.value - 1];
     }
     const std::optional<evaluation::EvaluatedCandidate> evaluated =
@@ -1116,6 +1162,7 @@ Result<CandidateDetails> OpenSession::candidateDetails(CandidateId candidate, bo
         return makeError(ErrorCode::InternalError, "candidate " + std::to_string(candidate.value) +
                                                        " is listed but the session does not have it");
     }
+    details.candidate = withRecovery(describeCandidate(*evaluated), details.recoveries);
     details.explanation = evaluation::explain(*evaluated);
     if (readMedia) {
         const std::lock_guard lock(previewMutex_);

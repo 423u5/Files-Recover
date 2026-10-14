@@ -79,6 +79,10 @@ ipch/
 *.so
 *.dylib
 
+# Python bytecode caches (tests/reference/*.py, tools/static_analysis)
+__pycache__/
+*.pyc
+
 # Static analysis / sanitizer / coverage output
 *.sarif
 *.nativecodeanalysis.xml
@@ -106,6 +110,9 @@ coverage/
 *.e01
 *.imgmeta
 *.badmap
+# Inputs that once failed a fuzz target (P20): small, made by the fuzzers or by
+# hand, never user data. ctest replays them, so they must be committed.
+!fuzz/regressions/**
 
 testdata/*
 !testdata/README.md

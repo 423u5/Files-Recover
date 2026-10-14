@@ -57,6 +57,12 @@ public:
     // One positional read. Must not depend on or modify a shared file
     // position, so concurrent calls are safe.
     [[nodiscard]] virtual DeviceReadResult readAt(std::uint64_t offset, std::span<std::byte> buffer) = 0;
+
+    // Whether the device's media is still there (L203): asked when a read
+    // fails with an error that a removed device and a bad sector both produce
+    // (isAmbiguousDeviceError). A query: nothing is read or written. nullopt
+    // when the device cannot tell (regular files).
+    [[nodiscard]] virtual std::optional<bool> mediaPresent() { return std::nullopt; }
 };
 
 class IDeviceOpener {

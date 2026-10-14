@@ -28,6 +28,7 @@ carving::FormatRegistry formats;                       // every format that can 
 formats::registerImageFormats(formats);
 formats::registerAudioFormats(formats);
 formats::registerVideoFormats(formats);
+formats::registerArchiveFormats(formats, validation::deflateDecoder());   // ZIP (after P20)
 
 FragmentRecovery recovery(disk, formats);              // the source: a disk, an image or a partition, open
 if (Status added = recovery.addVolume(*volume, scan); !added.ok()) { ... }   // each volume: P7's recovery and scan
@@ -59,8 +60,12 @@ the source ──► carving pass ──► seeds: carves that break in free spa
 3. **Carving pass.** The source is scanned once with every registered format and a probe for moov boxes. Only hits
    at the start of a free cluster of an added volume are carved (a file starts at a cluster; clusters in use hold
    other data). A carve that validates claims its clusters; any carve claims its first cluster; a carve that breaks
-   claims its consistent bytes softly and becomes a **carve seed** (`carve`), unless it starts where a filesystem
-   seed starts: then it is that seed's `carve`, as evidence. moov boxes in free clusters are kept as anchors for MP4.
+   (its structure `Broken`, or `Found` but `Invalid`: an end that may be another file's) claims its consistent bytes
+   softly and becomes a **carve seed** (`carve`), unless it starts where a filesystem seed starts: then it is that
+   seed's `carve`, as evidence. A format whose found end proves the file is in one piece
+   (`FormatDescriptor::foundEndMeansContiguous`: ZIP, whose central directory places every member) gives no seed
+   when it is `Found` but `Invalid`: it is damaged, not fragmented. moov boxes in free clusters are kept as anchors
+   for MP4.
 4. **Reconstruction**, filesystem seeds first (volume by volume, in scan order), then carve seeds (in source
    order). A carve seed whose first cluster an earlier reconstruction has taken is part of that file and is
    dropped. Every reconstruction that places data claims its clusters for the rest of the run.

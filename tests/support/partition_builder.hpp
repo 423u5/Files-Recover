@@ -55,6 +55,18 @@ struct GptLayout {
 // the size of `disk`.
 GptLayout writeGpt(std::vector<std::byte>& disk, const GptSpec& spec);
 
+// P20: the GPT of a disk of `diskSectors` sectors too large to hold in memory
+// (a VirtualSource): the protective MBR, primary header and entries (`head`,
+// from LBA 0), and the backup entries and header (`tail`, from `tailLba`), as
+// writeGpt() writes them.
+struct GptRegions {
+    std::vector<std::byte> head;
+    std::vector<std::byte> tail;
+    std::uint64_t tailLba = 0;
+    GptLayout layout;
+};
+[[nodiscard]] GptRegions gptRegions(std::uint64_t diskSectors, const GptSpec& spec);
+
 // Recomputes the header CRC after a test modified header fields.
 void resealGptHeader(std::vector<std::byte>& disk, std::uint32_t sectorSize, std::uint64_t headerLba);
 

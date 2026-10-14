@@ -1,7 +1,8 @@
 include(FetchContent)
 
-# GoogleTest v1.15.2, pinned by commit for reproducible builds.
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+# GoogleTest v1.15.2, pinned by commit for reproducible builds. It uses the
+# static C++ runtime like everything else (CMAKE_MSVC_RUNTIME_LIBRARY, P20).
+set(gtest_force_shared_crt OFF CACHE BOOL "" FORCE)
 set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(googletest
@@ -34,6 +35,8 @@ add_library(recovery_test_support STATIC
     support/partition_builder.cpp
     support/test_files.cpp
     support/virtual_source.cpp
+    support/zip_builders.cpp
+    support/zip_samples.cpp
 )
 target_include_directories(recovery_test_support PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(recovery_test_support
@@ -46,6 +49,7 @@ target_link_libraries(recovery_test_support
 # Unit tests: no real devices; only in-memory sources and mocks.
 # ---------------------------------------------------------------------------
 add_executable(recovery_unit_tests
+    unit/core/boxed_test.cpp
     unit/core/cancellation_test.cpp
     unit/core/checked_math_test.cpp
     unit/core/config_test.cpp
@@ -112,6 +116,7 @@ add_executable(recovery_filesystem_tests
     filesystem/exfat_filesystem_test.cpp
     filesystem/exfat_names_test.cpp
     filesystem/exfat_reference_image_test.cpp
+    filesystem/fat16_filesystem_test.cpp
     filesystem/fat32_boot_sector_test.cpp
     filesystem/fat32_filesystem_test.cpp
     filesystem/fat32_names_test.cpp
@@ -164,6 +169,7 @@ add_executable(recovery_recovery_tests
     recovery/recovery_writer_test.cpp
 )
 target_link_libraries(recovery_recovery_tests PRIVATE
+    recovery::validation
     recovery_test_support
     GTest::gtest_main
     recovery_build_options
@@ -205,7 +211,8 @@ gtest_discover_tests(recovery_carving_tests
 # truncation at every position, damaged headers, segments, chunks, frames and
 # boxes, false signatures, fragmentation, mutation fuzzing, and carving whole
 # images with every format registered. The MP4 parser (P11) on builder files
-# of every layout and on files from FFmpeg, GPAC and Media Foundation.
+# of every layout and on files from FFmpeg, GPAC and Media Foundation. ZIP on
+# archives Python's zipfile wrote, with the validation library's decoder.
 # ---------------------------------------------------------------------------
 add_executable(recovery_formats_tests
     formats/aac_format_test.cpp
@@ -232,8 +239,10 @@ add_executable(recovery_formats_tests
     formats/video_carving_test.cpp
     formats/wav_format_test.cpp
     formats/webp_format_test.cpp
+    formats/zip_format_test.cpp
 )
 target_link_libraries(recovery_formats_tests PRIVATE
+    recovery::validation
     recovery_test_support
     GTest::gtest_main
     recovery_build_options
@@ -271,6 +280,7 @@ add_executable(recovery_validation_tests
     validation/webp_media_test.cpp
     validation/webp_media_vectors.cpp
     validation/webp_media_vectors.hpp
+    validation/zip_validation_test.cpp
 )
 target_link_libraries(recovery_validation_tests PRIVATE
     recovery::playability
@@ -492,4 +502,40 @@ target_compile_definitions(recovery_api_tests PRIVATE RECOVERY_SOURCE_DIR="${PRO
 gtest_discover_tests(recovery_api_tests
     PROPERTIES LABELS api
     DISCOVERY_TIMEOUT 60
+)
+
+# ---------------------------------------------------------------------------
+# Corpus (P20): reproducible scenarios of every category of the plan's test
+# corpus (tests/support/corpus, also written as files by
+# tools/test_image_generator), each scanned deep and quick through the API
+# and recovered, checked against its original files and a recorded baseline
+# of every candidate (tests/corpus/baseline): the regression suite.
+# ---------------------------------------------------------------------------
+add_library(recovery_corpus STATIC
+    support/corpus.cpp
+    support/corpus.hpp
+)
+target_link_libraries(recovery_corpus
+    PUBLIC recovery_test_support recovery::imaging
+    PRIVATE recovery_build_options
+)
+
+add_executable(recovery_corpus_tests
+    corpus/corpus_test.cpp
+    corpus/large_drive_test.cpp
+    corpus/logging_review_test.cpp
+)
+target_link_libraries(recovery_corpus_tests PRIVATE
+    recovery_corpus
+    recovery::api
+    recovery::scan
+    recovery::validation
+    GTest::gtest_main
+    recovery_build_options
+)
+target_compile_definitions(recovery_corpus_tests PRIVATE
+    RECOVERY_CORPUS_BASELINE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus/baseline")
+gtest_discover_tests(recovery_corpus_tests
+    PROPERTIES LABELS corpus
+    DISCOVERY_TIMEOUT 120
 )

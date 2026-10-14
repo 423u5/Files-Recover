@@ -1,12 +1,16 @@
 #include "cli/context.hpp"
 
 #include "cli/format.hpp"
+#include "recovery/text.hpp"
 #include "storage/destination_file.hpp"
 #include "storage/destination_guard.hpp"
+
+#include <windows.h>
 
 #include <cstddef>
 #include <ostream>
 #include <span>
+#include <system_error>
 
 namespace recovery::cli {
 
@@ -14,6 +18,24 @@ namespace {
 
 // ERROR_FILE_NOT_FOUND.
 constexpr std::uint32_t kFileNotFound = 2;
+
+// Windows' own words for a system error code ("The system cannot find the
+// path specified"), without the final period; empty when it has none.
+std::string systemErrorText(std::uint32_t code) {
+    wchar_t* buffer = nullptr;
+    const DWORD length = ::FormatMessageW(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, code, 0,
+        reinterpret_cast<wchar_t*>(&buffer), 0, nullptr);
+    if (length == 0 || buffer == nullptr) {
+        return {};
+    }
+    std::wstring text(buffer, length);
+    ::LocalFree(buffer);
+    while (!text.empty() && (text.back() == L'\r' || text.back() == L'\n' || text.back() == L' ' || text.back() == L'.')) {
+        text.pop_back();
+    }
+    return toUtf8(std::filesystem::path(text));
+}
 
 // Appends formatted records to a file on the destination side.
 class FileLogSink final : public diagnostics::ILogSink {
@@ -76,18 +98,46 @@ void Context::note(std::string_view message) {
 }
 
 ExitCode Context::fail(std::string_view what, const Error& error) {
+    std::string described = describe(error);
+    // "(system error 3)" -> "(system error 3: The system cannot find the path specified)".
+    if (error.systemErrorCode != 0 && described.ends_with(')')) {
+        if (const std::string text = systemErrorText(error.systemErrorCode); !text.empty()) {
+            described.pop_back();
+            described += ": " + text + ")";
+        }
+    }
     std::string message(what);
     message += ": ";
-    message += printable(describe(error));
+    message += printable(described);
     this->error(message);
     return ExitCode::Error;
 }
 
-Status Context::openLog(const std::filesystem::path& path, const storage::SourceInfo* source) {
+Status Context::prepareFolderFor(const std::filesystem::path& path, const storage::SourceInfo* source) {
     if (source != nullptr) {
         if (Status safe = storage::checkDestinationSafety(*source, path, diskResolver()); !safe.ok()) {
             return safe;
         }
+    }
+    const std::filesystem::path folder = path.parent_path();
+    std::error_code ec;
+    if (folder.empty() || std::filesystem::is_directory(folder, ec)) {
+        return success();
+    }
+    std::filesystem::create_directories(folder, ec);
+    if (ec) {
+        // A Windows error code goes with the error; a portable one is told in words.
+        const bool windows = ec.category() == std::system_category();
+        return makeError(ErrorCode::DestinationError,
+                         "cannot create the folder '" + toUtf8(folder) + "'" + (windows ? "" : ": " + ec.message()),
+                         windows ? static_cast<std::uint32_t>(ec.value()) : 0);
+    }
+    return success();
+}
+
+Status Context::openLog(const std::filesystem::path& path, const storage::SourceInfo* source) {
+    if (Status ready = prepareFolderFor(path, source); !ready.ok()) {
+        return ready;
     }
     Result<storage::DestinationFile> file =
         storage::DestinationFile::open(path, storage::DestinationFile::OpenMode::OpenExisting);

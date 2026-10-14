@@ -191,5 +191,31 @@ TEST(WorkerPoolTest, ShutdownFromSeveralThreadsJoinsOnce) {
     EXPECT_EQ(ran.load(), 100);
 }
 
+// P20 (thread-safety audit): a task may shut its own pool down, but a task
+// that destroys it stops the process there, instead of its worker using the
+// destroyed pool once the task returns.
+TEST(WorkerPoolDeathTest, ATaskThatDestroysItsOwnPoolStopsTheProcess) {
+    EXPECT_DEATH(
+        {
+            WorkerPool* raw = makePool(1).release();
+            (void)raw->submit([raw] { delete raw; });
+            std::this_thread::sleep_for(10s);
+        },
+        "destroyed by one of its own tasks");
+}
+
+TEST(WorkerPoolTest, ATaskMayShutItsOwnPoolDown) {
+    std::unique_ptr<WorkerPool> pool = makePool(2);
+    ASSERT_NE(pool, nullptr);
+    std::atomic<bool> ran{false};
+    WorkerPool* raw = pool.get();
+    RECOVERY_ASSERT_OK(pool->submit([raw, &ran] {
+        raw->shutdown();
+        ran.store(true);
+    }));
+    pool.reset();
+    EXPECT_TRUE(ran.load());
+}
+
 }  // namespace
 }  // namespace recovery

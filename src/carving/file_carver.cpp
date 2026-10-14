@@ -256,8 +256,10 @@ Result<CarveOutcome> FileCarver::carveValidated(const SignatureHit& hit) {
         if (!validation.ok()) {
             return failed(validation.error(), content, "validation");
         }
-        if (!isKnown(validation->status) || validation->status == ValidationStatus::NotValidated) {
-            return reject(RejectionReason::FormatFailed, "validation returned no verdict");
+        // NotValidated: the validator could not check this file (an encrypted
+        // ZIP member). It stays a candidate, never trusted (CarveSkipState).
+        if (!isKnown(validation->status)) {
+            return reject(RejectionReason::FormatFailed, "validation returned an unknown verdict");
         }
         candidate.validation = std::move(*validation);
         candidate.validation.validBytes = std::min(candidate.validation.validBytes, candidate.length);

@@ -3,9 +3,11 @@
 #include "carving/file_carver.hpp"
 #include "carving/signature_scanner.hpp"
 #include "evaluation/candidate_evaluation.hpp"
+#include "formats/archive_formats.hpp"
 #include "formats/audio_formats.hpp"
 #include "formats/image_formats.hpp"
 #include "formats/video_formats.hpp"
+#include "validation/deflate_decoder.hpp"
 #include "recovery/filesystem_recovery.hpp"
 #include "recovery/fragment_recovery.hpp"
 #include "recovery/mp4_recovery.hpp"
@@ -59,7 +61,8 @@ const carving::FormatRegistry& allFormats() {
         const bool images = formats::registerImageFormats(formats).ok();
         const bool audio = formats::registerAudioFormats(formats).ok();
         const bool video = formats::registerVideoFormats(formats).ok();
-        EXPECT_TRUE(images && audio && video);
+        const bool archives = formats::registerArchiveFormats(formats, validation::deflateDecoder()).ok();
+        EXPECT_TRUE(images && audio && video && archives);
         return formats;
     }();
     return registry;

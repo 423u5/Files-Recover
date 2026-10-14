@@ -10,6 +10,8 @@
 #include "scan/scan_coordinator.hpp"
 
 #include "scan_test_support.hpp"
+#include "storage/physical_disk_source.hpp"
+#include "support/fake_device.hpp"
 #include "support/memory_source.hpp"
 #include "support/test_macros.hpp"
 #include "support/virtual_source.hpp"
@@ -179,6 +181,36 @@ TEST(ScanCoordinatorTest, AQuickScanEvaluatesTheFilesTheMetadataKnows) {
     }
 }
 
+// L212: a volume's candidates are kept once, however many hold them: the
+// update that delivers them, the scan's own checkpoint, the caller's (a
+// session's) and the copies made of it.
+TEST(ScanCoordinatorTest, AVolumesCandidatesAreSharedNotCopied) {
+    ::recovery::test::MemoryStorageSource source(card());
+    RECOVERY_ASSERT_OK(source.open());
+    ScanConfiguration configuration;
+    configuration.mode = ScanMode::Quick;
+    ScanCoordinator coordinator(source, test::allFormats(), test::allMedia(), configuration, test::testRunOptions());
+    ScanCheckpoint mine;
+    const CandidateScan* delivered = nullptr;
+    const Result<ScanSummary> summary = coordinator.run([&](const ScanUpdate& update) {
+        for (const auto& [index, volume] : update.volumes) {
+            if (volume.candidates.has_value()) {
+                delivered = &*volume.candidates;
+            }
+        }
+        return mine.apply(update);
+    });
+    RECOVERY_ASSERT_OK(summary);
+    ASSERT_NE(delivered, nullptr);
+    ASSERT_EQ(mine.volumes().size(), 1U);
+    ASSERT_TRUE(mine.volumes()[0].candidates.has_value());
+    EXPECT_FALSE(mine.volumes()[0].candidates->candidates.empty());
+    EXPECT_EQ(&*mine.volumes()[0].candidates, delivered);
+    EXPECT_EQ(&*coordinator.checkpoint().volumes()[0].candidates, delivered);
+    const ScanCheckpoint copy = mine;
+    EXPECT_EQ(&*copy.volumes()[0].candidates, delivered);
+}
+
 TEST(ScanCoordinatorTest, TheStagesTurnedOffAddNothing) {
     ::recovery::test::MemoryStorageSource source(card());
     RECOVERY_ASSERT_OK(source.open());
@@ -344,6 +376,48 @@ TEST(ScanCoordinatorTest, AScanStoppedByAFailingSourceResumesOnceItReadsAgain) {
     ::recovery::test::MemoryStorageSource healthy(card());
     RECOVERY_ASSERT_OK(healthy.open());
     EXPECT_EQ(runToTheEnd(healthy, collector, {}, test::testRunOptions()), 1U);
+    expectSameAs(expectedDeep(), collector.candidates);
+}
+
+// P20 (I/O failure audit): a disk unplugged during the pass fails every read
+// from then on with an error that says it is gone. The scan stops at once,
+// instead of reading the rest of the disk sector by sector as bad sectors,
+// and resumes to the same candidates once the disk is back.
+TEST(ScanCoordinatorTest, AScanOfADiskThatIsGoneStopsAtOnceAndResumesWhenItIsBack) {
+    const auto disk = [](std::uint32_t failureCode) {
+        auto config = std::make_shared<::recovery::test::FakeDeviceConfig>();
+        config->data = card();
+        config->geometry = ::recovery::test::diskGeometry(card().size());
+        config->failingRanges = {{card().size() * 3 / 4 / 512 * 512, card().size()}};
+        config->failureCode = failureCode;
+        return config;
+    };
+    // The same quarter of bad sectors (ERROR_CRC): read again sector by sector, and the scan goes on.
+    std::size_t badSectorReads = 0;
+    {
+        auto opener = std::make_shared<::recovery::test::MockDeviceOpener>(disk(23));
+        storage::PhysicalDiskSource bad(7, opener);
+        RECOVERY_ASSERT_OK(bad.open());
+        Collector collector;
+        RECOVERY_ASSERT_OK(runScan(bad, collector, {}, test::testRunOptions()));
+        badSectorReads = opener->stats()->reads.load();
+    }
+
+    const auto config = disk(1167);  // ERROR_DEVICE_NOT_CONNECTED
+    auto opener = std::make_shared<::recovery::test::MockDeviceOpener>(config);
+    storage::PhysicalDiskSource gone(7, opener);
+    RECOVERY_ASSERT_OK(gone.open());
+    Collector collector;
+    const Result<ScanSummary> first = runScan(gone, collector, {}, test::testRunOptions());
+    ASSERT_FALSE(first.ok());
+    EXPECT_EQ(first.error().code, ErrorCode::IoError);
+    EXPECT_NE(first.error().message.find("removed or is not ready"), std::string::npos) << first.error().message;
+    EXPECT_FALSE(collector.checkpoint.completed());
+    EXPECT_LT(opener->stats()->reads.load() * 4, badSectorReads);
+    EXPECT_EQ(collector.checkpoint.metrics().unreadableBytes, 0U);
+
+    config->failingRanges.clear();
+    EXPECT_EQ(runToTheEnd(gone, collector, {}, test::testRunOptions()), 1U);
     expectSameAs(expectedDeep(), collector.candidates);
 }
 

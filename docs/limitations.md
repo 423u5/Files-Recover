@@ -1000,12 +1000,21 @@ A filesystem candidate is validated as the registered format whose header check 
 extension's when several do or none does). Files of formats the engine does not register (documents, archives,
 executables) are `NotValidated` with `FORMAT_UNKNOWN`; a renamed file is validated as what it contains.
 
+On the test stick (L213), 7 deleted ZIP archives, all intact, and 162 Git objects, 99 of them overwritten by later
+files, were all `UNVERIFIED` alike: nothing told the intact files from the overwritten ones.
+Since ZIP is carved (L213), ZIP archives and the documents built on ZIP are validated as ZIP whatever their
+extension; the Git objects still are not.
+
 ### L129. The evaluation keeps its inputs until the end of the run
-**Status:** Open  
+**Status:** Resolved (L212 work, 2026-10-13)  
 The volumes' scans, every carve, MP4 candidate and reconstruction are kept (and copied once) until the run has
 delivered every candidate, on top of what the stages kept themselves (L40, L99, L115).
 
 P15: a scan keeps the stages' results in its checkpoint and gives the evaluation a copy (L139).
+
+Resolved: a run takes the inputs added instead of copying them (an evaluation runs once) and merges them into
+indexes; each candidate's proposal is put together when it is evaluated, and what the run held for it goes as it
+is delivered. The copy a scan gives the evaluation of its carves, MP4 and fragment candidates remains (L139).
 
 ### L130. Carved files get new names
 **Status:** Accepted  
@@ -1077,7 +1086,7 @@ its scan and of its recovery jobs to its journal, flushed before the scan or job
 a restart or a crash. The journal is never compacted (L144).
 
 ### L139. A checkpoint holds every stage's results
-**Status:** Open  
+**Status:** Open; the volumes' candidates are no longer copied (L212 work, 2026-10-13)  
 `ScanCheckpoint` keeps the volumes' candidates, the carves, the MP4 candidates and the reconstructions (about a few
 kilobytes per file), as the scan must to resume. Several copies exist at once:
 - applying an update copies what it holds;
@@ -1088,6 +1097,11 @@ The evaluated candidates are only in the updates (the checkpoint keeps records o
 
 P16: a session is such a caller: it keeps its checkpoint beside the coordinator's while its scan runs, and the
 evaluated candidates (L145).
+
+L212 work: a volume's candidates are kept once, however many hold them: the update, the coordinator's checkpoint, a
+session's and their copies share them (`SharedBox`), and the evaluation reads them without copying. The carves, MP4
+and fragment candidates are still copied into each checkpoint that applies their update, and once into the
+evaluation (given up as the candidates are delivered).
 
 ### L140. A crash while a file is written leaves it behind
 **Status:** Resolved (P16), but for L148  
@@ -1120,12 +1134,15 @@ active and deleted. It skips the source pass, MP4 recovery's carving and fragmen
 the files themselves.
 
 ### L197. The scan's heap test can fail under load
-**Status:** Open (found in P19)  
+**Status:** Mitigated (after P20): a difference beyond the allowance is measured again  
 `ScanLargeImageTest.MemoryStaysBoundedWhateverTheImageSize` compares the heap peaks of scans of a 1.25 GiB and a
 5 GiB image and allows them to differ by 2 MiB. In one full debug run of P19 (`ctest -j 8`, every suite at once)
 they differed by 2.6 MB (19.6 MB and 22.2 MB); the test passed alone, in the full run after it, and in the full
 release run (AddressSanitizer skips it). The peak depends on how much work is in flight when the scheduler is busy
 (blocks read ahead, carves made ahead), not only on the image's size: the allowance is tight for a loaded machine.
+Since 2026-10-13 a difference beyond 2 MiB has both sizes measured again (twice at most), and the lowest peak of each
+size counts: load only adds to a peak, and memory that grew with the image would be in every measurement. The CI
+debug failure of 4497e28 (2026-10-09) may have been this test; its log needs admin rights and was not read.
 
 ## Sessions (P16)
 
@@ -1473,6 +1490,216 @@ converges on a folder are written in both (`tools/recovery_cli/cli/sources.cpp`,
 **Status:** Open  
 A recovery request records its new job before it starts the operation's thread. If the thread cannot be started (no
 resources), the request fails and the job stays recorded, not started: `resumeRecovery` runs it.
+
+## Final validation (P20)
+
+### L198. A carve inside an overlong allocation is linked to that file
+**Status:** Open (found by the corpus, `exfat-damaged-entries`)  
+A file whose recorded length runs beyond its real data (exFAT `Longer.mp3`: DataLength 64 KiB past its clusters)
+claims the clusters after it. A carve found there (`/Folder/Inside.jpg`, whose folder was overwritten) lies inside
+that claimed range, so the evaluation links it to the file as its container (`INSIDE_ACTIVE_FILE`, `in=#3` in the
+baseline), although the deep scan's HYBRID candidate for the MP3 ends where its data ends. The carve is recovered
+whole and Complete; only the link, and the report's "inside" evidence, are wrong.
+
+### L199. Recovering everything in a session without candidates is refused
+**Status:** Resolved (after P20, the user's production-readiness list of 2026-10-12): `recoverAll` on a session
+without candidates returns an empty `RecoveryStart` (nothing requested, no job, no folder made), as a filter that
+matches nothing does; a candidate id asked for still does not exist (`AScanThatDeliveredNothingYetHasNothingToRecover`,
+the corpus's `empty-noise`)  
+Found by the corpus, `empty-noise`.  
+`RecoveryApi::recoverAll` on a session whose scan found nothing fails with InvalidInput ("session ... has no
+candidates to recover (yet)") instead of starting an empty job. A user interface must handle it as "nothing to
+do". The corpus suite skips recovery for such scenarios.
+
+### L200. Junk FAT32 entries with valid names are still listed
+**Status:** Accepted (P20, the user's decision of 2026-10-09)  
+A folder cluster overwritten with other data is parsed as directory entries. Slots whose 8.3 name is invalid and
+that hold an impossible field (reserved attribute bits, a first cluster outside the volume, a size beyond it) are
+skipped and counted in a `DirectoryInvalid` issue. A slot of other data whose 11 name bytes happen to be valid
+characters is still listed, usually as an unrecoverable or corrupted candidate.
+
+### L201. A session's journal decides where its jobs write and what a resume removes
+**Status:** Accepted (P20 security review)  
+A job's destination and the files it began are read back from the journal. Since P20 a resume removes only begun
+files below the job's destination (`AResumedJobRemovesOnlyFilesBegunInsideItsDestination`); a file the journal
+names elsewhere is left alone with a warning. A journal written by someone else still chooses the destination
+itself, where the resumed job writes files and removes begun files (regular files no larger than their
+candidate). Session folders must be protected like the user's own files: do not resume another person's session.
+
+### L202. A journal record may ask for memory up to the journal's size
+**Status:** Accepted (P20 audit)  
+A record's payload is read whole before it is decoded; its length is checked against the bytes left in the journal
+file, not against a fixed limit, so a damaged or hostile journal of N bytes can make the session allocate about N
+bytes once. Journals are the session's own files, normally a few megabytes.
+
+### L203. A removed device is recognized by nine Windows errors
+**Status:** Open (P20 I/O failure audit)  
+A read that fails with ERROR_NOT_READY, ERROR_DEV_NOT_EXIST, ERROR_NO_SUCH_DEVICE, ERROR_FILE_INVALID,
+ERROR_MEDIA_CHANGED, ERROR_NO_MEDIA_IN_DRIVE, ERROR_DEVICE_NOT_CONNECTED, ERROR_DEVICE_REMOVED or
+ERROR_DEVICE_NOT_AVAILABLE stops the operation at once (`ReadStatus::DeviceLost`): it resumes when the device is
+back. Any other error is a bad sector, retried sector by sector. Some USB bridges report a pulled device as
+ERROR_GEN_FAILURE or ERROR_IO_DEVICE, which real media errors also produce: the engine then reads the rest of the
+device as bad sectors, slowly, before the scan or imaging ends. The list is not verified against real hardware.
+
+### L204. Fuzzing is time-boxed
+**Status:** Open (P20)  
+Each libFuzzer target ran for a fixed time on one 4-core machine (see `docs/testing/validation.md`); CI runs only
+a short smoke run and the saved regressions. Inputs of the carving and scan targets are capped at 256 KiB, so
+behaviour that needs larger structures (multi-megabyte MP4 tables, large volumes) is reached only through the
+seeds and the deterministic tests.
+
+### L205. Static analysis covers the engine and the CLI, not the tests
+**Status:** Accepted (P20)  
+`/analyze` (preset msvc-analyze) and clang-tidy (bugprone, clang-analyzer, concurrency, performance and a few cert
+and misc checks) cover `src/` and `tools/recovery_cli/`. Test code and the other tools are compiled with /W4 /WX
+only. Checks that duplicate MSVC warnings (narrowing) are off; the multiplication-widening check ran separately.
+
+### L206. No thread or undefined-behaviour sanitizer
+**Status:** Accepted (P20)  
+MSVC has AddressSanitizer only: there is no ThreadSanitizer, UndefinedBehaviorSanitizer or MemorySanitizer build.
+Data races are covered by review, the concurrency tests and clang-tidy's concurrency checks; signed overflow and
+similar undefined behaviour by review, /RTC in debug builds and the integer-overflow audit.
+
+### L207. Volume folders are decided when a job runs
+**Status:** Open (P20)  
+A recovery writes a folder per volume when the scan's candidates lie on more than one volume, decided from all the
+candidates the session holds when the job runs. A job run while a scan is unfinished (candidates of one volume so
+far) writes without volume folders; a later job, after the scan found more volumes, writes with them.
+
+### L208. The executables need Media Foundation
+**Status:** Open (P20)  
+`recovery.exe` and the tests import `mfplat.dll` and `mfreadwrite.dll` (the playability check). Windows N editions
+without the Media Feature Pack do not have them, so the executables do not start there at all.
+
+### L209. Out of memory is an exception
+**Status:** Open (P20 static analysis)  
+The engine reports errors as `Result`s, but `std::bad_alloc` propagates out of API calls and engine functions. A
+`startImaging` that runs out of memory while starting its thread leaves the imaging listed without a thread, and
+destructors that run out of memory end the process (`std::terminate`).
+
+### L210. The playability check runs Windows' decoders on untrusted files
+**Status:** Accepted (P20 security review)  
+With playability asked for (`recovery scan --playability`, `ScanSettings::playability`), every candidate that
+passes the engine's own checks is decoded by the Windows Imaging Component or Media Foundation inside the engine's
+process, which often runs as an administrator: a flaw in one of Windows' codecs (or in a third-party codec installed
+on the computer) is then reachable by a crafted file. It is off by default; Windows Update keeps its codecs patched.
+
+### L211. Performance was measured on one computer, without a USB device
+**Status:** Open (P20)  
+The targets of `docs/testing/performance.md` were measured on one 4-core desktop with images on a SATA SSD read
+through the file cache: the engine's own speed, not a device's. Real USB drives and card readers, slower or
+faster computers and other disks were not measured, and CI does not run the benchmark.
+
+### L212. Memory grows with the number of files found
+**Status:** Partly resolved (2026-10-13): the engine's own copies are gone; a session still keeps every candidate in
+memory  
+A scan's memory does not depend on the source's size, but every candidate is kept in memory with its evidence,
+validation results and SHA-256 for the session: about 8 KiB per file found (a quick scan of 5,000, 20,000 and 40,000
+files peaked at 90, 204 and 368 MiB). A drive holding a million files would need about 8 GB, and the API's index
+of a session's candidates adds to it. Nothing streams the candidates to disk and drops them from memory.
+
+2026-10-13: most of that memory was copies the engine held while scanning. The evaluation built every candidate's
+proposal, with a copy of each filesystem candidate, before evaluating the first, and kept them to the end (L129);
+the update, the scan's checkpoint and a session's each held a copy of every volume's candidates (L139); the
+filesystem's records stayed beside the candidates made from them; and the API kept a whole `CandidateInfo` (408
+bytes and its strings) per candidate. Now:
+- an evaluated candidate takes 1,024 bytes instead of 1,912 (the carve and the MP4, fragment and allocation
+  evidence are held on the heap, when there is some: `Boxed`);
+- the evaluation keeps one small item per candidate, puts each candidate's proposal together when it evaluates it,
+  and gives up what it held as it delivers it; it takes its inputs instead of copying them (L129);
+- a volume's candidates are kept once, whoever holds them (`SharedBox`, L139);
+- the filesystem's records go as their candidates are made, and the list of candidates is made at its size;
+- the API's index keeps four bytes per candidate, and makes the `CandidateInfo`s of the pages asked for;
+- duplicate carves are found in n log n instead of n² (a deep scan of a large drive).
+
+Measured on the `quick-files` cards of 5,000, 20,000 and 40,000 files (`docs/testing/performance.md`): the CLI's
+quick scan peaked at 38, 137 and 176 MiB of private memory (61, 246 and 351 before), about 2 KB more per file found
+(5.4 KB before); the engine alone, without its fixed read cache, at 0.85 to 0.96 KB per file (4.0 to 4.9 KB before).
+What remains is the session's: every evaluated candidate (about 1.3 KB with its names and regions, and up to half as
+much again while its list grows), the scan's checkpoint (the volumes' candidates, about 0.6 KB each) and a record per
+candidate in each checkpoint. A drive holding a million files needs about 2 GB; nothing streams the candidates to
+disk yet.
+
+## Test on a real USB stick (after P20)
+
+### L213. Archives, documents and text files are found only by name
+**Status:** Partly resolved (after P20, the user's decision of 2026-10-12): ZIP and the formats built on it are carved and validated (`docs/formats/archives.md`); PDFs, text and other documents are still found only by name  
+Carving knows images, audio and MP4 only (P9–P12). A file of any other type (ZIP archives and the formats built on
+them: `.docx`, `.xlsx`, `.pptx`, `.jar`, `.apk`; PDFs; text and source files such as `.java`, `.xml`, `.txt`) is
+recovered only while a filesystem entry still names it, and then without validation (L128). On the test stick (NTFS,
+reformatted), two intact ZIP archives of Android projects (42.8 MB holding 2,946 files, and 148 KB; every member's
+CRC-32 right) had no entry left and were not recovered. A scan of the whole image found no loose text file at any
+cluster start: the projects' sources were only inside ZIP archives and Git objects. Text has no signature to carve
+by; ZIP has one (`PK\x03\x04`), a recorded end (the end of central directory record) and a CRC-32 for every member,
+so it could be carved and validated as the media formats are.
+
+### L214. Carved archives are named .zip whatever they hold
+**Status:** Open (after P20)  
+A carved archive is written as `recovered_NNNNNN.zip`, also when it is a DOCX, XLSX, PPTX, ODT, JAR, APK or EPUB
+file: the formats built on ZIP are not told apart, although their first members and folders would tell them
+(`[Content_Types].xml` and `word/`, `META-INF/MANIFEST.MF`, `AndroidManifest.xml`, `mimetype`). Renaming the file is
+enough to open it with its program. Named files keep their names.
+
+### L215. Archive members the engine cannot decode leave the archive unverified
+**Status:** Open (after P20)  
+Only stored and DEFLATE data is decoded. An archive with an encrypted member, or one compressed with Deflate64,
+bzip2, LZMA, Zstandard, XZ or PPMd, is `UNVERIFIED` (its structural level `Unsupported`) and never trusted, even
+when its structure is consistent: a damaged copy and an intact one look alike. Windows' own ZIP writer uses DEFLATE;
+7-Zip and WinZip can write the others.
+
+### L216. A member sized only by its data descriptor needs the descriptor's signature unless it is DEFLATE
+**Status:** Open (after P20)  
+When a local header leaves the sizes to a data descriptor (flag 3), DEFLATE data is decoded to find where it ends,
+but stored, encrypted or otherwise compressed data is found only by the descriptor's signature `PK 07 08` (optional
+in the specification) followed by a size that matches. Without it the walk breaks there and the archive is carved
+only up to that member. An APK signing block cut short also breaks the walk (Broken, not Truncated).
+
+### L217. DEFLATE members sized by data descriptors are decoded twice
+**Status:** Open (after P20)  
+End detection decodes them to find where they end and validation decodes them again for their CRC-32: about twice
+the work of other archives, for the archives of streaming writers (Java's `jar`, a pipe).
+
+### L218. Limits on what one archive may hold
+**Status:** Open (after P20)  
+An archive with more than 1,048,576 members stops the walk (Broken: carved up to there), and members beyond 4 GiB
+unpacked in all are not decoded (the archive is `NotValidated`): they bound the memory (40 bytes per member's place)
+and the time (decoding at the inflater's speed) one hit can cost. A larger ZIP64 backup is carved but not verified.
+The maximum size of a carved archive is 64 GiB.
+
+### L219. An archive whose first members are missing is carved without its central directory
+**Status:** Open (after P20)  
+When an archive's start is overwritten, or lies in a fragment that is not found, a hit at a later member starts a
+carve whose central directory places the archive earlier: the carve ends before the directory (Broken). Repair tools
+(`zip -FF`, 7-Zip) can read such members from their local headers; the engine neither repairs nor extracts archives.
+
+### L220. A damaged archive is recovered as a whole, not member by member
+**Status:** Open (after P20)  
+A `CORRUPTED` archive is written as it is. Its intact members are not delivered as files of their own, except the
+stored images, audio and video that carving finds inside it (a damaged archive is not trusted); a tool that checks
+every CRC-32 may refuse to open it, while others extract what is intact.
+
+### L221. Files stored in a verified archive are not delivered on their own
+**Status:** Accepted (the user's decision of 2026-10-12)  
+The images, audio and video stored in an archive that validated are part of it, and carving skips them (L51):
+someone looking for photos finds them by opening the archives. On the test stick that was 1,540 of 1,755 carved
+files (1,499 PNG icons of Android build output, inside project archives). In a damaged or unverifiable archive they
+are carved as before.
+
+### L222. Incrementally linked debug executables failed Control Flow Guard checks
+**Status:** Resolved (2026-10-13: hardened builds link with `/INCREMENTAL:NO`, `cmake/RecoveryBuildOptions.cmake`)  
+After a change that recompiled most objects (a member added to `FormatDescriptor`), two incrementally linked
+debug test executables ended with `0xC0000409` and no output: in the corpus scenario `zip-archives` and in nine
+CLI tests of simulated disks, every time. Control Flow Guard stops an indirect call whose target its table does
+not hold with that code. The same sources linked again ran cleanly (37 runs of the scenario, 24 of them four at
+a time), and the CLI ran the same scans, recovery and report. Debug links were incremental by CMake's default;
+release links never were. What went wrong inside the linker was not established.
+
+### L223. A deep scan reads its source about eight times over
+**Status:** Open (the test stick, 2026-10-12)  
+The stick's deep scan read 252.5 GB for a 28.6 GiB image (251.7 GB with ZIP carving): the source pass reads it
+once (30.75 GB), and about 221 GB more is read after it, by the stages that read the candidates' content again
+(evaluation, MP4 recovery, fragment reconstruction). Which stage reads how much was not measured. On a device
+rather than an image file, each of those bytes is read from the device.
 
 ## Continuous integration
 

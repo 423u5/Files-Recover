@@ -46,12 +46,21 @@ public:
     void warning(std::string_view message);
     void note(std::string_view message);
 
-    // Reports that `what` failed with `error`, and returns ExitCode::Error.
+    // Reports that `what` failed with `error`, and returns ExitCode::Error. A
+    // Windows error code comes with Windows' own words for it.
     [[nodiscard]] ExitCode fail(std::string_view what, const Error& error);
+
+    // The folder that will hold the file `path` (a log, an image, a report),
+    // created when it does not exist yet, as `recover` creates its
+    // destination. Checked first as a recovery destination is, against
+    // `source` (none: no source to protect), so that nothing is ever created
+    // on the source. Fails with DestinationError.
+    [[nodiscard]] Status prepareFolderFor(const std::filesystem::path& path, const storage::SourceInfo* source);
 
     // --log: the engine's log records (Info and above) appended to `path`,
     // which must not be on `source` (checked as a recovery destination is;
-    // none: no source to protect). Fails with the destination's error.
+    // none: no source to protect); its folder is created when missing. Fails
+    // with the destination's error.
     [[nodiscard]] Status openLog(const std::filesystem::path& path, const storage::SourceInfo* source);
     // The log, or null without --log.
     [[nodiscard]] diagnostics::Logger* logger() noexcept { return logger_.get(); }

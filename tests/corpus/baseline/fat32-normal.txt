@@ -1,0 +1,36 @@
+# corpus scenario fat32-normal: FAT32 card, 4 KiB clusters: every format in folders, small and empty files
+# image 10523648 bytes, sha256 ca9f19e2a5c93d9c, 16 originals
+# deep scan: 16 candidates
+#1 filesystem unverified(not-validated) other/- "/NOTES.TXT" size=3000/3000 valid=not-validated:unsupported/not-run sha=37c34eaa479821a0 recovery=recovered "NOTES.TXT" => /NOTES.TXT
+#2 filesystem complete image/gif "/DOT.GIF" size=807/807 valid=valid:passed/passed sha=670fb2b458914a8a recovery=recovered "DOT.GIF" => /DOT.GIF
+#3 filesystem complete audio/wav "/TINY.WAV" size=116/116 valid=valid:passed/not-applicable sha=d7dee4552ca1a55b recovery=recovered "TINY.WAV" => /TINY.WAV
+#4 filesystem unverified(not-validated) other/- "/EMPTY.DAT" size=0/0 valid=not-validated:unsupported/not-run sha=e3b0c44298fc1c14 recovery=recovered "EMPTY.DAT" => /EMPTY.DAT
+#5 filesystem complete image/jpeg "/DCIM/100MEDIA/IMG_0001.JPG" size=19224/19224 valid=valid:passed/passed sha=fb03ca84f727442c recovery=recovered "DCIM/100MEDIA/IMG_0001.JPG" => /DCIM/100MEDIA/IMG_0001.JPG
+#6 filesystem complete image/jpeg "/DCIM/100MEDIA/IMG_0002.JPG" size=12754/12754 valid=valid:passed/passed sha=6666cbbb7b87374a recovery=recovered "DCIM/100MEDIA/IMG_0002.JPG" => /DCIM/100MEDIA/IMG_0002.JPG
+#7 filesystem complete image/png "/Pictures/Sunset Beach.png" size=58027/58027 valid=valid:passed/passed sha=d6c93cbc027760d1 recovery=recovered "Pictures/Sunset Beach.png" => /Pictures/Sunset Beach.png
+#8 filesystem complete image/gif "/Pictures/ANIM.GIF" size=10944/10944 valid=valid:passed/passed sha=4cb09bb0f9ca6e94 recovery=recovered "Pictures/ANIM.GIF" => /Pictures/ANIM.GIF
+#9 filesystem complete image/bmp "/Pictures/ICON.BMP" size=9270/9270 valid=valid:passed/not-applicable sha=56491bbe0a534226 recovery=recovered "Pictures/ICON.BMP" => /Pictures/ICON.BMP
+#10 filesystem complete image/webp "/Pictures/photo.webp" size=128/128 valid=valid:passed/passed sha=f3b55d2c834b11de recovery=recovered "Pictures/photo.webp" => /Pictures/photo.webp
+#11 filesystem complete image/webp "/Pictures/lossless.webp" size=154/154 valid=valid:passed/passed sha=b1ec24c6e381a441 recovery=recovered "Pictures/lossless.webp" => /Pictures/lossless.webp
+#12 filesystem complete audio/mp3 "/Music/SONG.MP3" size=126049/126049 valid=valid:passed/unsupported sha=420146c07a38b133 recovery=recovered "Music/SONG.MP3" => /Music/SONG.MP3
+#13 filesystem complete audio/wav "/Music/Voice memo.wav" size=80100/80100 valid=valid:passed/not-applicable sha=207aabf199e8fda9 recovery=recovered "Music/Voice memo.wav" => /Music/Voice memo.wav
+#14 filesystem complete audio/m4a "/Music/TRACK.M4A" size=22070/22070 valid=valid:passed/passed sha=839ffdacb44bb0d3 recovery=recovered "Music/TRACK.M4A" => /Music/TRACK.M4A
+#15 filesystem complete audio/aac "/Music/RADIO.AAC" size=21695/21695 valid=valid:passed/passed sha=829c2d59b926d3ce recovery=recovered "Music/RADIO.AAC" => /Music/RADIO.AAC
+#16 filesystem complete video/mp4 "/Video/CLIP.MP4" size=92633/92633 valid=valid:passed/passed sha=12501c417f224e14 recovery=recovered "Video/CLIP.MP4" => /Video/CLIP.MP4
+# quick scan: 16 candidates
+#1 filesystem unverified(not-validated) other/- "/NOTES.TXT" size=3000/3000 valid=not-validated:unsupported/not-run sha=37c34eaa479821a0 recovery=recovered "NOTES.TXT" => /NOTES.TXT
+#2 filesystem complete image/gif "/DOT.GIF" size=807/807 valid=valid:passed/passed sha=670fb2b458914a8a recovery=recovered "DOT.GIF" => /DOT.GIF
+#3 filesystem complete audio/wav "/TINY.WAV" size=116/116 valid=valid:passed/not-applicable sha=d7dee4552ca1a55b recovery=recovered "TINY.WAV" => /TINY.WAV
+#4 filesystem unverified(not-validated) other/- "/EMPTY.DAT" size=0/0 valid=not-validated:unsupported/not-run sha=e3b0c44298fc1c14 recovery=recovered "EMPTY.DAT" => /EMPTY.DAT
+#5 filesystem complete image/jpeg "/DCIM/100MEDIA/IMG_0001.JPG" size=19224/19224 valid=valid:passed/passed sha=fb03ca84f727442c recovery=recovered "DCIM/100MEDIA/IMG_0001.JPG" => /DCIM/100MEDIA/IMG_0001.JPG
+#6 filesystem complete image/jpeg "/DCIM/100MEDIA/IMG_0002.JPG" size=12754/12754 valid=valid:passed/passed sha=6666cbbb7b87374a recovery=recovered "DCIM/100MEDIA/IMG_0002.JPG" => /DCIM/100MEDIA/IMG_0002.JPG
+#7 filesystem complete image/png "/Pictures/Sunset Beach.png" size=58027/58027 valid=valid:passed/passed sha=d6c93cbc027760d1 recovery=recovered "Pictures/Sunset Beach.png" => /Pictures/Sunset Beach.png
+#8 filesystem complete image/gif "/Pictures/ANIM.GIF" size=10944/10944 valid=valid:passed/passed sha=4cb09bb0f9ca6e94 recovery=recovered "Pictures/ANIM.GIF" => /Pictures/ANIM.GIF
+#9 filesystem complete image/bmp "/Pictures/ICON.BMP" size=9270/9270 valid=valid:passed/not-applicable sha=56491bbe0a534226 recovery=recovered "Pictures/ICON.BMP" => /Pictures/ICON.BMP
+#10 filesystem complete image/webp "/Pictures/photo.webp" size=128/128 valid=valid:passed/passed sha=f3b55d2c834b11de recovery=recovered "Pictures/photo.webp" => /Pictures/photo.webp
+#11 filesystem complete image/webp "/Pictures/lossless.webp" size=154/154 valid=valid:passed/passed sha=b1ec24c6e381a441 recovery=recovered "Pictures/lossless.webp" => /Pictures/lossless.webp
+#12 filesystem complete audio/mp3 "/Music/SONG.MP3" size=126049/126049 valid=valid:passed/unsupported sha=420146c07a38b133 recovery=recovered "Music/SONG.MP3" => /Music/SONG.MP3
+#13 filesystem complete audio/wav "/Music/Voice memo.wav" size=80100/80100 valid=valid:passed/not-applicable sha=207aabf199e8fda9 recovery=recovered "Music/Voice memo.wav" => /Music/Voice memo.wav
+#14 filesystem complete audio/m4a "/Music/TRACK.M4A" size=22070/22070 valid=valid:passed/passed sha=839ffdacb44bb0d3 recovery=recovered "Music/TRACK.M4A" => /Music/TRACK.M4A
+#15 filesystem complete audio/aac "/Music/RADIO.AAC" size=21695/21695 valid=valid:passed/passed sha=829c2d59b926d3ce recovery=recovered "Music/RADIO.AAC" => /Music/RADIO.AAC
+#16 filesystem complete video/mp4 "/Video/CLIP.MP4" size=92633/92633 valid=valid:passed/passed sha=12501c417f224e14 recovery=recovered "Video/CLIP.MP4" => /Video/CLIP.MP4

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "recovery/result.hpp"
+#include "recovery/sha256.hpp"
 #include "storage/bad_region.hpp"
 #include "storage/storage_source.hpp"
 
@@ -46,6 +47,10 @@ struct ImageMetadata {
     std::string startedUtc;
     std::string updatedUtc;
     std::vector<storage::BadRegion> badRegions;
+    // SHA-256 of the whole image file as written (unreadable sectors as the
+    // zeros written for them), recorded once the image is complete: shows
+    // later that the image has not changed (L1). Older metadata has none.
+    std::optional<Sha256Digest> sha256;
 };
 
 // Limits applied when parsing (metadata files are untrusted input).

@@ -79,13 +79,22 @@ struct FormatDescriptor {
     std::uint32_t headerSize = 0;
     EndDetectionMethod endDetection = EndDetectionMethod::StructureWalk;
     ExtractionStrategy extraction = ExtractionStrategy::Contiguous;
-    // The format's files are streams of frames that each start with one of
-    // its signatures (MPEG audio, ADTS), so every frame of a file is a hit,
-    // and a stream is a file of its own from any frame on. FileCarver::run
+    // The format's files are made of elements that each start with one of
+    // its signatures, so every element of a file is a hit: the frames of a
+    // stream (MPEG audio, ADTS; a stream is a file of its own from any frame
+    // on), or the members of an archive (ZIP local headers). FileCarver::run
     // skips hits of such a format strictly inside an earlier candidate of the
     // same format, whatever that candidate's end and verdict: they are its own
-    // frames (CarveOptions::skipHitsInsideValidCandidates).
+    // elements (CarveOptions::skipHitsInsideValidCandidates).
     bool selfSynchronizing = false;
+    // A file whose end detection Found its end has every byte in place, one
+    // after the other: the structure locates each element from the file's
+    // start (ZIP: the central directory records every member's offset), so
+    // a walk across a gap would not have found the end. An Invalid verdict on
+    // such a file is damage, not fragmentation: fragment reconstruction (P13)
+    // does not take it as a seed. Files whose end was not found are seeds as
+    // for any format.
+    bool foundEndMeansContiguous = false;
 };
 
 // Checks every rule stated in FormatDescriptor.

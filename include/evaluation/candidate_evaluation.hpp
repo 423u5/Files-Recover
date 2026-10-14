@@ -169,6 +169,11 @@ public:
     // InvalidInput for invalid options or a source that is not open, with
     // Cancelled, with the error of a read that fails for a reason other than
     // an I/O error, and with the sink's error.
+    //
+    // An evaluation runs once: the run takes the carves, MP4 and fragment
+    // candidates added (rather than a copy of them), and gives up what it
+    // holds of each candidate as it delivers it (L212). A second run() fails
+    // with InvalidInput.
     [[nodiscard]] Result<EvaluationReport> run(const EvaluatedCandidateSink& sink);
 
 private:
@@ -185,6 +190,7 @@ private:
     std::vector<carving::FileCandidate> carves_;
     std::vector<Mp4Candidate> mp4_;
     std::vector<FragmentCandidate> fragments_;
+    bool ran_ = false;
 };
 
 }  // namespace recovery::evaluation

@@ -1,0 +1,25 @@
+# corpus scenario corrupt-media: FAT32: media files whose content is damaged
+# image 8422400 bytes, sha256 7c96b3c7f33db2d8, 10 originals
+# deep scan: 11 candidates
+#1 filesystem partial(content-truncated) image/jpeg "/TRUNC.JPG" size=18876/18876 valid=truncated:truncated/truncated sha=9e9aa705519851b9 recovery=recovered "TRUNC.JPG" => /TRUNC.JPG
+#2 filesystem corrupted(validation-failed) image/jpeg "/BADHUFF.JPG" size=12455/12455 valid=invalid:passed/failed sha=e3cf04e51e93b0f3 recovery=recovered "BADHUFF.JPG" => /BADHUFF.JPG
+#3 filesystem corrupted(validation-failed) image/png "/BADCRC.PNG" size=37207/37207 valid=invalid:failed/not-run sha=edc77abfd5065aa6 recovery=recovered "BADCRC.PNG" => /BADCRC.PNG
+#4 filesystem complete image/gif "/BADLZW.GIF" size=8642/8642 valid=valid:passed/passed sha=6ba725d812f20017 recovery=recovered "BADLZW.GIF" => /BADLZW.GIF
+#5 filesystem partial(content-truncated) image/gif "/CUT.GIF" size=11431/11431 valid=truncated:truncated/truncated sha=32a14c59e65c78e3 recovery=recovered "CUT.GIF" => /CUT.GIF
+#6 filesystem partial(content-truncated) video/mp4 "/BADSTCO.MP4" size=121784/121784 valid=truncated:truncated/truncated sha=2a091d2afe6cbaaa recovery=recovered "BADSTCO.MP4" => /BADSTCO.MP4
+#7 filesystem corrupted(validation-failed) audio/mp3 "/GARBAGE.MP3" size=126049/126049 valid=invalid:failed/not-run sha=23bb03751e0674a5 recovery=recovered "GARBAGE.MP3" => /GARBAGE.MP3
+#8 filesystem partial(content-truncated) audio/wav "/SHORT.WAV" size=40050/40050 valid=truncated:truncated/not-applicable sha=40f0777deb339e56 recovery=recovered "SHORT.WAV" => /SHORT.WAV
+#9 filesystem corrupted(validation-failed) audio/m4a "/ZEROED.M4A" size=21321/21321 valid=invalid:failed/not-run sha=8d393827697a1139 recovery=recovered "ZEROED.M4A" => /ZEROED.M4A
+#10 filesystem complete image/jpeg "/INTACT.JPG" size=9461/9461 valid=valid:passed/passed sha=2d5de5b5aa180893 recovery=recovered "INTACT.JPG" => /INTACT.JPG
+#11 carving corrupted(validation-failed) audio/mp3 "recovered_000011.mp3" size=60732/60732 valid=invalid:failed/not-run sha=6e5ba50b05d4f08c in=#7 recovery=recovered "recovered_000011.mp3" => part of /GARBAGE.MP3
+# quick scan: 10 candidates
+#1 filesystem partial(content-truncated) image/jpeg "/TRUNC.JPG" size=18876/18876 valid=truncated:truncated/truncated sha=9e9aa705519851b9 recovery=recovered "TRUNC.JPG" => /TRUNC.JPG
+#2 filesystem corrupted(validation-failed) image/jpeg "/BADHUFF.JPG" size=12455/12455 valid=invalid:passed/failed sha=e3cf04e51e93b0f3 recovery=recovered "BADHUFF.JPG" => /BADHUFF.JPG
+#3 filesystem corrupted(validation-failed) image/png "/BADCRC.PNG" size=37207/37207 valid=invalid:failed/not-run sha=edc77abfd5065aa6 recovery=recovered "BADCRC.PNG" => /BADCRC.PNG
+#4 filesystem complete image/gif "/BADLZW.GIF" size=8642/8642 valid=valid:passed/passed sha=6ba725d812f20017 recovery=recovered "BADLZW.GIF" => /BADLZW.GIF
+#5 filesystem partial(content-truncated) image/gif "/CUT.GIF" size=11431/11431 valid=truncated:truncated/truncated sha=32a14c59e65c78e3 recovery=recovered "CUT.GIF" => /CUT.GIF
+#6 filesystem partial(content-truncated) video/mp4 "/BADSTCO.MP4" size=121784/121784 valid=truncated:truncated/truncated sha=2a091d2afe6cbaaa recovery=recovered "BADSTCO.MP4" => /BADSTCO.MP4
+#7 filesystem corrupted(validation-failed) audio/mp3 "/GARBAGE.MP3" size=126049/126049 valid=invalid:failed/not-run sha=23bb03751e0674a5 recovery=recovered "GARBAGE.MP3" => /GARBAGE.MP3
+#8 filesystem partial(content-truncated) audio/wav "/SHORT.WAV" size=40050/40050 valid=truncated:truncated/not-applicable sha=40f0777deb339e56 recovery=recovered "SHORT.WAV" => /SHORT.WAV
+#9 filesystem corrupted(validation-failed) audio/m4a "/ZEROED.M4A" size=21321/21321 valid=invalid:failed/not-run sha=8d393827697a1139 recovery=recovered "ZEROED.M4A" => /ZEROED.M4A
+#10 filesystem complete image/jpeg "/INTACT.JPG" size=9461/9461 valid=valid:passed/passed sha=2d5de5b5aa180893 recovery=recovered "INTACT.JPG" => /INTACT.JPG

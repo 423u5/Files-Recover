@@ -16,7 +16,7 @@ struct FormatInfo {
     std::string_view mediaType;
 };
 
-constexpr std::array<FormatInfo, 10> kFormats = {{
+constexpr std::array<FormatInfo, 11> kFormats = {{
     {"jpeg", MediaKind::Image, "image/jpeg"},
     {"png", MediaKind::Image, "image/png"},
     {"gif", MediaKind::Image, "image/gif"},
@@ -27,6 +27,7 @@ constexpr std::array<FormatInfo, 10> kFormats = {{
     {"aac", MediaKind::Audio, "audio/aac"},
     {"m4a", MediaKind::Audio, "audio/mp4"},
     {"mp4", MediaKind::Video, "video/mp4"},
+    {"zip", MediaKind::Archive, "application/zip"},
 }};
 
 const FormatInfo* formatInfo(std::string_view formatId) noexcept {
@@ -56,6 +57,8 @@ std::string_view toString(MediaKind kind) noexcept {
             return "audio";
         case MediaKind::Video:
             return "video";
+        case MediaKind::Archive:
+            return "archive";
     }
     return "unknown";
 }

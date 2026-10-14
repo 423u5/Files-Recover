@@ -1,0 +1,10 @@
+# corpus scenario damaged-boot-sectors: MBR with FAT32, exFAT and NTFS whose first sectors are zeros: the backup boot records
+# image 19922944 bytes, sha256 8e39fb56b05a7654, 3 originals
+# deep scan: 3 candidates
+#1 filesystem complete image/jpeg "/FATPHOTO.JPG" size=12922/12922 valid=valid:passed/passed sha=73ad1e7f555e7db9 recovery=recovered "Volume 1 (FAT32, FATVOL)/FATPHOTO.JPG" => /FATPHOTO.JPG
+#2 filesystem complete video/mp4 "/Exfat clip.mp4" size=122229/122229 valid=valid:passed/passed sha=0fd21f1aed6056eb recovery=recovered "Volume 2 (exFAT, EXVOL)/Exfat clip.mp4" => /Exfat clip.mp4
+#3 filesystem complete audio/mp3 "/ntfs song.mp3" size=84253/84253 valid=valid:passed/unsupported sha=605e1a9f1f9d7706 recovery=recovered "Volume 3 (NTFS, NTVOL)/ntfs song.mp3" => /ntfs song.mp3
+# quick scan: 3 candidates
+#1 filesystem complete image/jpeg "/FATPHOTO.JPG" size=12922/12922 valid=valid:passed/passed sha=73ad1e7f555e7db9 recovery=recovered "Volume 1 (FAT32, FATVOL)/FATPHOTO.JPG" => /FATPHOTO.JPG
+#2 filesystem complete video/mp4 "/Exfat clip.mp4" size=122229/122229 valid=valid:passed/passed sha=0fd21f1aed6056eb recovery=recovered "Volume 2 (exFAT, EXVOL)/Exfat clip.mp4" => /Exfat clip.mp4
+#3 filesystem complete audio/mp3 "/ntfs song.mp3" size=84253/84253 valid=valid:passed/unsupported sha=605e1a9f1f9d7706 recovery=recovered "Volume 3 (NTFS, NTVOL)/ntfs song.mp3" => /ntfs song.mp3

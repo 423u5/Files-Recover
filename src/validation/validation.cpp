@@ -166,6 +166,10 @@ Result<ValidationState> validateContent(carving::IContentReader& content, const 
             return structure.error();
         }
         state.structural = structuralLevel(*structure, descriptor.id);
+        if (structure->status == carving::ValidationStatus::NotValidated) {
+            // The validator ran, but could not check this content (an encrypted ZIP member).
+            state.structural.status = LevelStatus::Unsupported;
+        }
     }
     const bool structureFailed = state.structural.status == LevelStatus::Failed;
 
@@ -188,6 +192,8 @@ Result<ValidationState> validateContent(carving::IContentReader& content, const 
         state.playability = notRun("not requested");
     } else if (structureFailed) {
         state.playability = notRun("the structure failed");
+    } else if (state.structural.status == LevelStatus::Unsupported) {
+        state.playability = notRun("the structure could not be checked");
     } else if (state.structural.status != LevelStatus::Passed) {
         state.playability = notRun("the content is cut short");
     } else if (state.media.status == LevelStatus::Failed) {

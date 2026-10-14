@@ -21,7 +21,7 @@ namespace recovery::validation::testing {
 
 using Bytes = std::vector<std::byte>;
 
-// Every carving format (images, audio, video) and every media decoder.
+// Every carving format (images, audio, video, archives) and every media decoder.
 [[nodiscard]] const carving::FormatRegistry& allFormats();
 [[nodiscard]] const MediaValidatorRegistry& allMediaValidators();
 

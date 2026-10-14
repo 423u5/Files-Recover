@@ -122,6 +122,12 @@ struct RecoveryJobOptions {
     // FileCreatedCallback). An error fails the file (it is removed and
     // reported). Must be safe to call from several workers at once.
     std::function<Status(evaluation::EvaluatedCandidateId candidate, const std::filesystem::path& path)> onFileCreated;
+    // P20: the folder below the destination a candidate's file goes to (one
+    // path component, made safe; empty: the destination itself), so that
+    // the volumes of a source with several are kept apart. Unset: none. Called
+    // from the thread of run() and from workers; must give one candidate the
+    // same folder every time.
+    std::function<std::string(const evaluation::EvaluatedCandidate& candidate)> folderOf;
     JobControl control;
     diagnostics::Logger* logger = nullptr;
 };

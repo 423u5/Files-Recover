@@ -160,12 +160,20 @@ TEST_F(CliCommandsTest, ImageCopiesASourceByteForByte) {
     EXPECT_TRUE(contains(result.out, "State:           completed")) << result;
     EXPECT_TRUE(contains(result.out, "Unreadable:      0 bytes in 0 regions")) << result;
     EXPECT_TRUE(contains(result.err, "Imaging  ")) << result;
+    // L1: the image's SHA-256, printed and recorded.
+    Sha256 hash;
+    hash.update(test::card());
+    const std::string sha256 = hash.finish().hex();
+    EXPECT_TRUE(contains(result.out, "SHA-256:         " + sha256)) << result;
+    ASSERT_TRUE(metadata->sha256.has_value());
+    EXPECT_EQ(metadata->sha256->hex(), sha256);
 
     // The image is a source like any other, with its metadata shown.
     const CliResult inspected = cli.run({"inspect", "--source", arg(copy)});
     ASSERT_EQ(inspected.code, ExitCode::Success) << inspected;
     EXPECT_TRUE(contains(inspected.out, "Image metadata:  completed")) << inspected;
     EXPECT_TRUE(contains(inspected.out, "Imaged from:   disk image " + arg(image))) << inspected;
+    EXPECT_TRUE(contains(inspected.out, "SHA-256:       " + sha256 + " (recorded when imaged)")) << inspected;
 }
 
 TEST_F(CliCommandsTest, ImagingADiskWithBadSectors) {
@@ -199,6 +207,31 @@ TEST_F(CliCommandsTest, ImagingADiskWithBadSectors) {
     const session::SessionInfo info = infoOf(*id);
     ASSERT_EQ(info.configuration.knownBadRegions.size(), 1u);
     EXPECT_EQ(info.configuration.knownBadRegions.front(), (storage::BadRegion{kBad, 1024, 23}));
+}
+
+// Found imaging a real USB stick (2026-10-12): its flash failed, every read
+// answered ERROR_SEM_TIMEOUT (121) and the disk then reported no media. The
+// media check says so at the first failed read: imaging stops at once, to be
+// resumed, instead of reading the whole device as bad sectors. A device whose
+// check cannot tell is imaged as bad sectors, and the CLI says that nothing
+// at all could be read.
+TEST_F(CliCommandsTest, ADeviceThatStopsAnsweringStopsImagingAtOnce) {
+    const Bytes card = test::card();
+    const test::SimulatedDisk disk = test::simulatedDisk(card, {{0, card.size()}});
+    disk.config->failureCode = 121;
+    disk.config->mediaPresent = false;
+    cli.environment().diskOpener = disk.opener;
+    const CliResult stopped =
+        cli.run({"image", "--source", "\\\\.\\PhysicalDrive7", "--output", arg(dir.path() / "stick.img")});
+    EXPECT_EQ(stopped.code, ExitCode::Error) << stopped;
+    EXPECT_TRUE(contains(stopped.err, "removed or is not ready")) << stopped;
+    EXPECT_LT(disk.opener->stats()->reads.load(), 10U) << "the device is not read sector by sector";
+
+    disk.config->mediaPresent = std::nullopt;
+    const CliResult zeros = cli.run(
+        {"image", "--source", "\\\\.\\PhysicalDrive7", "--output", arg(dir.path() / "zeros.img"), "--retries", "0"});
+    EXPECT_EQ(zeros.code, ExitCode::Incomplete) << zeros;
+    EXPECT_TRUE(contains(zeros.err, "nothing could be read from the source: every sector failed")) << zeros;
 }
 
 // ---------------------------------------------------------------------------

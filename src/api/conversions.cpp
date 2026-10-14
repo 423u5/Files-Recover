@@ -73,6 +73,8 @@ MediaKind toApi(metadata::MediaKind kind) noexcept {
         return MediaKind::Audio;
     case metadata::MediaKind::Video:
         return MediaKind::Video;
+    case metadata::MediaKind::Archive:
+        return MediaKind::Archive;
     case metadata::MediaKind::Unknown:
         break;
     }
@@ -191,6 +193,8 @@ FilesystemKind toApi(filesystem::FilesystemType type) noexcept {
         return FilesystemKind::ExFat;
     case filesystem::FilesystemType::Ntfs:
         return FilesystemKind::Ntfs;
+    case filesystem::FilesystemType::Fat16:
+        return FilesystemKind::Fat16;
     }
     return FilesystemKind::Fat32;
 }

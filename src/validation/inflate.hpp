@@ -1,7 +1,8 @@
 #pragma once
 
-// zlib (RFC 1950) and DEFLATE (RFC 1951) decoding for media validation: the
-// image data of PNG files. The data is inflated through a 32 KiB window and
+// zlib (RFC 1950) and DEFLATE (RFC 1951) decoding for validation: the image
+// data of PNG files, and the members of ZIP archives (raw DEFLATE, through
+// deflate_decoder.hpp). The data is inflated through a 32 KiB window and
 // handed on in pieces, never held whole. What is accepted follows zlib, the
 // library nearly every PNG is written and read with: an incomplete literal or
 // distance code only when it is a single one-bit code, no distance beyond
@@ -44,7 +45,7 @@ protected:
 
 struct InflateOutcome {
     enum class Kind : std::uint8_t {
-        // The stream ended with a valid Adler-32.
+        // The stream ended: after its last block (raw), with a valid Adler-32 (zlib).
         Done,
         // The data ended inside the stream.
         Truncated,
@@ -62,7 +63,8 @@ struct InflateOutcome {
     std::uint64_t offset = 0;
     // Bytes of output.
     std::uint64_t output = 0;
-    // Done: bytes of the ranges left after the Adler-32.
+    // Done: bytes of the ranges left after the stream (after the Adler-32 of
+    // zlib; after the byte holding the last block's end of raw DEFLATE).
     std::uint64_t trailing = 0;
     // Deflate blocks read.
     std::uint64_t blocks = 0;
@@ -71,5 +73,9 @@ struct InflateOutcome {
 // Inflates the zlib stream at the start of `bytes`, handing its output to
 // `sink`.
 [[nodiscard]] InflateOutcome inflateZlib(ContentBytes& bytes, InflateSink& sink);
+
+// Inflates the raw DEFLATE stream (no zlib header or Adler-32: a ZIP member's
+// data) at the start of `bytes`, handing its output to `sink`.
+[[nodiscard]] InflateOutcome inflateRaw(ContentBytes& bytes, InflateSink& sink);
 
 }  // namespace recovery::validation::detail

@@ -1033,10 +1033,21 @@ Status ScanCoordinator::Run::evaluation() {
 
 Result<ScanSummary> ScanCoordinator::Run::execute() {
     started = Clock::now();
-    log(LogLevel::Info, "scan started",
-        {field("mode", toString(configuration.mode)), field("source", identity.sourcePath),
-         field("size", identity.sourceSize), field("workers", pool->threadCount()),
-         field("resumed_at", checkpoint.sequence()), field("stage", toString(checkpoint.stage()))});
+    {
+        // Plan section 26: the source's information, with the scan's settings.
+        const storage::SourceInfo info = owner.source_.getInfo();
+        std::string device = info.vendor;
+        if (!info.product.empty()) {
+            device += (device.empty() ? "" : " ") + info.product;
+        }
+        log(LogLevel::Info, "scan started",
+            {field("mode", toString(configuration.mode)), field("source", identity.sourcePath),
+             field("source_type", storage::toString(info.type)), field("size", identity.sourceSize),
+             field("sector_size", info.logicalSectorSize), field("device", device),
+             field("removable", info.removable.has_value() ? (*info.removable ? "yes" : "no") : "unknown"),
+             field("known_bad_regions", configuration.knownBadRegions.size()), field("workers", pool->threadCount()),
+             field("resumed_at", checkpoint.sequence()), field("stage", toString(checkpoint.stage()))});
+    }
     Status status = success();
     if (!checkpoint.completed()) {
         const bool deep = configuration.mode == ScanMode::Deep;
@@ -1072,10 +1083,16 @@ Result<ScanSummary> ScanCoordinator::Run::execute() {
         summary.outcome = ScanOutcome::Cancelled;
     }
     progress(summary.stage, stageDone, stageTotal, true);
+    // Plan sections 26 and 34: the scan's metrics, as performance statistics.
     log(LogLevel::Info, "scan ended",
         {field("outcome", toString(summary.outcome)), field("stage", toString(summary.stage)),
-         field("candidates", summary.metrics.candidates), field("bytes_read", summary.metrics.bytesRead),
-         field("unreadable_bytes", summary.metrics.unreadableBytes),
+         field("bytes_scanned", summary.metrics.bytesScanned), field("bytes_read", summary.metrics.bytesRead),
+         field("scan_speed_bps", summary.metrics.scanSpeed), field("files_found", summary.metrics.filesFound),
+         field("carves", summary.metrics.carves), field("mp4_candidates", summary.metrics.mp4Candidates),
+         field("fragment_candidates", summary.metrics.fragmentCandidates),
+         field("candidates", summary.metrics.candidates),
+         field("validation_failures", summary.metrics.validationFailures),
+         field("duplicates", summary.metrics.duplicates), field("unreadable_bytes", summary.metrics.unreadableBytes),
          field("elapsed_ms", summary.metrics.elapsed.count())});
     return summary;
 }

@@ -100,7 +100,7 @@ Fat32Filesystem::Fat32Filesystem(storage::IStorageSource& volume, BootSector boo
     : volume_(volume), boot_(std::move(boot)), logger_(logger) {
     // FatTable keeps a reference to boot_; this object is heap-allocated and never moved.
     fat_ = std::make_unique<FatTable>(volume_, boot_, options.fatCacheBytes);
-    info_.type = FilesystemType::Fat32;
+    info_.type = boot_.type == FatType::Fat16 ? FilesystemType::Fat16 : FilesystemType::Fat32;
     info_.label = boot_.volumeLabel;
     info_.serialNumber = boot_.volumeId;
     info_.bytesPerSector = boot_.bytesPerSector;
@@ -119,7 +119,7 @@ Result<std::unique_ptr<Fat32Filesystem>> Fat32Filesystem::open(storage::IStorage
     }
     std::array<std::byte, 512> sector{};
     if (volume.size() < sector.size()) {
-        return makeError(ErrorCode::UnsupportedFilesystem, "volume is too small for a FAT32 boot sector");
+        return makeError(ErrorCode::UnsupportedFilesystem, "volume is too small for a FAT boot sector");
     }
 
     Result<BootSector> parsed = makeError(ErrorCode::IoError, "boot sector unreadable");
@@ -175,11 +175,12 @@ Result<std::unique_ptr<Fat32Filesystem>> Fat32Filesystem::open(storage::IStorage
         fs->info_.label = *fs->rootLabel_;
     }
 
-    fs->log(LogLevel::Info, "FAT32 volume opened",
+    const std::string name(toString(fs->info_.type));
+    fs->log(LogLevel::Info, name + " volume opened",
             {field("cluster_size", fs->boot_.clusterSize), field("clusters", fs->boot_.clusterCount),
              field("fat_count", fs->boot_.fatCount), field("warnings", fs->boot_.warnings.size())});
     for (const std::string& warning : fs->boot_.warnings) {
-        fs->log(LogLevel::Warning, "FAT32 boot sector warning", {field("detail", warning)});
+        fs->log(LogLevel::Warning, name + " boot sector warning", {field("detail", warning)});
     }
     return fs;
 }
@@ -188,7 +189,9 @@ DirectoryEntry Fat32Filesystem::rootDirectory() const {
     DirectoryEntry root;
     root.isDirectory = true;
     root.state = EntryState::Active;
-    root.firstCluster = ClusterNumber{boot_.rootCluster};
+    // FAT16's root is the fixed region, which FAT calls cluster 0 (as ".." of
+    // a top-level directory does).
+    root.firstCluster = ClusterNumber{boot_.type == FatType::Fat16 ? 0 : boot_.rootCluster};
     return root;
 }
 
@@ -335,16 +338,20 @@ Result<DirectoryListing> Fat32Filesystem::listDirectory(const DirectoryEntry& di
         return makeError(ErrorCode::InvalidInput, "not a directory");
     }
     const std::uint64_t first = directory.firstCluster.value();
-    if (!boot_.isValidCluster(first)) {
+    const bool deleted = directory.state == EntryState::Deleted;
+    // FAT16's root directory: the fixed region before cluster 2, read sector by sector.
+    const bool fixedRoot = boot_.type == FatType::Fat16 && first == 0 && !deleted;
+    if (!fixedRoot && !boot_.isValidCluster(first)) {
         return makeError(ErrorCode::CorruptedFilesystem,
                          "directory start cluster " + std::to_string(first) + " is out of range");
     }
     const auto start = static_cast<std::uint32_t>(first);
-    const bool deleted = directory.state == EntryState::Deleted;
 
     DirectoryListing listing;
     std::vector<std::uint32_t> clusters;
-    if (deleted) {
+    if (fixedRoot) {
+        // No chain: the region is listed below.
+    } else if (deleted) {
         // Only the first cluster is known, and only if nothing reused it.
         if (fat_->entry(start).kind != FatEntryKind::Free) {
             return makeError(ErrorCode::InvalidFormat, "deleted directory's cluster has been reused");
@@ -362,39 +369,68 @@ Result<DirectoryListing> Fat32Filesystem::listDirectory(const DirectoryEntry& di
         }
     }
 
+    // What the directory is read in: its clusters, or FAT16's root sectors.
+    struct Piece {
+        std::uint64_t offset = 0;
+        std::uint32_t length = 0;
+        std::uint32_t cluster = 0;  // 0: a root directory sector
+    };
+    std::vector<Piece> pieces;
+    if (fixedRoot) {
+        for (std::uint64_t at = 0; at < boot_.rootDirBytes; at += boot_.bytesPerSector) {
+            const auto length = static_cast<std::uint32_t>(
+                std::min<std::uint64_t>(boot_.bytesPerSector, boot_.rootDirBytes - at));
+            pieces.push_back(Piece{boot_.rootDirOffset + at, length, 0});
+        }
+    } else {
+        for (const std::uint32_t cluster : clusters) {
+            pieces.push_back(Piece{boot_.clusterOffset(cluster), boot_.clusterSize, cluster});
+        }
+    }
+
     DirectoryParser parser(boot_);
-    std::vector<std::byte> buffer(boot_.clusterSize);
-    const std::size_t slots = boot_.clusterSize / kDirectoryEntrySize;
+    std::vector<std::byte> buffer(fixedRoot ? boot_.bytesPerSector : boot_.clusterSize);
     bool reachedEnd = false;
-    for (std::size_t index = 0; index < clusters.size() && !reachedEnd; ++index) {
-        const std::uint64_t offset = boot_.clusterOffset(clusters[index]);
-        if (const Status read = volume_.readExact(ByteOffset{offset}, buffer); !read.ok()) {
-            listing.issues.push_back(ScanIssue{ScanIssueKind::DirectoryUnreadable, {},
-                                               "cluster " + std::to_string(clusters[index]) + ": " +
-                                                   describe(read.error())});
+    for (std::size_t index = 0; index < pieces.size() && !reachedEnd; ++index) {
+        const Piece& piece = pieces[index];
+        const std::span<std::byte> bytes(buffer.data(), piece.length);
+        if (const Status read = volume_.readExact(ByteOffset{piece.offset}, bytes); !read.ok()) {
+            const std::string where =
+                piece.cluster != 0
+                    ? "cluster " + std::to_string(piece.cluster)
+                    : "root directory sector " + std::to_string((piece.offset - boot_.rootDirOffset) / boot_.bytesPerSector);
+            listing.issues.push_back(ScanIssue{ScanIssueKind::DirectoryUnreadable, {}, where + ": " + describe(read.error())});
             if (deleted) {
                 return makeError(ErrorCode::IoError, "deleted directory cluster is unreadable");
             }
             continue;
         }
         if (deleted && index == 0) {
-            // A directory's first entry is "." pointing at itself.
+            // A directory's first entry is "." pointing at itself (FAT16: the low 16 bits only).
             const std::span<const std::byte> dot(buffer.data(), kDirectoryEntrySize);
-            const std::uint64_t self = (static_cast<std::uint64_t>(loadLe16(dot, 20)) << 16) | loadLe16(dot, 26);
+            const std::uint64_t high = boot_.type == FatType::Fat16 ? 0 : loadLe16(dot, 20);
+            const std::uint64_t self = (high << 16) | loadLe16(dot, 26);
             if (std::memcmp(dot.data(), ".          ", 11) != 0 || (loadU8(dot, 11) & 0x10) == 0 || self != first) {
                 return makeError(ErrorCode::InvalidFormat, "deleted directory's cluster no longer holds that directory");
             }
         }
+        const std::size_t slots = piece.length / kDirectoryEntrySize;
         for (std::size_t slot = 0; slot < slots; ++slot) {
             const std::span<const std::byte> entry(buffer.data() + slot * kDirectoryEntrySize, kDirectoryEntrySize);
-            if (!parser.feed(entry, offset + slot * kDirectoryEntrySize, listing.entries)) {
+            if (!parser.feed(entry, piece.offset + slot * kDirectoryEntrySize, listing.entries)) {
                 reachedEnd = true;
                 break;
             }
         }
     }
 
-    if (!deleted && start == boot_.rootCluster) {
+    if (parser.garbageSlots() != 0) {
+        listing.issues.push_back(ScanIssue{ScanIssueKind::DirectoryInvalid, {},
+                                           std::to_string(parser.garbageSlots()) +
+                                               " slots hold no directory entry (other data in the directory's "
+                                               "clusters)"});
+    }
+    if (fixedRoot || (!deleted && boot_.type == FatType::Fat32 && start == boot_.rootCluster)) {
         rootLabel_ = parser.volumeLabel();
     }
     return listing;
@@ -425,7 +461,7 @@ Result<FileScan> Fat32Filesystem::scan(const ScanLimits& limits, const Cancellat
 
     while (!stack.empty()) {
         if (cancel.isCancellationRequested()) {
-            return makeError(ErrorCode::Cancelled, "FAT32 scan cancelled");
+            return makeError(ErrorCode::Cancelled, std::string(toString(info_.type)) + " scan cancelled");
         }
         Work work = std::move(stack.back());
         stack.pop_back();
@@ -524,7 +560,7 @@ Result<FileScan> Fat32Filesystem::scan(const ScanLimits& limits, const Cancellat
         }
     }
 
-    log(LogLevel::Info, "FAT32 scan finished",
+    log(LogLevel::Info, std::string(toString(info_.type)) + " scan finished",
         {field("records", result.records.size()), field("issues", result.issues.size()),
          field("cross_linked_clusters", result.crossLinkedClusters), field("complete", result.complete ? 1 : 0)});
     return result;
@@ -546,7 +582,7 @@ Result<ClusterUsage> Fat32Filesystem::analyzeClusters(const CancellationToken& c
     }
     for (std::uint32_t first = 2; first <= last;) {
         if (cancel.isCancellationRequested()) {
-            return makeError(ErrorCode::Cancelled, "FAT32 cluster analysis cancelled");
+            return makeError(ErrorCode::Cancelled, std::string(toString(info_.type)) + " cluster analysis cancelled");
         }
         if (first >= readableLimit) {
             usage.unreadable += static_cast<std::uint64_t>(last) - first + 1;

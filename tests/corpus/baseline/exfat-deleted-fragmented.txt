@@ -1,0 +1,12 @@
+# corpus scenario exfat-deleted-fragmented: two exFAT volumes, one clearing FAT chains on delete: deleted fragmented files
+# image 22020096 bytes, sha256 adcbd0a752066bce, 4 originals
+# deep scan: 4 candidates
+#1 reconstruction complete image/jpeg "/Cleared fragments.jpg" size=18355/18355 deleted fragmented valid=valid:passed/passed sha=914edcc404a395f4 recovery=recovered "Volume 1 (exFAT, CLEARED)/Cleared fragments.jpg" => /Cleared fragments.jpg
+#2 filesystem complete image/png "/Whole.png" size=58027/58027 deleted valid=valid:passed/passed sha=e51c748733970cde recovery=recovered "Volume 1 (exFAT, CLEARED)/Whole.png" => /Whole.png
+#3 filesystem complete audio/mp3 "/Kept.mp3" size=50817/50817 valid=valid:passed/unsupported sha=da55a705ece8f975 recovery=recovered "Volume 1 (exFAT, CLEARED)/Kept.mp3" => /Kept.mp3
+#4 filesystem complete image/jpeg "/Kept chain.jpg" size=12416/12416 deleted fragmented valid=valid:passed/passed sha=b7a5f426f01361b7 recovery=recovered "Volume 2 (exFAT, KEPT)/Kept chain.jpg" => /Kept chain.jpg
+# quick scan: 4 candidates
+#1 filesystem partial(content-truncated,validation-failed) image/jpeg "/Cleared fragments.jpg" size=18355/18355 deleted valid=invalid:truncated/failed sha=9b02b2504857e819 recovery=recovered "Volume 1 (exFAT, CLEARED)/Cleared fragments.jpg"
+#2 filesystem complete image/png "/Whole.png" size=58027/58027 deleted valid=valid:passed/passed sha=e51c748733970cde recovery=recovered "Volume 1 (exFAT, CLEARED)/Whole.png" => /Whole.png
+#3 filesystem complete audio/mp3 "/Kept.mp3" size=50817/50817 valid=valid:passed/unsupported sha=da55a705ece8f975 recovery=recovered "Volume 1 (exFAT, CLEARED)/Kept.mp3" => /Kept.mp3
+#4 filesystem complete image/jpeg "/Kept chain.jpg" size=12416/12416 deleted fragmented valid=valid:passed/passed sha=b7a5f426f01361b7 recovery=recovered "Volume 2 (exFAT, KEPT)/Kept chain.jpg" => /Kept chain.jpg

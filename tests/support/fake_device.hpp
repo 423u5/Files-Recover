@@ -27,12 +27,16 @@ struct FakeDeviceConfig {
     std::optional<std::uint32_t> enforcedAlignment;
     // Maximum bytes returned per readAt (simulates short reads).
     std::optional<std::size_t> maxBytesPerRead;
+    // What mediaPresent() answers (nullopt: the device cannot tell).
+    std::optional<bool> mediaPresent;
 };
 
 struct FakeDeviceStats {
     std::atomic<std::size_t> reads{0};
     // readAt calls that ignored the device's alignment requirement.
     std::atomic<std::size_t> alignmentViolations{0};
+    // mediaPresent() calls.
+    std::atomic<std::size_t> mediaQueries{0};
 };
 
 // In-memory IDeviceIo that enforces the configured alignment exactly like
@@ -44,6 +48,7 @@ public:
     Result<storage::DeviceGeometry> queryGeometry() override;
     storage::DeviceDescription describe() override;
     storage::DeviceReadResult readAt(std::uint64_t offset, std::span<std::byte> buffer) override;
+    std::optional<bool> mediaPresent() override;
 
 private:
     std::shared_ptr<const FakeDeviceConfig> config_;

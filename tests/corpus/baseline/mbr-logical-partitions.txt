@@ -1,0 +1,14 @@
+# corpus scenario mbr-logical-partitions: MBR: a primary FAT32 volume, exFAT and NTFS in an extended partition
+# image 20971520 bytes, sha256 79e2bc6efdb64fc4, 5 originals
+# deep scan: 5 candidates
+#1 filesystem complete image/jpeg "/primary.jpg" size=12704/12704 valid=valid:passed/passed sha=85e907e1b4fdc2ab recovery=recovered "Volume 1 (FAT32, PRIMARY)/primary.jpg" => /primary.jpg
+#2 hybrid complete audio/mp3 "/primary deleted.mp3" size=50817/50817 deleted valid=valid:passed/unsupported sha=c341f423f3ea79e7 recovery=recovered "Volume 1 (FAT32, PRIMARY)/primary deleted.mp3" => /primary deleted.mp3
+#3 filesystem complete video/mp4 "/logical exfat.mp4" size=124650/124650 valid=valid:passed/passed sha=4461c69ef2268ed8 recovery=recovered "Volume 2 (exFAT, LOGICAL1)/logical exfat.mp4" => /logical exfat.mp4
+#4 filesystem complete image/png "/logical ntfs.png" size=58027/58027 valid=valid:passed/passed sha=66e3cb4d4ca1d331 recovery=recovered "Volume 3 (NTFS, LOGICAL2)/logical ntfs.png" => /logical ntfs.png
+#5 filesystem complete audio/wav "/logical deleted.wav" size=40100/40100 deleted valid=valid:passed/not-applicable sha=741079e06251a8f0 recovery=recovered "Volume 3 (NTFS, LOGICAL2)/logical deleted.wav" => /logical deleted.wav
+# quick scan: 5 candidates
+#1 filesystem complete image/jpeg "/primary.jpg" size=12704/12704 valid=valid:passed/passed sha=85e907e1b4fdc2ab recovery=recovered "Volume 1 (FAT32, PRIMARY)/primary.jpg" => /primary.jpg
+#2 hybrid complete audio/mp3 "/primary deleted.mp3" size=50817/50817 deleted valid=valid:passed/unsupported sha=c341f423f3ea79e7 recovery=recovered "Volume 1 (FAT32, PRIMARY)/primary deleted.mp3" => /primary deleted.mp3
+#3 filesystem complete video/mp4 "/logical exfat.mp4" size=124650/124650 valid=valid:passed/passed sha=4461c69ef2268ed8 recovery=recovered "Volume 2 (exFAT, LOGICAL1)/logical exfat.mp4" => /logical exfat.mp4
+#4 filesystem complete image/png "/logical ntfs.png" size=58027/58027 valid=valid:passed/passed sha=66e3cb4d4ca1d331 recovery=recovered "Volume 3 (NTFS, LOGICAL2)/logical ntfs.png" => /logical ntfs.png
+#5 filesystem complete audio/wav "/logical deleted.wav" size=40100/40100 deleted valid=valid:passed/not-applicable sha=741079e06251a8f0 recovery=recovered "Volume 3 (NTFS, LOGICAL2)/logical deleted.wav" => /logical deleted.wav

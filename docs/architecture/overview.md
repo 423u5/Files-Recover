@@ -1,6 +1,7 @@
 # Architecture overview
 
-This file covers what is implemented (P0–P19). The target architecture for all phases is in the project plan.
+This file covers what is implemented (P0–P20). The target architecture for all phases is in the project plan.
+P20 added no module: it validated and hardened these (see [../testing/validation.md](../testing/validation.md)).
 
 ## Modules and dependencies
 
@@ -53,7 +54,7 @@ error types; the report the CLI writes moved to `recovery_report`, shared by bot
 
 | Library | Namespace | Responsibility |
 | --- | --- | --- |
-| `recovery_core` | `recovery`, `recovery::diagnostics` | `Result<T>`/`Status`, `Error`/`ErrorCode`, strong types, checked arithmetic, bounds-checked byte access, CRC-32, SHA-256, UTF-16 conversion, cancellation, configuration, logging; the bounded worker pool, job control (cancel, pause) and `runOrdered` of P15 |
+| `recovery_core` | `recovery`, `recovery::diagnostics` | `Result<T>`/`Status`, `Error`/`ErrorCode`, strong types, checked arithmetic, bounds-checked byte access, CRC-32, SHA-256, UTF-16 conversion, cancellation, configuration, logging; the bounded worker pool, job control (cancel, pause) and `runOrdered` of P15; `Boxed` and `SharedBox` (`boxed.hpp`: optional values held on the heap, copied or shared; L212) |
 | `recovery_storage` | `recovery::storage` | Read-only sources, bad-region map, destination file, destination guard |
 | `recovery_imaging` | `recovery::imaging` | Imaging a source into a raw image, with resumable metadata |
 | `recovery_partition` | `recovery::partition` | MBR/GPT/superfloppy detection, and a `PartitionSource` view that confines reads to one partition ([partitions.md](partitions.md)) |
@@ -83,7 +84,10 @@ CLI's console code (`tools/recovery_cli/windows/console.cpp`) is the one place o
 - Expected failures return `Result<T>` or `Status` (`Result<void>`) and carry an `Error`. An `Error` holds an
   `ErrorCode` (the categories from the specification), a message, and the Win32 error code if there is one.
 - Storage reads return a `ReadResult` with `status`, `requestedBytes`, `bytesRead`, `offset` and
-  `systemErrorCode`. A partial read is reported as `PartialRead`, never as success.
+  `systemErrorCode`. A partial read is reported as `PartialRead`, never as success. P20: a read of a device that
+  is gone or not ready (removed, media changed or ejected: `isDeviceLostError`) is `DeviceLost`, not `IoError`.
+  It is not a bad sector: imaging, scans and recovery stop at once with an IoError ("the source device was removed
+  or is not ready") instead of retrying sector by sector over the rest of the device, and resume when it is back.
 - Exceptions are only used for programming errors and running out of memory. Reading the wrong alternative
   of a `Result` aborts the process.
 
@@ -106,7 +110,7 @@ CLI's console code (`tools/recovery_cli/windows/console.cpp`) is the one place o
 | `FragmentRecovery` | Not thread-safe. One owner at a time; the source, the format registry, the volumes and their scans must outlive it. The sink is called on the thread of `run()`. |
 | `SignatureScanner` | `scan` is const. Concurrent scans are safe on sources that allow concurrent reads. The sink and progress callback run on the scanning thread. |
 | `FileCarver`, `SourceContentReader` | Not thread-safe. One owner at a time; the source must outlive them. |
-| `WorkerPool` | Every member from any thread. Tasks must not throw (counted, never propagated), nor wait for tasks queued after them, nor submit to their own pool. |
+| `WorkerPool` | Every member from any thread. Tasks must not throw (counted, never propagated), nor wait for tasks queued after them, nor submit to their own pool. A task may `shutdown()` its own pool (it returns without waiting for itself) but must not destroy it: P20 makes that stop the process with a message instead of a use after free. The destructor joins every worker. |
 | `JobControl` | Every member from any thread; copies share their state. |
 | `runOrdered` | Called on a thread that is not one of the pool's workers; `consume` runs on it, `produce` on the workers. |
 | `ScanSource` | Reads from any number of threads; `open`/`close` must not overlap other calls. |
@@ -129,6 +133,12 @@ CLI's console code (`tools/recovery_cli/windows/console.cpp`) is the one place o
 ## Windows-specific assumptions
 
 Each one is also documented where it is implemented.
+
+- P20: every target links the C++ runtime statically (`CMAKE_MSVC_RUNTIME_LIBRARY`, GoogleTest too), so the
+  executables need no Visual C++ redistributable. Except in the AddressSanitizer and fuzz builds, everything is
+  compiled with Control Flow Guard (`/guard:cf`) and linked with `/CETCOMPAT` and `/DEPENDENTLOADFLAG:0x800`: the
+  executables' imports (Media Foundation, COM, the API sets) load from System32 only, never from the folder the
+  executable is in (`cmake/RecoveryBuildOptions.cmake`).
 
 - Physical drives are `\\.\PhysicalDriveN`. Opening one needs administrator rights and
   `FILE_SHARE_READ | FILE_SHARE_WRITE`, because mounted volumes on the disk hold their own handles.

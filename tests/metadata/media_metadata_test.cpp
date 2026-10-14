@@ -71,13 +71,28 @@ TEST(MetadataTypesTest, FormatsHaveKindsAndMediaTypes) {
     EXPECT_EQ(kindOfFormat("mp3"), MediaKind::Audio);
     EXPECT_EQ(kindOfFormat("m4a"), MediaKind::Audio);
     EXPECT_EQ(kindOfFormat("mp4"), MediaKind::Video);
+    EXPECT_EQ(kindOfFormat("zip"), MediaKind::Archive);
     EXPECT_EQ(kindOfFormat(""), MediaKind::Unknown);
     EXPECT_EQ(kindOfFormat("docx"), MediaKind::Unknown);
     EXPECT_EQ(mediaTypeOfFormat("jpeg"), "image/jpeg");
     EXPECT_EQ(mediaTypeOfFormat("wav"), "audio/wav");
     EXPECT_EQ(mediaTypeOfFormat("aac"), "audio/aac");
     EXPECT_EQ(mediaTypeOfFormat("mp4"), "video/mp4");
+    EXPECT_EQ(mediaTypeOfFormat("zip"), "application/zip");
     EXPECT_EQ(mediaTypeOfFormat("unknown"), "");
+    EXPECT_EQ(toString(MediaKind::Archive), "archive");
+}
+
+TEST(MetadataTypesTest, AnArchiveHasNoMediaMetadataAndNoPreview) {
+    // Its kind and media type only: the members are not media of its own.
+    const std::vector<std::byte> bytes(200, std::byte{0x50});
+    carving::MemoryContentReader content(bytes);
+    Result<MediaMetadata> meta = extractMetadata(content, "zip", {});
+    RECOVERY_ASSERT_OK(meta);
+    EXPECT_EQ(meta->kind, MediaKind::Archive);
+    EXPECT_EQ(meta->mediaType, "application/zip");
+    EXPECT_TRUE(meta->previews.empty());
+    EXPECT_FALSE(meta->duration.has_value());
 }
 
 TEST(MetadataTypesTest, DatesPrintToTheirPrecisionAndZone) {

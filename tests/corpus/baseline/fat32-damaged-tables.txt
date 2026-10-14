@@ -1,0 +1,31 @@
+# corpus scenario fat32-damaged-tables: FAT32: a chain loop, a cross-link, cut and broken chains, bad entries, FAT copies that differ, an overwritten folder
+# image 8422400 bytes, sha256 e555abfbc5283744, 10 originals
+# deep scan: 15 candidates
+#1 hybrid complete image/jpeg "/LOOP.JPG" size=12658/12658 valid=valid:passed/passed sha=c25a52271af60cc1 recovery=recovered "LOOP.JPG" => /LOOP.JPG
+#2 filesystem complete image/png "/CROSS1.PNG" size=37207/37207 valid=valid:passed/passed sha=0e767a32c0d4ad48 recovery=recovered "CROSS1.PNG" => /CROSS1.PNG
+#3 hybrid complete image/gif "/CROSS2.GIF" size=16331/16331 valid=valid:passed/passed sha=caf904c498857cca recovery=recovered "CROSS2.GIF" => /CROSS2.GIF
+#4 hybrid complete video/mp4 "/CUT.MP4" size=125149/125149 valid=valid:passed/passed sha=e21c341762b75451 recovery=recovered "CUT.MP4" => /CUT.MP4
+#5 hybrid complete audio/wav "/BADCLUS.WAV" size=24100/24100 valid=valid:passed/not-applicable sha=e8f4d85a2e37934c recovery=recovered "BADCLUS.WAV" => /BADCLUS.WAV
+#6 filesystem unrecoverable(nothing-located,data-missing,not-validated) other/- "/OUTSIDE.JPG" size=0/8022 valid=not-validated:unsupported/not-run sha=e3b0c44298fc1c14 recovery=failed
+#7 hybrid complete image/png "/BIGGER.PNG" size=28519/28519 valid=valid:passed/passed sha=0c9e4f671c11be5f recovery=recovered "BIGGER.PNG" => /BIGGER.PNG
+#8 filesystem complete image/jpeg "/MIRROR.JPG" size=12253/12253 valid=valid:passed/passed sha=865b39a3d0060885 recovery=recovered "MIRROR.JPG" => /MIRROR.JPG
+#9 filesystem unrecoverable(nothing-located,data-missing,not-validated) other/- "/JUNK/⌡J╕σêZ╡.üÜ│" size=0/4282101004 valid=not-validated:unsupported/not-run sha=e3b0c44298fc1c14 recovery=failed
+#10 filesystem unrecoverable(nothing-located,data-missing,not-validated) other/- "/JUNK/±ä!oΩ'É╪.═Wc" size=0/2363191513 valid=not-validated:unsupported/not-run sha=e3b0c44298fc1c14 recovery=failed
+#11 filesystem unrecoverable(nothing-located,data-missing,not-validated) other/- "/JUNK/q═╢z±╪_╗.╖iy" size=0/1902589470 valid=not-validated:unsupported/not-run sha=e3b0c44298fc1c14 recovery=failed
+#12 filesystem unrecoverable(nothing-located,data-missing,not-validated) other/- "/JUNK/ß├ÖîF╝~¥.T°p" size=0/598682257 valid=not-validated:unsupported/not-run sha=e3b0c44298fc1c14 recovery=failed
+#13 carving complete image/jpeg "recovered_000013.jpg" size=8022/8022 valid=valid:passed/passed sha=613d5aae9fa71397 recovery=recovered "recovered_000013.jpg" => /OUTSIDE.JPG
+#14 carving complete image/jpeg "recovered_000014.jpg" size=5501/5501 valid=valid:passed/passed sha=7c75a5e55140d52b recovery=recovered "recovered_000014.jpg" => /JUNK/A.JPG
+#15 carving complete audio/mp3 "recovered_000015.mp3" size=63355/63355 valid=valid:passed/unsupported sha=86cd6e24380629c1 recovery=recovered "recovered_000015.mp3" => /JUNK/B.MP3
+# quick scan: 12 candidates
+#1 filesystem partial(data-missing,content-truncated) image/jpeg "/LOOP.JPG" size=12288/12658 valid=truncated:truncated/truncated sha=1ddfbc5a02f0f75e recovery=recovered(incomplete) "LOOP.JPG" => part of /LOOP.JPG
+#2 filesystem complete image/png "/CROSS1.PNG" size=37207/37207 valid=valid:passed/passed sha=0e767a32c0d4ad48 recovery=recovered "CROSS1.PNG" => /CROSS1.PNG
+#3 filesystem corrupted(validation-failed) image/gif "/CROSS2.GIF" size=16331/16331 fragmented valid=invalid:failed/not-run sha=7d83edc3f244ec42 recovery=recovered "CROSS2.GIF"
+#4 filesystem partial(data-missing,content-truncated) video/mp4 "/CUT.MP4" size=8192/125149 valid=truncated:truncated/truncated sha=576da143263d1f62 recovery=recovered(incomplete) "CUT.MP4" => part of /CUT.MP4
+#5 filesystem partial(data-missing,content-truncated) audio/wav "/BADCLUS.WAV" size=8192/24100 valid=truncated:truncated/not-applicable sha=9f7f4856796a68ad recovery=recovered(incomplete) "BADCLUS.WAV" => part of /BADCLUS.WAV
+#6 filesystem unrecoverable(nothing-located,data-missing,not-validated) other/- "/OUTSIDE.JPG" size=0/8022 valid=not-validated:unsupported/not-run sha=e3b0c44298fc1c14 recovery=failed
+#7 filesystem partial(data-missing,validation-failed) image/png "/BIGGER.PNG" size=28672/68519 valid=invalid:failed/not-run sha=bb83ced381533dc9 recovery=recovered(incomplete) "BIGGER.PNG"
+#8 filesystem complete image/jpeg "/MIRROR.JPG" size=12253/12253 valid=valid:passed/passed sha=865b39a3d0060885 recovery=recovered "MIRROR.JPG" => /MIRROR.JPG
+#9 filesystem unrecoverable(nothing-located,data-missing,not-validated) other/- "/JUNK/⌡J╕σêZ╡.üÜ│" size=0/4282101004 valid=not-validated:unsupported/not-run sha=e3b0c44298fc1c14 recovery=failed
+#10 filesystem unrecoverable(nothing-located,data-missing,not-validated) other/- "/JUNK/±ä!oΩ'É╪.═Wc" size=0/2363191513 valid=not-validated:unsupported/not-run sha=e3b0c44298fc1c14 recovery=failed
+#11 filesystem unrecoverable(nothing-located,data-missing,not-validated) other/- "/JUNK/q═╢z±╪_╗.╖iy" size=0/1902589470 valid=not-validated:unsupported/not-run sha=e3b0c44298fc1c14 recovery=failed
+#12 filesystem unrecoverable(nothing-located,data-missing,not-validated) other/- "/JUNK/ß├ÖîF╝~¥.T°p" size=0/598682257 valid=not-validated:unsupported/not-run sha=e3b0c44298fc1c14 recovery=failed

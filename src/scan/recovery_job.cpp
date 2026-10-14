@@ -82,11 +82,18 @@ struct NameKeys {
     std::wstring file;
 };
 
-NameKeys keysOf(const RecoveryCandidate& candidate, bool preserveDirectories) {
+NameKeys keysOf(const RecoveryCandidate& candidate, bool preserveDirectories, std::string_view folder) {
     NameKeys keys;
     std::wstring prefix;
     if (preserveDirectories) {
-        const std::string_view parent = parentPathOf(candidate);
+        // The folder is one component, as RecoveryWriter makes it.
+        std::string prefixed;
+        if (!folder.empty()) {
+            prefixed = "/" + std::string(folder);
+            std::replace(prefixed.begin() + 1, prefixed.end(), '/', '_');
+        }
+        prefixed += parentPathOf(candidate);
+        const std::string_view parent = prefixed;
         std::size_t start = 0;
         while (start <= parent.size()) {
             std::size_t slash = parent.find('/', start);
@@ -364,7 +371,8 @@ void RecoveryJob::Run::dispatch(const std::shared_ptr<Entry>& entry) {
                         return options.onFileCreated(candidate.id, path);
                     };
                 }
-                Result<RecoveredFile> written = (*writer)->recover(candidate.data, onCreated);
+                const std::string folder = options.folderOf ? options.folderOf(candidate) : std::string();
+                Result<RecoveredFile> written = (*writer)->recover(candidate.data, onCreated, folder);
                 returnWriter(std::move(*writer));
                 if (written.ok()) {
                     item.file = std::move(*written);
@@ -512,7 +520,9 @@ Result<RecoveryJobSummary> RecoveryJob::Run::execute() {
             while (entries.size() < window && next < todo.size()) {
                 auto entry = std::make_shared<Entry>();
                 entry->index = todo[next++];
-                entry->keys = keysOf(candidates[entry->index].data, writerOptions.preserveDirectories);
+                const evaluation::EvaluatedCandidate& candidate = candidates[entry->index];
+                entry->keys = keysOf(candidate.data, writerOptions.preserveDirectories,
+                                     options.folderOf ? options.folderOf(candidate) : std::string());
                 entries.push_back(std::move(entry));
                 progressed = true;
             }
@@ -605,11 +615,16 @@ Result<RecoveryJobSummary> RecoveryJob::Run::execute() {
     summary.outcome = complete ? RecoveryJobOutcome::Completed : RecoveryJobOutcome::Cancelled;
     summary.metrics = metrics();
     if (options.logger != nullptr) {
+        // Plan sections 26 and 34: files recovered and failed, bytes, time.
         options.logger->log(LogLevel::Info, kComponent, "recovery job ended",
                             {field("outcome", complete ? "completed" : "cancelled"),
                              field("recovered", summary.metrics.recoveredFiles),
                              field("failed", summary.metrics.failedFiles),
-                             field("bytes", summary.metrics.bytesRecovered)});
+                             field("bytes", summary.metrics.bytesRecovered),
+                             field("unreadable_bytes", summary.metrics.unreadableBytes),
+                             field("bytes_read", summary.metrics.bytesRead),
+                             field("speed_bps", summary.metrics.speed),
+                             field("elapsed_ms", summary.metrics.elapsed.count())});
     }
     return summary;
 }

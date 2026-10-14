@@ -1,0 +1,21 @@
+# corpus scenario fat32-fragmented: FAT32: fragmented files, active (chains) and deleted (reconstruction)
+# image 12624896 bytes, sha256 234e2018a5347c35, 8 originals
+# deep scan: 9 candidates
+#1 filesystem complete image/jpeg "/FRAG1.JPG" size=19347/19347 fragmented valid=valid:passed/passed sha=5a541ee4384eb9b9 recovery=recovered "FRAG1.JPG" => /FRAG1.JPG
+#2 filesystem complete video/mp4 "/Fragmented clip.mp4" size=153381/153381 fragmented valid=valid:passed/passed sha=6cb964b25fb70c1b recovery=recovered "Fragmented clip.mp4" => /Fragmented clip.mp4
+#3 reconstruction complete image/jpeg "/Broken trip.jpg" size=15319/15319 deleted fragmented valid=valid:passed/passed sha=f87e3db98d6ae683 recovery=recovered "Broken trip.jpg" => /Broken trip.jpg
+#4 reconstruction complete image/jpeg "/Around.jpg" size=11756/11756 deleted fragmented valid=valid:passed/passed sha=89fc89f66b210797 recovery=recovered "Around.jpg" => /Around.jpg
+#5 filesystem complete image/png "/BETWEEN.PNG" size=21007/21007 valid=valid:passed/passed sha=a8ca3a86ceac35e2 recovery=recovered "BETWEEN.PNG" => /BETWEEN.PNG
+#6 reconstruction complete audio/wav "/Song around.wav" size=48100/48100 deleted fragmented valid=valid:passed/not-applicable sha=f30b2f055ef444b2 recovery=recovered "Song around.wav" => /Song around.wav
+#7 filesystem complete image/gif "/MIDDLE.GIF" size=4288/4288 valid=valid:passed/passed sha=7ba46ffa2237f956 recovery=recovered "MIDDLE.GIF" => /MIDDLE.GIF
+#8 reconstruction complete video/mp4 "/Holiday.mp4" size=154838/154838 deleted fragmented valid=valid:passed/passed sha=1730980a402859e6 recovery=recovered "Holiday.mp4" => /Holiday.mp4
+#9 carving complete image/jpeg "recovered_000009.jpg" size=664/664 valid=valid:passed/passed sha=bbf231dceb565eab in=#1 recovery=recovered "recovered_000009.jpg" => part of /FRAG1.JPG
+# quick scan: 8 candidates
+#1 filesystem complete image/jpeg "/FRAG1.JPG" size=19347/19347 fragmented valid=valid:passed/passed sha=5a541ee4384eb9b9 recovery=recovered "FRAG1.JPG" => /FRAG1.JPG
+#2 filesystem complete video/mp4 "/Fragmented clip.mp4" size=153381/153381 fragmented valid=valid:passed/passed sha=6cb964b25fb70c1b recovery=recovered "Fragmented clip.mp4" => /Fragmented clip.mp4
+#3 filesystem corrupted(validation-failed) image/jpeg "/Broken trip.jpg" size=15319/15319 deleted valid=invalid:failed/not-run sha=27a29aad6418a3a2 recovery=recovered "Broken trip.jpg"
+#4 filesystem corrupted(validation-failed,clusters-reallocated) image/jpeg "/Around.jpg" size=11756/11756 deleted valid=invalid:failed/not-run sha=767411c37da6ae43 recovery=recovered "Around.jpg"
+#5 filesystem complete image/png "/BETWEEN.PNG" size=21007/21007 valid=valid:passed/passed sha=a8ca3a86ceac35e2 recovery=recovered "BETWEEN.PNG" => /BETWEEN.PNG
+#6 filesystem corrupted(validation-failed,clusters-reallocated) audio/wav "/Song around.wav" size=48100/48100 deleted valid=invalid:failed/not-run sha=956bbd1701649a13 recovery=recovered "Song around.wav"
+#7 filesystem complete image/gif "/MIDDLE.GIF" size=4288/4288 valid=valid:passed/passed sha=7ba46ffa2237f956 recovery=recovered "MIDDLE.GIF" => /MIDDLE.GIF
+#8 filesystem corrupted(validation-failed) video/mp4 "/Holiday.mp4" size=154838/154838 deleted valid=invalid:failed/not-run sha=eba5c32db2784471 recovery=recovered "Holiday.mp4"

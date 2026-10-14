@@ -74,8 +74,49 @@ std::string_view toString(ReadStatus status) noexcept {
         return "IoError";
     case ReadStatus::InternalError:
         return "InternalError";
+    case ReadStatus::DeviceLost:
+        return "DeviceLost";
     }
     return "Unknown";
+}
+
+bool isDeviceLostError(std::uint32_t systemErrorCode) noexcept {
+    switch (systemErrorCode) {
+    case 21:    // ERROR_NOT_READY
+    case 55:    // ERROR_DEV_NOT_EXIST
+    case 433:   // ERROR_NO_SUCH_DEVICE
+    case 1006:  // ERROR_FILE_INVALID: the volume was altered externally
+    case 1110:  // ERROR_MEDIA_CHANGED
+    case 1112:  // ERROR_NO_MEDIA_IN_DRIVE
+    case 1167:  // ERROR_DEVICE_NOT_CONNECTED
+    case 1617:  // ERROR_DEVICE_REMOVED
+    case 4319:  // ERROR_DEVICE_NOT_AVAILABLE
+        return true;
+    default:
+        return false;
+    }
+}
+
+std::optional<bool> mediaPresenceFromCheck(bool succeeded, std::uint32_t systemErrorCode) noexcept {
+    if (succeeded) {
+        return true;
+    }
+    if (isDeviceLostError(systemErrorCode) || isAmbiguousDeviceError(systemErrorCode)) {
+        return false;
+    }
+    return std::nullopt;
+}
+
+bool isAmbiguousDeviceError(std::uint32_t systemErrorCode) noexcept {
+    switch (systemErrorCode) {
+    case 31:    // ERROR_GEN_FAILURE: "A device attached to the system is not functioning"
+    case 121:   // ERROR_SEM_TIMEOUT
+    case 995:   // ERROR_OPERATION_ABORTED
+    case 1117:  // ERROR_IO_DEVICE
+        return true;
+    default:
+        return false;
+    }
 }
 
 Error toError(const ReadResult& result) {
@@ -97,6 +138,11 @@ Error toError(const ReadResult& result) {
         return makeError(ErrorCode::IoError, "device read failed " + describeRange(result), result.systemErrorCode);
     case ReadStatus::InternalError:
         return makeError(ErrorCode::InternalError, "internal read failure " + describeRange(result),
+                         result.systemErrorCode);
+    case ReadStatus::DeviceLost:
+        return makeError(ErrorCode::IoError,
+                         "the source device was removed or is not ready " + describeRange(result) +
+                             ": nothing more can be read from it until it is back",
                          result.systemErrorCode);
     }
     return makeError(ErrorCode::InternalError, "unknown read status");

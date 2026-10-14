@@ -36,6 +36,7 @@ request:
 | Zero-length read with `offset <= size` | `Success`; the device is not touched |
 | Device returned fewer bytes without an error | `PartialRead`, with the valid prefix in `bytesRead` |
 | Device error | `IoError` with the Win32 code and the number of good bytes before the error |
+| Device gone or not ready (P20: `isDeviceLostError`: not ready, removed, not connected, media changed or ejected, ...) | `DeviceLost`, with the Win32 code. Not a bad sector: every later read would fail too, so callers stop instead of retrying sector by sector (L203) |
 | Implementation reports more bytes than requested | `InternalError` |
 
 `readSectors` checks `first * sectorSize` and `count * sectorSize` for overflow. `readExact` turns anything

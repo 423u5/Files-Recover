@@ -1,0 +1,7 @@
+# corpus scenario ntfs-quick-formatted: NTFS quick-formatted after use
+# image 8389120 bytes, sha256 4d6860639679a34a, 3 originals
+# deep scan: 3 candidates
+#1 carving complete image/jpeg "recovered_000001.jpg" size=19136/19136 valid=valid:passed/passed sha=401823f524529bb9 recovery=recovered "recovered_000001.jpg" => /photo.jpg
+#2 carving complete video/mp4 "recovered_000002.mp4" size=153496/153496 valid=valid:passed/passed sha=c20e44b065f8ffd9 recovery=recovered "recovered_000002.mp4" => /clip.mp4
+#3 carving complete audio/mp3 "recovered_000003.mp3" size=84253/84253 valid=valid:passed/unsupported sha=8faecc82b951df0e recovery=recovered "recovered_000003.mp3" => /song.mp3
+# quick scan: 0 candidates

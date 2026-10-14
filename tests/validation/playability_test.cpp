@@ -21,10 +21,14 @@
 
 #include <gtest/gtest.h>
 
+#include <windows.h>
+
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace recovery::validation {
 namespace {
@@ -240,6 +244,77 @@ TEST(PlayabilityTest, InvalidOptionsAreRejected) {
     ASSERT_FALSE(result.ok());
     EXPECT_EQ(result.error().code, ErrorCode::InvalidInput);
     EXPECT_TRUE(validate(WindowsPlayabilityOptions{}).ok());
+}
+
+// L208 (resolved after P20): on Windows N without the Media Feature Pack,
+// audio and video are Unsupported, images still decode, and nothing of Media
+// Foundation is called.
+TEST(PlayabilityTest, WithoutMediaFoundationAudioAndVideoAreUnsupported) {
+    WindowsPlayabilityOptions options;
+    int asked = 0;
+    options.mediaFoundationInstalled = [&asked] {
+        ++asked;
+        return false;
+    };
+    WindowsPlayabilityChecker checker(options);
+    const auto check = [&](std::span<const std::byte> data, std::string_view format) {
+        carving::MemoryContentReader content(data);
+        Result<LevelResult> result = checker.check(content, format, format);
+        return result.ok() ? *result : LevelResult{};
+    };
+    const Bytes wav = test::makeWav({});
+    const LevelResult audio = check(wav, "wav");
+    EXPECT_EQ(audio.status, LevelStatus::Unsupported) << testing::describe(audio);
+    EXPECT_NE(audio.detail.find("Media Foundation is not installed"), std::string::npos) << testing::describe(audio);
+    const LevelResult video = check(test::mp4_samples::named("ffmpeg_h264_aac.mp4").data(), "mp4");
+    EXPECT_EQ(video.status, LevelStatus::Unsupported) << testing::describe(video);
+    EXPECT_EQ(asked, 2);
+    const Bytes png = test::makePng({});
+    EXPECT_EQ(check(png, "png").status, LevelStatus::Passed);
+    EXPECT_EQ(asked, 2) << "images do not need Media Foundation";
+}
+
+// The DLL names an image imports, delayed or not, lowercased.
+std::vector<std::string> importedDlls(const std::byte* base, bool delayed) {
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+    const IMAGE_DATA_DIRECTORY& directory =
+        nt->OptionalHeader.DataDirectory[delayed ? IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT : IMAGE_DIRECTORY_ENTRY_IMPORT];
+    std::vector<std::string> names;
+    const auto add = [&](DWORD rva) {
+        std::string name(reinterpret_cast<const char*>(base + rva));
+        std::transform(name.begin(), name.end(), name.begin(),
+                       [](char c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); });
+        names.push_back(std::move(name));
+    };
+    if (directory.VirtualAddress == 0) {
+        return names;
+    }
+    if (delayed) {
+        for (const auto* entry = reinterpret_cast<const IMAGE_DELAYLOAD_DESCRIPTOR*>(base + directory.VirtualAddress);
+             entry->DllNameRVA != 0; ++entry) {
+            add(entry->DllNameRVA);
+        }
+    } else {
+        for (const auto* entry = reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(base + directory.VirtualAddress);
+             entry->Name != 0; ++entry) {
+            add(entry->Name);
+        }
+    }
+    return names;
+}
+
+// L208: an executable that links the playability checker (this one, as
+// recovery.exe does) delay-loads Media Foundation, so it starts without it.
+TEST(PlayabilityTest, TheExecutablesDelayLoadMediaFoundation) {
+    const auto* self = reinterpret_cast<const std::byte*>(::GetModuleHandleW(nullptr));
+    ASSERT_NE(self, nullptr);
+    const std::vector<std::string> imports = importedDlls(self, false);
+    const std::vector<std::string> delayed = importedDlls(self, true);
+    for (const std::string_view dll : {"mfplat.dll", "mfreadwrite.dll"}) {
+        EXPECT_EQ(std::count(imports.begin(), imports.end(), dll), 0) << dll << " is imported directly";
+        EXPECT_EQ(std::count(delayed.begin(), delayed.end(), dll), 1) << dll << " is not delay-loaded";
+    }
 }
 
 }  // namespace

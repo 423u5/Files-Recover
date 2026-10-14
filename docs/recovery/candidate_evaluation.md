@@ -79,8 +79,12 @@ starts at its first stored byte, or where its metadata puts its first cluster):
 - Any other carve is a file of its own (CARVING), named `recovered_<id>.<ext>`, with where it lies in the volume's
   allocation (free and allocated clusters, the active files it overlaps). A carve inside one active file's data (a
   thumbnail, the video of a motion photo) is linked to that file (`container`, `INSIDE_ACTIVE_FILE`) and its clusters
-  are not marked reallocated: they are the container's. Other carves in clusters allocated now get them marked
-  reallocated (`ClustersReallocated`).
+  are not marked reallocated: they are the container's. Other carves get marked reallocated (`ClustersReallocated`)
+  only the bytes in clusters that are allocated now *and* hold the data of an active file the volume lists (P20,
+  found by the corruption corpus). Clusters allocated to no listed file (a lost FAT32 chain, the cluster of a folder
+  that was overwritten, a torn NTFS record, a run list beyond the volume) prove nothing about the carve: one that
+  validates there is Complete. MP4 recovery's carves follow the same rule (`AllocatedClusters` only when bytes are
+  reallocated). A deleted file whose recorded clusters are allocated now still has them marked reallocated.
 
 ## Format and validation
 
@@ -122,8 +126,15 @@ from `firstId`, or whose duplicate flags do not fit their content, are refused.
 
 ## Cost
 
-Each candidate's data is read at least twice (validation, hashing), video media data in full; the inputs are kept
-(and copied once) until the end of the run (L121, L129).
+Each candidate's data is read at least twice (validation, hashing), video media data in full (L121).
+
+Memory (after P20, L212): an evaluation runs once. `run()` takes the carves, MP4 and fragment candidates added
+(rather than a copy of them); a second `run()` is refused (InvalidInput). The merge keeps indexes, not candidates:
+one small item per candidate to deliver, what joins or replaces a filesystem candidate only for the candidates that
+have something, and the lookups by key and by start only when MP4, fragment or carve inputs need them. Each
+candidate's proposal is put together on the worker that evaluates it (a filesystem candidate's data is copied from
+the volume's scan then) and what the run held for it goes as it is delivered. Duplicate carves are found by sorting
+(n log n; the first one added stays).
 
 ## Tests
 
@@ -131,7 +142,8 @@ Each candidate's data is read at least twice (validation, hashing), video media 
 old data, with valid, truncated, invalid and unknown files, duplicates under other names and other content under one
 name, carves of the whole card merged into filesystem candidates (FILESYSTEM and HYBRID), carves of their own and
 inside an active file, a deleted file whose first cluster another file has taken, an MP4 recovery candidate, a fragment
-reconstruction, synthetic AMBIGUOUS and UNRECOVERABLE reconstructions, unreadable sectors, options and cancellation.
+reconstruction, synthetic AMBIGUOUS and UNRECOVERABLE reconstructions, unreadable sectors, options and cancellation,
+the same carve added twice (counted once, the first added staying) and a second run (refused).
 Every candidate is checked: its SHA-256 equals the hash of what `reconstructCandidate` delivers, its warnings follow
 from its levels and evidence, a duplicate's original is earlier with the same digest, and its explanation names its
 status and digest.

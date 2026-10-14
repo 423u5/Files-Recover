@@ -295,9 +295,6 @@ TEST_F(FileCarverTest, FormatFailuresRejectTheHitButTheRunContinues) {
             });
         },
         [](ScriptedFormat& f) {
-            f.onValidate([](IContentReader&) -> Result<ValidationResult> { return ValidationResult{}; });
-        },
-        [](ScriptedFormat& f) {
             f.onValidate([](IContentReader&) -> Result<ValidationResult> {
                 return ValidationResult{static_cast<ValidationStatus>(9), 0, ""};
             });
@@ -478,6 +475,36 @@ TEST_F(FileCarverTest, HitsInsideAValidatedFileAreSkipped) {
     EXPECT_EQ(candidates[1].formatId, "marker");
     EXPECT_EQ(candidates[1].sourceOffset, 1000 + test::SizedFormat::kHeaderSize);
     EXPECT_EQ(candidates[1].validation.status, ValidationStatus::Valid);
+    EXPECT_EQ(report.skippedInsideCandidates, 0u);
+}
+
+TEST_F(FileCarverTest, AFileItsValidatorCannotCheckIsKeptButNotTrusted) {
+    // A validator that cannot check a file (an encrypted ZIP member, say)
+    // says NotValidated: the file is a candidate, and the hits inside it are
+    // carved, since nothing shows that its bytes are its own.
+    addStandardFormats();
+    auto format = std::make_shared<ScriptedFormat>(scriptedDescriptor("script", "SCRP", 1024));
+    format->onEnd([](IContentReader& content) -> Result<EndDetection> {
+        return EndDetection{EndStatus::Found, std::min<std::uint64_t>(content.size(), 600), "scripted"};
+    });
+    format->onValidate([](IContentReader& content) -> Result<ValidationResult> {
+        return ValidationResult{ValidationStatus::NotValidated, content.size(), "an encrypted member"};
+    });
+    add(format);
+    VirtualSource source(64 * 1024);
+    source.plant(1000, bytesOf("SCRP"));
+    source.plant(1100, test::makeMarkerFile(100));
+    RECOVERY_ASSERT_OK(source.open());
+    std::vector<FileCandidate> candidates;
+    const CarveReport report = run(source, candidates);
+    ASSERT_EQ(candidates.size(), 2u);
+    EXPECT_EQ(candidates[0].formatId, "script");
+    EXPECT_EQ(candidates[0].length, 600u);
+    EXPECT_EQ(candidates[0].validation.status, ValidationStatus::NotValidated);
+    EXPECT_EQ(candidates[0].validation.detail, "an encrypted member");
+    EXPECT_EQ(candidates[1].formatId, "marker");
+    EXPECT_EQ(candidates[1].sourceOffset, 1100u);
+    EXPECT_EQ(report.count(ValidationStatus::NotValidated), 1u);
     EXPECT_EQ(report.skippedInsideCandidates, 0u);
 }
 

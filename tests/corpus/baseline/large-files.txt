@@ -1,0 +1,14 @@
+# corpus scenario large-files: exFAT, 128 KiB clusters: files of 5 to 14 MiB, deleted and fragmented
+# image 52559872 bytes, sha256 00dfe087a17f423c, 5 originals
+# deep scan: 5 candidates
+#1 filesystem complete audio/wav "/Concert.wav" size=12000100/12000100 valid=valid:passed/not-applicable sha=76d35d7667e6b584 recovery=recovered "Concert.wav" => /Concert.wav
+#2 filesystem complete video/mp4 "/Movie.mp4" size=12198282/12198282 valid=valid:passed/passed sha=6aec99ab112c1456 recovery=recovered "Movie.mp4" => /Movie.mp4
+#3 filesystem complete image/jpeg "/Panorama.jpg" size=446953/446953 valid=valid:passed/passed sha=56b29156bafbe535 recovery=recovered "Panorama.jpg" => /Panorama.jpg
+#4 filesystem complete audio/wav "/Deleted big.wav" size=6000100/6000100 deleted valid=valid:passed/not-applicable sha=1593833a0d0ca8cb recovery=recovered "Deleted big.wav" => /Deleted big.wav
+#5 filesystem complete video/mp4 "/Fragmented big.mp4" size=5220919/5220919 fragmented valid=valid:passed/passed sha=c9edcc42148aba3d recovery=recovered "Fragmented big.mp4" => /Fragmented big.mp4
+# quick scan: 5 candidates
+#1 filesystem complete audio/wav "/Concert.wav" size=12000100/12000100 valid=valid:passed/not-applicable sha=76d35d7667e6b584 recovery=recovered "Concert.wav" => /Concert.wav
+#2 filesystem complete video/mp4 "/Movie.mp4" size=12198282/12198282 valid=valid:passed/passed sha=6aec99ab112c1456 recovery=recovered "Movie.mp4" => /Movie.mp4
+#3 filesystem complete image/jpeg "/Panorama.jpg" size=446953/446953 valid=valid:passed/passed sha=56b29156bafbe535 recovery=recovered "Panorama.jpg" => /Panorama.jpg
+#4 filesystem complete audio/wav "/Deleted big.wav" size=6000100/6000100 deleted valid=valid:passed/not-applicable sha=1593833a0d0ca8cb recovery=recovered "Deleted big.wav" => /Deleted big.wav
+#5 filesystem complete video/mp4 "/Fragmented big.mp4" size=5220919/5220919 fragmented valid=valid:passed/passed sha=c9edcc42148aba3d recovery=recovered "Fragmented big.mp4" => /Fragmented big.mp4

@@ -236,16 +236,97 @@ TEST(Fat32CorruptionTest, BrokenLongNameSequenceIsIgnored) {
     EXPECT_EQ(r.entry.name, r.entry.shortName);
 }
 
-TEST(Fat32CorruptionTest, InvalidShortNameAndAttributesAreFlagged) {
+TEST(Fat32CorruptionTest, InvalidShortNameIsFlagged) {
     Fat32ImageBuilder builder;
     const auto file = builder.addFile(builder.root(), "OK.TXT", test::makePattern(10, 1));
     builder.shortEntry(file)[2] = std::byte{'*'};
+    const Mounted m = mount(builder.build());
+    const FileScan scanned = scanOf(m);
+    ASSERT_EQ(scanned.records.size(), 1U);
+    const DirectoryEntry& e = scanned.records.at(0).entry;
+    EXPECT_TRUE(e.hasIssue(EntryIssue::InvalidShortName));
+    EXPECT_FALSE(e.hasIssue(EntryIssue::ReservedAttributeBits));
+}
+
+TEST(Fat32CorruptionTest, ReservedAttributeBitsAreFlagged) {
+    Fat32ImageBuilder builder;
+    const auto file = builder.addFile(builder.root(), "OK.TXT", test::makePattern(10, 1));
     builder.shortEntry(file)[11] = std::byte{0xE0};
     const Mounted m = mount(builder.build());
     const FileScan scanned = scanOf(m);
+    ASSERT_EQ(scanned.records.size(), 1U);
     const DirectoryEntry& e = scanned.records.at(0).entry;
-    EXPECT_TRUE(e.hasIssue(EntryIssue::InvalidShortName));
     EXPECT_TRUE(e.hasIssue(EntryIssue::ReservedAttributeBits));
+    EXPECT_FALSE(e.hasIssue(EntryIssue::InvalidShortName));
+}
+
+// P20 (corpus finding F2): an active slot whose name is invalid and which
+// has a second impossible field is not an entry: it is skipped, and the
+// directory reports the slots it skipped.
+TEST(Fat32CorruptionTest, ActiveSlotsThatAreClearlyGarbageAreSkipped) {
+    const auto mutated = [](const auto& edit) {
+        Fat32ImageBuilder builder;
+        const auto real = builder.addFile(builder.root(), "REAL.TXT", test::makePattern(10, 1));
+        const auto file = builder.addFile(builder.root(), "OK.TXT", test::makePattern(10, 2));
+        builder.shortEntry(file)[2] = std::byte{'*'};
+        edit(builder, file);
+        (void)real;
+        return builder.build();
+    };
+    const std::vector<std::vector<std::byte>> images = {
+        // Reserved attribute bits.
+        mutated([](Fat32ImageBuilder& b, const auto& file) { b.shortEntry(file)[11] = std::byte{0xE0}; }),
+        // A first cluster beyond the volume.
+        mutated([](Fat32ImageBuilder& b, const auto& file) {
+            b.shortEntry(file)[20] = std::byte{0xF0};
+            b.shortEntry(file)[21] = std::byte{0x0F};
+        }),
+        // A size larger than the volume.
+        mutated([](Fat32ImageBuilder& b, const auto& file) {
+            for (std::size_t i = 28; i < 32; ++i) {
+                b.shortEntry(file)[i] = std::byte{0x7F};
+            }
+        }),
+    };
+    for (const auto& image : images) {
+        const Mounted m = mount(image);
+        const FileScan scanned = scanOf(m);
+        ASSERT_EQ(scanned.records.size(), 1U);
+        EXPECT_EQ(scanned.records.at(0).entry.name, "REAL.TXT");
+        ASSERT_EQ(scanned.issues.size(), 1U);
+        EXPECT_EQ(scanned.issues.front().kind, ScanIssueKind::DirectoryInvalid);
+        EXPECT_NE(scanned.issues.front().detail.find("1 slots hold no directory entry"), std::string::npos)
+            << scanned.issues.front().detail;
+    }
+}
+
+TEST(Fat32CorruptionTest, AFolderClusterOfOtherDataYieldsFewEntries) {
+    Fat32ImageBuilder builder;
+    const auto folder = builder.addDirectory(builder.root(), "JUNK");
+    (void)builder.addFile(folder.clusters.front(), "A.TXT", test::makePattern(10, 1));
+    // The folder's cluster later held other data: noise in every slot after
+    // "." and ".." (no slot starts with zero, which would end the listing).
+    std::vector<std::byte> noise = test::makePattern(builder.clusterSize() - 64, 99);
+    for (std::size_t at = 0; at < noise.size(); at += 32) {
+        if (noise[at] == std::byte{0}) {
+            noise[at] = std::byte{0x41};
+        }
+    }
+    std::copy(noise.begin(), noise.end(),
+              builder.raw().begin() + static_cast<std::ptrdiff_t>(builder.clusterOffset(folder.clusters.front()) + 64));
+    const Mounted m = mount(builder.build());
+    const FileScan scanned = scanOf(m);
+    std::size_t inFolder = 0;
+    for (const FileRecord& record : scanned.records) {
+        inFolder += record.path.starts_with("/JUNK/") ? 1U : 0U;
+    }
+    // Slots with a name of valid characters and nothing else impossible may
+    // still be listed; the rest are skipped and reported.
+    EXPECT_LE(inFolder, 2U);
+    EXPECT_TRUE(std::any_of(scanned.issues.begin(), scanned.issues.end(), [](const ScanIssue& issue) {
+        return issue.kind == ScanIssueKind::DirectoryInvalid &&
+               issue.detail.find("slots hold no directory entry") != std::string::npos;
+    }));
 }
 
 TEST(Fat32CorruptionTest, GarbageDeletedSlotsAreIgnored) {

@@ -50,6 +50,9 @@ void printSummary(std::ostream& out, const imaging::ImagingSummary& summary, con
     out << "Unreadable:      " << formatBytes(summary.unreadableBytes) << " in "
         << formatCount(summary.badRegions.size()) << (summary.badRegions.size() == 1 ? " region" : " regions")
         << " (zero-filled in the image)\n";
+    if (summary.sha256.has_value()) {
+        out << "SHA-256:         " << summary.sha256->hex() << " (of the image file; also in its metadata)\n";
+    }
     if (summary.badRegions.empty()) {
         return;
     }
@@ -139,6 +142,9 @@ ExitCode runImage(const ParsedOptions& options, Context& context) {
         context.error(*problem);
         return ExitCode::Error;
     }
+    if (Status ready = context.prepareFolderFor(*output, &opened->info); !ready.ok()) {
+        return context.fail("cannot write the image '" + displayPath(*output) + "'", ready.error());
+    }
 
     CancellationSource cancellation;
     imaging.cancellation = cancellation.token();
@@ -177,6 +183,13 @@ ExitCode runImage(const ParsedOptions& options, Context& context) {
         context.note("Imaging was stopped. To go on: recovery image --source " + quoteArgument(*sourceText) +
                      " --output " + quoteArgument(*outputText) + " --resume");
         return ExitCode::Cancelled;
+    }
+    if (summary->unreadableBytes != 0 && summary->unreadableBytes == summary->bytesCompleted) {
+        // Found imaging a USB stick whose flash failed: an image of zeros is no image.
+        context.warning("nothing could be read from the source: every sector failed. The device may have failed or "
+                        "been disconnected; check it (Disk Management) before imaging it again. The image holds only "
+                        "zeros");
+        return ExitCode::Incomplete;
     }
     if (summary->unreadableBytes != 0) {
         context.warning(formatBytes(summary->unreadableBytes) +

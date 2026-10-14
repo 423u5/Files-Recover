@@ -71,6 +71,10 @@ struct ImagingSummary {
     std::vector<storage::BadRegion> badRegions;
     std::filesystem::path imagePath;
     std::filesystem::path metadataPath;
+    // SHA-256 of the whole image file (unreadable sectors as their zeros),
+    // also in the metadata; only when the image is complete (L1). A resumed
+    // image has the same one as an uninterrupted run.
+    std::optional<Sha256Digest> sha256;
 };
 
 // Creates a raw image of an open source.
@@ -102,6 +106,10 @@ private:
     [[nodiscard]] Status validate() const;
     [[nodiscard]] Result<Prepared> prepareNew(const storage::SourceInfo& info);
     [[nodiscard]] Result<Prepared> prepareResume(const storage::SourceInfo& info);
+    // Feeds the image's first `length` bytes, read back from the image file
+    // (never from the source), to the hash: what an earlier run wrote. Fails
+    // with Cancelled when asked to stop.
+    [[nodiscard]] Status hashWrittenPart(std::uint64_t length);
     [[nodiscard]] Status imageRange(std::uint64_t offset, std::span<std::byte> buffer, std::size_t level);
     [[nodiscard]] Status recordBadRegion(std::uint64_t offset, std::span<std::byte> buffer, std::uint32_t errorCode);
     [[nodiscard]] Status checkpoint(storage::DestinationFile& file, ImageMetadata& metadata, std::uint64_t position,
@@ -121,6 +129,8 @@ private:
     storage::BadRegionMap badRegions_;
     std::uint64_t resumedFrom_ = 0;
     std::uint64_t badSectorsLogged_ = 0;
+    // The image file's bytes, in order, as they are committed.
+    Sha256 imageHash_;
     std::chrono::steady_clock::time_point started_;
     std::chrono::steady_clock::time_point lastProgress_;
 };

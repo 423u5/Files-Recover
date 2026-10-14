@@ -80,7 +80,9 @@ is `Contiguous`, one piece from the start to the end. Fragmented files are recon
 (P13, [fragment_recovery.md](fragment_recovery.md)), which takes carves that break as seeds.
 
 **Validation** (`FormatValidator::validate(content)`) checks the carved bytes and gives `Valid`, `Truncated`
-(consistent but cut short) or `Invalid`, the number of consistent bytes from the start, and a detail. Validators see
+(consistent but cut short) or `Invalid`, the number of consistent bytes from the start, and a detail. Since ZIP
+(after P20) a validator may also say `NotValidated`: the bytes hold a feature it cannot check (an encrypted
+member). The carver keeps such a candidate and never trusts it; it used to reject the hit. Validators see
 only an `IContentReader`, not the source, so the same validator can later check files found through filesystem
 metadata (P14). A candidate is never considered recovered because of its header alone; that is what the
 validation status is for.
@@ -98,7 +100,8 @@ defines a format inside the test file and carves it next to the other test forma
 
 Formats are added explicitly. Each format module provides a function that adds its formats to a registry
 (`formats::registerImageFormats` for the images of P9, `formats::registerAudioFormats` for the audio of P10,
-`formats::registerVideoFormats` for MP4 in P12). There is deliberately no registration through static
+`formats::registerVideoFormats` for MP4 in P12, `formats::registerArchiveFormats` for ZIP after P20, which takes the
+validation library's DEFLATE decoder). There is deliberately no registration through static
 initialisers: the engine is built
 from static libraries, and the linker drops object files that nothing references, so such formats would silently
 go missing.
@@ -191,7 +194,13 @@ earlier candidate of the **same** format, whatever that candidate's end and verd
 other formats inside it are carved as before, and so are the format's hits after the candidate's end (where the
 rest of a broken stream may start). The carver keeps, per self-synchronizing format, the candidate reaching
 furthest. `skipHitsInsideValidCandidates = false` turns both rules off. The flag is opt-in, so formats without it
-(the images, WAV, M4A) behave exactly as before.
+(the images, WAV, M4A) behave exactly as before. ZIP (after P20) sets it too: every member of an archive starts
+with the format's signature, so the members of an archive are its own hits
+([../formats/archives.md](../formats/archives.md)).
+
+`FormatDescriptor::foundEndMeansContiguous` (ZIP, after P20) says that a file whose end was `Found` lies in one
+piece: a carve that is `Found` but `Invalid` is then damaged where it lies, and fragment reconstruction does not take
+it as a seed ([fragment_recovery.md](fragment_recovery.md)). The carver itself does not use the flag.
 
 `CarveReport` holds the scan report, candidates per validation status, rejected hits per reason, skipped hits and
 the bytes the carves read. In a completed run every hit is accounted for: `hits = candidates + rejected + skipped`.

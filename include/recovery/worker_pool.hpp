@@ -26,7 +26,11 @@ namespace recovery {
 // Rules for tasks: a task must not throw (an exception that escapes one is
 // caught and counted in failedTasks(), never propagated), and must not wait
 // for a task queued after it, nor call submit() on its own pool: with every
-// worker waiting, nothing would run the task waited for.
+// worker waiting, nothing would run the task waited for. A task may call
+// shutdown() on its own pool (the pool then stops, and the owner's
+// destructor joins the workers), but must not destroy it: its worker uses
+// the pool again once the task returns (the destructor terminates the
+// process when called on one of the pool's workers).
 //
 // Thread safety: every member may be called from any thread. The destructor
 // runs the tasks still queued, then joins the workers.
@@ -58,7 +62,9 @@ public:
     [[nodiscard]] bool trySubmit(Task task);
 
     // Stops accepting tasks, runs the ones queued and joins the workers.
-    // Called by the destructor; calling it again does nothing.
+    // Called by the destructor; calling it again does nothing. Called by one
+    // of the pool's tasks, it stops the pool and returns without joining:
+    // the destructor joins the workers.
     void shutdown();
 
     [[nodiscard]] std::uint32_t threadCount() const noexcept { return threadCount_; }

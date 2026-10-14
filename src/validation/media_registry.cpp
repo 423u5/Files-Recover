@@ -42,6 +42,7 @@ std::vector<std::shared_ptr<const IMediaValidator>> mediaValidators() {
         detail::makeWavMediaValidator(),
         detail::makeM4aMediaValidator(),
         detail::makeMp4MediaValidator(),
+        detail::makeZipMediaValidator(),
     };
 }
 

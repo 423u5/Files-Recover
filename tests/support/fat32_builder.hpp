@@ -23,6 +23,11 @@ struct Fat32BuilderOptions {
     std::uint8_t fatCount = 2;
     std::string label = "TESTVOL";  // empty: no label entry and "NO NAME" in the BPB
     std::uint32_t volumeId = 0x1234ABCD;
+    // FAT16 (after P20) as Windows formats it: 16-bit FAT entries, no FSInfo
+    // and no backup boot sector, a root directory of `rootEntries` slots
+    // between the FATs and cluster 2. clusterCount must be 4085 to 65524.
+    bool fat16 = false;
+    std::uint16_t rootEntries = 512;
 };
 
 // Builds FAT32 volumes in memory the way Windows lays them out: boot sector
@@ -43,6 +48,8 @@ public:
 
     explicit Fat32ImageBuilder(Fat32BuilderOptions options = {});
 
+    // The root directory's key for addFile and addDirectory (FAT32: its first
+    // cluster; FAT16: the fixed region, and cluster 2 is left unused).
     [[nodiscard]] static constexpr std::uint32_t root() noexcept { return 2; }
 
     Entry addDirectory(std::uint32_t parent, std::string_view name);
@@ -76,6 +83,7 @@ private:
         std::vector<std::uint32_t> clusters;
         std::size_t nextSlot = 0;
         std::set<std::string> shortNames;
+        bool fixed = false;  // FAT16's root: the region before cluster 2
     };
 
     std::uint32_t allocate();
@@ -86,6 +94,9 @@ private:
     void writeData(const std::vector<std::uint32_t>& clusters, std::span<const std::byte> data);
     void writeBootSector(std::uint32_t sector);
     void writeFsInfo(std::uint32_t sector);
+
+    void writeFat16BootSector();
+    [[nodiscard]] std::uint32_t rootDirSectors() const noexcept;
 
     Fat32BuilderOptions options_;
     std::uint32_t clusterSize_;

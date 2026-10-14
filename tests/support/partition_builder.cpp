@@ -101,6 +101,47 @@ GptLayout writeGpt(std::vector<std::byte>& disk, const GptSpec& spec) {
     return layout;
 }
 
+GptRegions gptRegions(std::uint64_t diskSectors, const GptSpec& spec) {
+    // writeGpt() on a disk made of the two regions alone, then the headers'
+    // LBAs rewritten for the real disk.
+    const std::uint32_t ss = spec.sectorSize;
+    const std::uint64_t arraySectors =
+        (static_cast<std::uint64_t>(spec.entryCount) * spec.entrySize + ss - 1) / ss;
+    const std::uint64_t headSectors = 2 + arraySectors;
+    const std::uint64_t tailSectors = arraySectors + 1;
+    std::vector<std::byte> compact(static_cast<std::size_t>((headSectors + tailSectors) * ss));
+    (void)writeGpt(compact, spec);
+
+    GptRegions regions;
+    regions.layout.primaryEntriesLba = 2;
+    regions.layout.firstUsableLba = headSectors;
+    regions.layout.backupHeaderLba = diskSectors - 1;
+    regions.layout.backupEntriesLba = diskSectors - 1 - arraySectors;
+    regions.layout.lastUsableLba = regions.layout.backupEntriesLba - 1;
+    regions.tailLba = regions.layout.backupEntriesLba;
+    regions.head.assign(compact.begin(), compact.begin() + static_cast<std::ptrdiff_t>(headSectors * ss));
+    regions.tail.assign(compact.begin() + static_cast<std::ptrdiff_t>(headSectors * ss), compact.end());
+
+    const auto fix = [&](std::span<std::byte> header, std::uint64_t myLba, std::uint64_t alternateLba,
+                         std::uint64_t entriesLba) {
+        storeLe64(header, 24, myLba);
+        storeLe64(header, 32, alternateLba);
+        storeLe64(header, 40, regions.layout.firstUsableLba);
+        storeLe64(header, 48, regions.layout.lastUsableLba);
+        storeLe64(header, 72, entriesLba);
+        storeLe32(header, 16, 0);
+        storeLe32(header, 16, crc32(header.first(92)));
+    };
+    fix(std::span<std::byte>(regions.head).subspan(ss, ss), 1, regions.layout.backupHeaderLba, 2);
+    fix(std::span<std::byte>(regions.tail).subspan(static_cast<std::size_t>(arraySectors * ss), ss),
+        regions.layout.backupHeaderLba, 1, regions.layout.backupEntriesLba);
+    if (spec.protectiveMbr) {
+        const auto size = static_cast<std::uint32_t>(std::min<std::uint64_t>(diskSectors - 1, 0xFFFFFFFFULL));
+        writeMbrSector(regions.head, ss, 0, {{0x00, 0xEE, 1, size}});
+    }
+    return regions;
+}
+
 void resealGptHeader(std::vector<std::byte>& disk, std::uint32_t sectorSize, std::uint64_t headerLba) {
     const std::span<std::byte> h = sectorAt(disk, sectorSize, headerLba);
     const std::uint32_t headerSize = std::min<std::uint32_t>(loadLe32(h, 12), sectorSize);

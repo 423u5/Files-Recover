@@ -152,10 +152,13 @@ target_link_libraries(recovery_carving
 # recovery_formats: carvable file formats that plug into recovery_carving.
 # Images (P9): JPEG, PNG, WEBP, GIF and BMP. Audio (P10): MP3, WAV, M4A and
 # raw AAC (ADTS). The ISO base media file format (MP4) parser (P11). Video
-# (P12): MP4, and the MP4 analysis that MP4 recovery builds on.
+# (P12): MP4, and the MP4 analysis that MP4 recovery builds on. Archives:
+# ZIP, which decodes DEFLATE through a decoder it is handed (the validation
+# library's, which depends on this one).
 # ---------------------------------------------------------------------------
 add_library(recovery_formats STATIC
     formats/aac_format.cpp
+    formats/archive_formats.cpp
     formats/audio_formats.cpp
     formats/audio_tags.cpp
     formats/audio_tags.hpp
@@ -179,6 +182,7 @@ add_library(recovery_formats STATIC
     formats/video_formats.cpp
     formats/wav_format.cpp
     formats/webp_format.cpp
+    formats/zip_format.cpp
 )
 add_library(recovery::formats ALIAS recovery_formats)
 target_link_libraries(recovery_formats
@@ -239,6 +243,7 @@ add_library(recovery_validation STATIC
     validation/bmp_media.cpp
     validation/content_bytes.cpp
     validation/content_bytes.hpp
+    validation/deflate_decoder.cpp
     validation/gif_media.cpp
     validation/hevc_syntax.cpp
     validation/hevc_syntax.hpp
@@ -259,6 +264,7 @@ add_library(recovery_validation STATIC
     validation/vp8l_decoder.cpp
     validation/vp8l_decoder.hpp
     validation/webp_media.cpp
+    validation/zip_media.cpp
 )
 add_library(recovery::validation ALIAS recovery_validation)
 target_link_libraries(recovery_validation
@@ -278,8 +284,13 @@ add_library(recovery_playability STATIC
 add_library(recovery::playability ALIAS recovery_playability)
 target_link_libraries(recovery_playability
     PUBLIC recovery::validation
-    PRIVATE recovery_engine_options mfplat mfreadwrite mfuuid ole32 windowscodecs
+    PRIVATE recovery_engine_options mfplat mfreadwrite mfuuid ole32 windowscodecs delayimp
 )
+# Media Foundation is delay-loaded by every executable that links this library
+# (L208): Windows N editions have no mfplat.dll unless the Media Feature Pack
+# is installed, and an executable importing it would not start there at all.
+# The checker loads it from System32 before its first use.
+target_link_options(recovery_playability INTERFACE /DELAYLOAD:mfplat.dll /DELAYLOAD:mfreadwrite.dll)
 
 # ---------------------------------------------------------------------------
 # recovery_evaluation: candidate evaluation (P14): the candidates of every

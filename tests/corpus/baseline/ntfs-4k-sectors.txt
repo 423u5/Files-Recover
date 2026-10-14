@@ -1,0 +1,10 @@
+# corpus scenario ntfs-4k-sectors: GPT disk of 4096-byte sectors with NTFS
+# image 12845056 bytes, sha256 4b6650ad479ac9c2, 3 originals
+# deep scan: 3 candidates
+#1 filesystem complete image/jpeg "/photo.jpg" size=19740/19740 valid=valid:passed/passed sha=95fa85752782dd00 recovery=recovered "photo.jpg" => /photo.jpg
+#2 filesystem complete video/mp4 "/clip.mp4" size=156444/156444 valid=valid:passed/passed sha=6d971e26613db438 recovery=recovered "clip.mp4" => /clip.mp4
+#3 filesystem complete image/png "/deleted.png" size=58027/58027 deleted valid=valid:passed/passed sha=febc3a2b42231352 recovery=recovered "deleted.png" => /deleted.png
+# quick scan: 3 candidates
+#1 filesystem complete image/jpeg "/photo.jpg" size=19740/19740 valid=valid:passed/passed sha=95fa85752782dd00 recovery=recovered "photo.jpg" => /photo.jpg
+#2 filesystem complete video/mp4 "/clip.mp4" size=156444/156444 valid=valid:passed/passed sha=6d971e26613db438 recovery=recovered "clip.mp4" => /clip.mp4
+#3 filesystem complete image/png "/deleted.png" size=58027/58027 deleted valid=valid:passed/passed sha=febc3a2b42231352 recovery=recovered "deleted.png" => /deleted.png

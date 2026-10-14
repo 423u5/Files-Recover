@@ -1,0 +1,4 @@
+# corpus scenario empty-noise: an empty FAT32 card whose free space is old data
+# image 8422400 bytes, sha256 76be9a23cadd1ca3, 0 originals
+# deep scan: 0 candidates
+# quick scan: 0 candidates

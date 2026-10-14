@@ -179,6 +179,10 @@ Every stage reads the source through one `ScanSource` (`include/scan/scan_source
 * **Counts**: bytes delivered by the source, bytes asked for, bytes served from the cache, and unreadable bytes
   (sectors whose read on their own failed: every reader of the engine retries a failed read sector by sector).
   The unreadable regions found go into the updates.
+* **A device that is gone** (P20): a read failing with `ReadStatus::DeviceLost` (the device was pulled out or is
+  not ready) is an error, not a bad sector. The scan (or the recovery job) stops at once with it instead of
+  reading the rest of the source sector by sector; nothing is recorded as unreadable, and the scan resumes from
+  its checkpoint once the device is back (`AScanOfADiskThatIsGoneStopsAtOnceAndResumesWhenItIsBack`).
 
 ## Memory
 
@@ -191,8 +195,12 @@ Bounded by the run options, whatever the source's size:
 * the pool: `workerThreads` threads and a bounded queue.
 
 What grows with the number of files found: the stages' results (filesystem candidates, carves, MP4 candidates,
-reconstructions), kept until the evaluation, as the stages keep them on their own (L40, L99, L115, L129). They are
-in the checkpoint too: a caller that keeps a checkpoint in memory keeps a second copy (L139).
+reconstructions), kept until the evaluation, as the stages keep them on their own (L40, L99, L115). They are in the
+checkpoint too. A volume's candidates are kept once, whoever holds them (`VolumeRecord::candidates` is a
+`SharedBox`: the update that delivers them, the scan's checkpoint, a caller's and the copies of either share them);
+a caller that keeps a checkpoint of its own keeps a second copy of the carves, MP4 and fragment candidates (L139).
+The evaluation takes its own copy of those and gives up each candidate's inputs as it delivers it; the evaluated
+candidates themselves are the caller's (L212).
 
 Measured (`MemoryStaysBoundedWhateverTheImageSize`, 16 cache blocks of 1 MiB, 4 workers): the heap peaked at 19.8 MB
 while scanning a 1.25 GiB image and at 20.1 MB for a 5 GiB one.
@@ -261,7 +269,8 @@ other, so it behaves as before (every earlier test passes unchanged):
   * pause, and cancellation while paused;
   * checkpoints of another scan;
   * updates that do not follow;
-  * unreadable sectors.
+  * unreadable sectors;
+  * a volume's candidates shared, not copied, by the update, the scan's checkpoint, a caller's and its copy (L212).
 * `scan_source_test.cpp`: the cache, its bound, bad sectors, the pause gate, concurrent readers.
 * `scan_large_test.cpp`:
   * a 6 GiB virtual image (MBR with a FAT32 partition and an empty one, files beyond 4 GiB in the space no

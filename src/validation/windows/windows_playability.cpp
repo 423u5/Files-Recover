@@ -672,8 +672,27 @@ std::wstring originName(std::string_view extension) {
     return name;
 }
 
+// The default WindowsPlayabilityOptions::mediaFoundationInstalled: the
+// delay-loaded DLLs loaded once, from System32 only, and kept (the delayed
+// imports then bind to them).
+bool mediaFoundationInSystem32() {
+    static const bool installed =
+        ::LoadLibraryExW(L"mfplat.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32) != nullptr &&
+        ::LoadLibraryExW(L"mfreadwrite.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32) != nullptr;
+    return installed;
+}
+
 Result<LevelResult> checkMedia(carving::IContentReader& content, std::string_view extension,
-                               std::chrono::milliseconds sampleTimeout) {
+                               const WindowsPlayabilityOptions& options) {
+    // Before anything of Media Foundation is called: it is delay-loaded, and a
+    // call without it would end the process.
+    const bool installed =
+        options.mediaFoundationInstalled ? options.mediaFoundationInstalled() : mediaFoundationInSystem32();
+    if (!installed) {
+        return level(LevelStatus::Unsupported, kMedia,
+                     "Media Foundation is not installed (a Windows N edition without the Media Feature Pack)");
+    }
+    const std::chrono::milliseconds sampleTimeout = options.sampleTimeout;
     const MediaFoundationScope platform;
     if (FAILED(platform.result())) {
         return level(LevelStatus::Unsupported, kMedia,
@@ -880,7 +899,7 @@ Result<LevelResult> WindowsPlayabilityChecker::check(carving::IContentReader& co
     if (gap->has_value()) {
         return level(LevelStatus::Unsupported, image ? kImaging : kMedia, "not decoded: " + **gap);
     }
-    return image ? checkImage(content) : checkMedia(content, extension, options_.sampleTimeout);
+    return image ? checkImage(content) : checkMedia(content, extension, options_);
 }
 
 }  // namespace recovery::validation

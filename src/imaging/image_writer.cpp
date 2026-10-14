@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <fstream>
+#include <span>
 #include <string>
 
 namespace recovery::imaging {
@@ -78,6 +80,7 @@ Result<ImagingSummary> ImageWriter::run() {
     badRegions_.clear();
     badSectorsLogged_ = 0;
     resumedFrom_ = 0;
+    imageHash_.reset();
 
     const storage::SourceInfo info = source_.getInfo();
     const storage::DiskResolver resolver =
@@ -107,7 +110,19 @@ Result<ImagingSummary> ImageWriter::run() {
     std::uint64_t lastCheckpoint = position;
     ImagingOutcome outcome = ImagingOutcome::Completed;
 
-    while (position < total) {
+    // A resumed image's hash starts with what the earlier runs wrote.
+    if (resumedFrom_ > 0) {
+        if (Status hashed = hashWrittenPart(resumedFrom_); !hashed.ok()) {
+            if (hashed.error().code != ErrorCode::Cancelled) {
+                (void)checkpoint(file, metadata, position, ImageState::Failed);
+                log(LogLevel::Error, "reading the image back failed", {field("error", describe(hashed.error()))});
+                return hashed.error();
+            }
+            outcome = ImagingOutcome::Cancelled;
+        }
+    }
+
+    while (outcome == ImagingOutcome::Completed && position < total) {
         if (options_.cancellation.isCancellationRequested()) {
             outcome = ImagingOutcome::Cancelled;
             break;
@@ -131,6 +146,7 @@ Result<ImagingSummary> ImageWriter::run() {
                 {field("offset", position), field("error", describe(written.error()))});
             return written.error();
         }
+        imageHash_.update(block);
         position += length;
 
         if (position < total && position - lastCheckpoint >= options_.checkpointIntervalBytes) {
@@ -152,6 +168,9 @@ Result<ImagingSummary> ImageWriter::run() {
     }
 
     const ImageState finalState = outcome == ImagingOutcome::Completed ? ImageState::Completed : ImageState::Cancelled;
+    if (outcome == ImagingOutcome::Completed) {
+        metadata.sha256 = imageHash_.finish();
+    }
     if (Status saved = checkpoint(file, metadata, position, finalState); !saved.ok()) {
         return saved.error();
     }
@@ -162,7 +181,8 @@ Result<ImagingSummary> ImageWriter::run() {
     log(outcome == ImagingOutcome::Completed ? LogLevel::Info : LogLevel::Warning,
         outcome == ImagingOutcome::Completed ? "imaging completed" : "imaging cancelled",
         {field("bytes_completed", position), field("unreadable_bytes", badRegions_.totalBytes()),
-         field("bad_regions", badRegions_.size()), field("elapsed_ms", elapsed.count())});
+         field("bad_regions", badRegions_.size()), field("elapsed_ms", elapsed.count()),
+         field("sha256", metadata.sha256.has_value() ? metadata.sha256->hex() : std::string())});
 
     ImagingSummary summary;
     summary.outcome = outcome;
@@ -173,7 +193,32 @@ Result<ImagingSummary> ImageWriter::run() {
     summary.badRegions = badRegions_.regions();
     summary.imagePath = imagePath_;
     summary.metadataPath = metadataPath_;
+    summary.sha256 = metadata.sha256;
     return summary;
+}
+
+Status ImageWriter::hashWrittenPart(std::uint64_t length) {
+    // The image file, opened for reading beside the writer's handle: what an
+    // earlier run committed, re-read so the hash covers the whole image.
+    std::ifstream image(imagePath_, std::ios::binary);
+    if (!image.is_open()) {
+        return makeError(ErrorCode::DestinationError, "cannot read back the image '" + toUtf8(imagePath_) + "'");
+    }
+    std::vector<char> buffer(static_cast<std::size_t>(std::min<std::uint64_t>(options_.blockSize, length)));
+    for (std::uint64_t done = 0; done < length;) {
+        if (options_.cancellation.isCancellationRequested()) {
+            return makeError(ErrorCode::Cancelled, "imaging cancelled");
+        }
+        const auto chunk = static_cast<std::size_t>(std::min<std::uint64_t>(buffer.size(), length - done));
+        image.read(buffer.data(), static_cast<std::streamsize>(chunk));
+        if (static_cast<std::size_t>(image.gcount()) != chunk) {
+            return makeError(ErrorCode::DestinationError,
+                             "the image '" + toUtf8(imagePath_) + "' is shorter than its recorded progress");
+        }
+        imageHash_.update(std::as_bytes(std::span(buffer.data(), chunk)));
+        done += chunk;
+    }
+    return success();
 }
 
 Result<ImageWriter::Prepared> ImageWriter::prepareNew(const storage::SourceInfo& info) {

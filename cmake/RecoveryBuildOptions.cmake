@@ -3,11 +3,48 @@
 # Engine targets link `recovery_build_options` PRIVATELY so that warning and
 # analysis flags never leak into third-party code (GoogleTest).
 
+# P20 security review: the C++ runtime is linked statically, so the executables
+# need nothing installed on the computer being recovered (installing the Visual
+# C++ runtime there writes to its system drive, perhaps over deleted files).
+# Every target, GoogleTest included, uses it (tests/CMakeLists.txt). Setting
+# CMAKE_MSVC_RUNTIME_LIBRARY when configuring overrides it (to measure).
+if(NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
+# P20 security review: exploit mitigations for code that reads untrusted data.
+# Control Flow Guard, CET shadow stack compatibility, and the executables'
+# DLLs (their static imports) loaded from System32 only, never from the folder
+# the executable is in (a DLL planted beside it, in Downloads say, is ignored).
+# Not in the sanitizer and fuzz builds, which only test: the AddressSanitizer
+# runtime is a DLL found beside the executable or on PATH. RECOVERY_HARDENING
+# OFF leaves them out, to measure what they cost (docs/testing/performance.md).
+if(RECOVERY_HARDENING AND NOT RECOVERY_ENABLE_ASAN AND NOT RECOVERY_BUILD_FUZZERS)
+    add_compile_options(/guard:cf)
+    # Full links, also in Debug (whose default is incremental): after a change
+    # that recompiled most objects (2026-10-13), incrementally linked test
+    # executables ended with 0xC0000409, the code of a failed Control Flow
+    # Guard check, and ran cleanly once linked again (L222).
+    add_link_options(/guard:cf /CETCOMPAT /DEPENDENTLOADFLAG:0x800 /INCREMENTAL:NO)
+endif()
+
 if(RECOVERY_ENABLE_ASAN)
     # Applied globally: every object in the process must agree on ASan
     # instrumentation (MSVC enforces this through /failifmismatch).
     add_compile_options(/fsanitize=address /Zi)
     # /RTC run-time checks are incompatible with AddressSanitizer.
+    foreach(flags_var CMAKE_CXX_FLAGS_DEBUG CMAKE_CXX_FLAGS)
+        string(REGEX REPLACE "/RTC[1csu]+" "" ${flags_var} "${${flags_var}}")
+    endforeach()
+endif()
+
+if(RECOVERY_BUILD_FUZZERS)
+    # Every object of the fuzz build: AddressSanitizer, and the coverage that
+    # guides libFuzzer (the fuzz targets add /fsanitize=fuzzer, which links it).
+    add_compile_options(/fsanitize=address /Zi
+        /fsanitize-coverage=inline-8bit-counters /fsanitize-coverage=edge
+        /fsanitize-coverage=trace-cmp /fsanitize-coverage=trace-div)
+    add_link_options(/INCREMENTAL:NO)
     foreach(flags_var CMAKE_CXX_FLAGS_DEBUG CMAKE_CXX_FLAGS)
         string(REGEX REPLACE "/RTC[1csu]+" "" ${flags_var} "${${flags_var}}")
     endforeach()

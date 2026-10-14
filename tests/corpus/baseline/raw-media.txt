@@ -1,0 +1,19 @@
+# corpus scenario raw-media: no filesystem: every format in old data, two files back to back
+# image 12582912 bytes, sha256 a96f42fa853d1cea, 15 originals
+# deep scan: 15 candidates
+#1 carving complete image/jpeg "recovered_000001.jpg" size=19364/19364 valid=valid:passed/passed sha=4fe7820259e81c70 recovery=recovered "recovered_000001.jpg" => (unnamed original 1)
+#2 carving complete image/jpeg "recovered_000002.jpg" size=12900/12900 valid=valid:passed/passed sha=d3a6f1c9e3620081 recovery=recovered "recovered_000002.jpg" => (unnamed original 2)
+#3 carving complete image/png "recovered_000003.png" size=58027/58027 valid=valid:passed/passed sha=9b91a238f62fe58d recovery=recovered "recovered_000003.png" => (unnamed original 3)
+#4 carving complete image/gif "recovered_000004.gif" size=23814/23814 valid=valid:passed/passed sha=31ec0158e3986186 recovery=recovered "recovered_000004.gif" => (unnamed original 4)
+#5 carving complete image/bmp "recovered_000005.bmp" size=9270/9270 valid=valid:passed/not-applicable sha=f63d24d648695326 recovery=recovered "recovered_000005.bmp" => (unnamed original 5)
+#6 carving complete image/webp "recovered_000006.webp" size=128/128 valid=valid:passed/passed sha=f3b55d2c834b11de recovery=recovered "recovered_000006.webp" => (unnamed original 6)
+#7 carving complete image/webp "recovered_000007.webp" size=350/350 valid=valid:passed/passed sha=7077d1bdde7aee63 recovery=recovered "recovered_000007.webp" => (unnamed original 7)
+#8 carving complete audio/mp3 "recovered_000008.mp3" size=126049/126049 valid=valid:passed/unsupported sha=8a1313a1a2a95967 recovery=recovered "recovered_000008.mp3" => (unnamed original 8)
+#9 carving complete audio/wav "recovered_000009.wav" size=80100/80100 valid=valid:passed/not-applicable sha=00e329efff75e080 recovery=recovered "recovered_000009.wav" => (unnamed original 9)
+#10 carving complete audio/m4a "recovered_000010.m4a" size=20128/20128 valid=valid:passed/passed sha=074eca7e2221637f recovery=recovered "recovered_000010.m4a" => (unnamed original 10)
+#11 carving complete audio/aac "recovered_000011.aac" size=19739/19739 valid=valid:passed/passed sha=f8aceff8cb933413 recovery=recovered "recovered_000011.aac" => (unnamed original 11)
+#12 carving complete video/mp4 "recovered_000012.mp4" size=153744/153744 valid=valid:passed/passed sha=89585d740a295ca8 recovery=recovered "recovered_000012.mp4" => (unnamed original 12)
+#13 carving complete video/mp4 "recovered_000013.mp4" size=152575/152575 valid=valid:passed/passed sha=44f5ecb2f6f30d41 recovery=recovered "recovered_000013.mp4" => (unnamed original 13)
+#14 carving complete image/jpeg "recovered_000014.jpg" size=8552/8552 valid=valid:passed/passed sha=ce101f963806a004 recovery=recovered "recovered_000014.jpg" => (unnamed original 14)
+#15 carving complete image/png "recovered_000015.png" size=21007/21007 valid=valid:passed/passed sha=b2ccbad6cd05a94b recovery=recovered "recovered_000015.png" => (unnamed original 15)
+# quick scan: 0 candidates

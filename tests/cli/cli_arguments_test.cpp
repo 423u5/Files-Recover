@@ -338,7 +338,7 @@ TEST_F(CliCommandLineTest, MalformedValues) {
     usage({"recover", "--session", "..", "--output", "out"}, "--session takes a session id");
     usage({"recover", "--session", "x", "--output", "out", "--ids", "0"}, "--ids takes candidate ids");
     usage({"recover", "--session", "x", "--output", "out", "--kind", "music"},
-          "--kind takes a comma-separated list of image, audio, video or other");
+          "--kind takes a comma-separated list of image, audio, video, archive or other");
     usage({"recover", "--session", "x", "--output", "out", "--condition", "good"},
           "--condition takes a comma-separated list");
     usage({"recover", "--session", "x", "--output", ""}, "--output needs a folder");

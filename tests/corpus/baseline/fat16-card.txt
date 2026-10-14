@@ -1,0 +1,20 @@
+# corpus scenario fat16-card: MBR with a FAT16 card: the fixed root, folders, deleted files and a deleted folder
+# image 11534336 bytes, sha256 bd8caddbe2133955, 8 originals
+# deep scan: 8 candidates
+#1 filesystem complete image/jpeg "/IMG_0001.JPG" size=19289/19289 valid=valid:passed/passed sha=361938c927e3406f recovery=recovered "IMG_0001.JPG" => /IMG_0001.JPG
+#2 filesystem complete audio/mp3 "/Ringtone song.mp3" size=84253/84253 valid=valid:passed/unsupported sha=4edadc0f137c07d7 recovery=recovered "Ringtone song.mp3" => /Ringtone song.mp3
+#3 hybrid complete image/png "/_HART.PNG" size=37207/37207 deleted valid=valid:passed/passed sha=f2434d7594e40788 recovery=recovered "_HART.PNG" => /_HART.PNG
+#4 hybrid complete audio/wav "/Voice note.wav" size=80100/80100 deleted valid=valid:passed/not-applicable sha=2c49af4c8379835b recovery=recovered "Voice note.wav" => /Voice note.wav
+#5 filesystem complete image/jpeg "/DCIM/100CANON/IMG_0002.JPG" size=12769/12769 valid=valid:passed/passed sha=d7ae9878839496a4 recovery=recovered "DCIM/100CANON/IMG_0002.JPG" => /DCIM/100CANON/IMG_0002.JPG
+#6 filesystem complete video/mp4 "/DCIM/100CANON/MVI_0003.MP4" size=120516/120516 valid=valid:passed/passed sha=852278bd2095ccd7 recovery=recovered "DCIM/100CANON/MVI_0003.MP4" => /DCIM/100CANON/MVI_0003.MP4
+#7 hybrid complete image/jpeg "/DCIM/100CANON/Deleted shot.jpg" size=11485/11485 deleted valid=valid:passed/passed sha=5c5050d932b39510 recovery=recovered "DCIM/100CANON/Deleted shot.jpg" => /DCIM/100CANON/Deleted shot.jpg
+#8 hybrid complete image/jpeg "/Old album/Party.jpg" size=8600/8600 deleted valid=valid:passed/passed sha=ac4b8a06e2b094f4 recovery=recovered "Old album/Party.jpg" => /Old album/Party.jpg
+# quick scan: 8 candidates
+#1 filesystem complete image/jpeg "/IMG_0001.JPG" size=19289/19289 valid=valid:passed/passed sha=361938c927e3406f recovery=recovered "IMG_0001.JPG" => /IMG_0001.JPG
+#2 filesystem complete audio/mp3 "/Ringtone song.mp3" size=84253/84253 valid=valid:passed/unsupported sha=4edadc0f137c07d7 recovery=recovered "Ringtone song.mp3" => /Ringtone song.mp3
+#3 hybrid complete image/png "/_HART.PNG" size=37207/37207 deleted valid=valid:passed/passed sha=f2434d7594e40788 recovery=recovered "_HART.PNG" => /_HART.PNG
+#4 hybrid complete audio/wav "/Voice note.wav" size=80100/80100 deleted valid=valid:passed/not-applicable sha=2c49af4c8379835b recovery=recovered "Voice note.wav" => /Voice note.wav
+#5 filesystem complete image/jpeg "/DCIM/100CANON/IMG_0002.JPG" size=12769/12769 valid=valid:passed/passed sha=d7ae9878839496a4 recovery=recovered "DCIM/100CANON/IMG_0002.JPG" => /DCIM/100CANON/IMG_0002.JPG
+#6 filesystem complete video/mp4 "/DCIM/100CANON/MVI_0003.MP4" size=120516/120516 valid=valid:passed/passed sha=852278bd2095ccd7 recovery=recovered "DCIM/100CANON/MVI_0003.MP4" => /DCIM/100CANON/MVI_0003.MP4
+#7 hybrid complete image/jpeg "/DCIM/100CANON/Deleted shot.jpg" size=11485/11485 deleted valid=valid:passed/passed sha=5c5050d932b39510 recovery=recovered "DCIM/100CANON/Deleted shot.jpg" => /DCIM/100CANON/Deleted shot.jpg
+#8 hybrid complete image/jpeg "/Old album/Party.jpg" size=8600/8600 deleted valid=valid:passed/passed sha=ac4b8a06e2b094f4 recovery=recovered "Old album/Party.jpg" => /Old album/Party.jpg

@@ -53,7 +53,32 @@ enum class ReadStatus : std::uint8_t {
     IoError,
     // An implementation invariant was violated (e.g. allocation failure).
     InternalError,
+    // P20: the device is gone or no longer ready (removed, its media changed
+    // or ejected; see isDeviceLostError). Not a bad sector: every later read
+    // would fail too, so the operation stops instead of retrying sector by
+    // sector over the rest of the device.
+    DeviceLost,
 };
+
+// Win32 errors that say the device is gone rather than that a sector is bad:
+// ERROR_NOT_READY, ERROR_DEV_NOT_EXIST, ERROR_NO_SUCH_DEVICE,
+// ERROR_FILE_INVALID, ERROR_MEDIA_CHANGED, ERROR_NO_MEDIA_IN_DRIVE,
+// ERROR_DEVICE_NOT_CONNECTED, ERROR_DEVICE_REMOVED, ERROR_DEVICE_NOT_AVAILABLE.
+[[nodiscard]] bool isDeviceLostError(std::uint32_t systemErrorCode) noexcept;
+
+// Win32 errors that a bad sector and a device pulled out behind some USB
+// bridges both produce: ERROR_GEN_FAILURE, ERROR_SEM_TIMEOUT,
+// ERROR_OPERATION_ABORTED, ERROR_IO_DEVICE. A read failing with one asks the
+// device whether its media is still there (IDeviceIo::mediaPresent, L203).
+[[nodiscard]] bool isAmbiguousDeviceError(std::uint32_t systemErrorCode) noexcept;
+
+// What a check of the device's media (IOCTL_STORAGE_CHECK_VERIFY2) says, by
+// its outcome: true when it succeeded; false when it failed as a device that
+// is gone, not ready or no longer answering does (a lost or an ambiguous
+// error: found imaging a USB stick whose flash failed, which answered every
+// read with ERROR_SEM_TIMEOUT and then reported no media); nullopt when the
+// check itself cannot tell (not supported, denied).
+[[nodiscard]] std::optional<bool> mediaPresenceFromCheck(bool succeeded, std::uint32_t systemErrorCode) noexcept;
 
 [[nodiscard]] std::string_view toString(ReadStatus status) noexcept;
 

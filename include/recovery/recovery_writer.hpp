@@ -14,6 +14,7 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <string_view>
 
 namespace recovery {
 
@@ -80,6 +81,13 @@ public:
     // RecoveredFile::path) once it is created, before its data is written.
     [[nodiscard]] Result<RecoveredFile> recover(const RecoveryCandidate& candidate,
                                                 const FileCreatedCallback& onCreated);
+    // The same, below the destination's folder `folder` (P20: a folder per
+    // volume of a source with several): one path component, made safe like a
+    // name read from the source, created (or shared) as the first directory
+    // of the file's path. Empty: the destination itself. Ignored when
+    // directories are not preserved.
+    [[nodiscard]] Result<RecoveredFile> recover(const RecoveryCandidate& candidate,
+                                                const FileCreatedCallback& onCreated, std::string_view folder);
 
     [[nodiscard]] const std::filesystem::path& destination() const noexcept { return destination_; }
 
@@ -87,7 +95,8 @@ private:
     RecoveryWriter(storage::IStorageSource& source, std::filesystem::path destination, std::filesystem::path ioRoot,
                    RecoveryWriterOptions options);
 
-    [[nodiscard]] Result<std::filesystem::path> directoryFor(const RecoveryCandidate& candidate);
+    [[nodiscard]] Result<std::filesystem::path> directoryFor(const RecoveryCandidate& candidate,
+                                                             std::string_view folder);
     [[nodiscard]] Status checkSafety(const std::filesystem::path& path) const;
 
     storage::IStorageSource* source_;

@@ -160,6 +160,7 @@ enum class FilesystemKind : std::uint8_t {
     Fat32,
     ExFat,
     Ntfs,
+    Fat16,  // after P20
 };
 
 struct VolumeInfo {
@@ -356,6 +357,9 @@ struct ImagingProgress {
     std::uint64_t bytesPerSecond = 0;
     std::chrono::milliseconds elapsed{0};
     double fraction = 0.0;
+    // SHA-256 of the finished image file, 64 lower-case hexadecimal digits
+    // (also in its metadata); empty until the image is complete.
+    std::string sha256;
 };
 
 // A session's (or an imaging's) operation now: what runs and how far it is,
@@ -383,11 +387,13 @@ struct CandidateId {
 };
 
 enum class MediaKind : std::uint8_t {
-    // No format is known, or it is not image, audio or video.
+    // No format is known, or it is not image, audio, video or archive.
     Other,
     Image,
     Audio,
     Video,
+    // ZIP, and the formats built on it (DOCX, XLSX, JAR, APK).
+    Archive,
 };
 
 // How the engine found a file.

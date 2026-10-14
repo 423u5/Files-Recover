@@ -4,6 +4,8 @@
 #include "recovery/text.hpp"
 #include "storage/destination_file.hpp"
 
+#include <algorithm>
+#include <chrono>
 #include <cwctype>
 #include <optional>
 #include <span>
@@ -18,6 +20,18 @@ namespace {
 
 using diagnostics::field;
 using diagnostics::LogLevel;
+
+// A time the filesystem recorded, in UTC: FAT's local wall-clock times by
+// this computer's time zone (L37).
+std::optional<storage::DestinationFile::FileTime> utcOf(const std::optional<filesystem::Timestamp>& time) {
+    if (!time.has_value()) {
+        return std::nullopt;
+    }
+    if (!time->local) {
+        return time->time;
+    }
+    return storage::localTimeToUtc(std::chrono::local_time<std::chrono::milliseconds>(time->time.time_since_epoch()));
+}
 
 constexpr std::string_view kComponent = "recovery";
 
@@ -122,11 +136,19 @@ Status RecoveryWriter::checkSafety(const std::filesystem::path& path) const {
     return storage::checkDestinationSafety(sourceInfo_, path, options_.diskResolver);
 }
 
-Result<std::filesystem::path> RecoveryWriter::directoryFor(const RecoveryCandidate& candidate) {
+Result<std::filesystem::path> RecoveryWriter::directoryFor(const RecoveryCandidate& candidate,
+                                                          std::string_view folder) {
     if (!options_.preserveDirectories) {
         return std::filesystem::path{};
     }
-    const std::string_view parent = parentPathOf(candidate);
+    // The folder is one component: a '/' in it cannot start another.
+    std::string prefixed;
+    if (!folder.empty()) {
+        prefixed = "/" + std::string(folder);
+        std::replace(prefixed.begin() + 1, prefixed.end(), '/', '_');
+    }
+    prefixed += parentPathOf(candidate);
+    const std::string_view parent = prefixed;
     if (const auto known = directories_.find(std::string(parent)); known != directories_.end()) {
         return known->second;
     }
@@ -190,6 +212,11 @@ Result<RecoveredFile> RecoveryWriter::recover(const RecoveryCandidate& candidate
 
 Result<RecoveredFile> RecoveryWriter::recover(const RecoveryCandidate& candidate,
                                               const FileCreatedCallback& onCreated) {
+    return recover(candidate, onCreated, {});
+}
+
+Result<RecoveredFile> RecoveryWriter::recover(const RecoveryCandidate& candidate,
+                                              const FileCreatedCallback& onCreated, std::string_view folder) {
     if (Status valid = validateCandidate(candidate); !valid.ok()) {
         return valid.error();
     }
@@ -197,7 +224,7 @@ Result<RecoveredFile> RecoveryWriter::recover(const RecoveryCandidate& candidate
         return makeError(ErrorCode::InvalidInput,
                          "candidate " + std::to_string(candidate.id.value()) + " has no located data to recover");
     }
-    Result<std::filesystem::path> directory = directoryFor(candidate);
+    Result<std::filesystem::path> directory = directoryFor(candidate, folder);
     if (!directory.ok()) {
         return directory.error();
     }
@@ -265,6 +292,15 @@ Result<RecoveredFile> RecoveryWriter::recover(const RecoveryCandidate& candidate
         return discard(makeError(ErrorCode::DestinationError, "recovered file has " + std::to_string(*written) +
                                                                   " bytes, expected " +
                                                                   std::to_string(report->outputSize)));
+    }
+    // The times the filesystem recorded (L37), after the last write. A file
+    // whose times cannot be set is recovered all the same.
+    const FilesystemEvidence& recorded = candidate.filesystemEvidence;
+    if (Status timed = file.setTimes(utcOf(recorded.created), utcOf(recorded.modified), utcOf(recorded.accessed));
+        !timed.ok() && options_.logger != nullptr) {
+        options_.logger->log(LogLevel::Warning, kComponent, "the recovered file keeps the times of its recovery",
+                             {field("candidate", candidate.id.value()), field("path", toUtf8(finalPath)),
+                              field("error", describe(timed.error()))});
     }
     file.close();
 

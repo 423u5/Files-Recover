@@ -1,0 +1,11 @@
+# corpus scenario exfat-damaged-entries: exFAT: a bad entry set checksum, a length beyond the clusters, an overwritten folder, a bad boot region checksum
+# image 8417280 bytes, sha256 7c2b3ff4f2eba5cf, 4 originals
+# deep scan: 4 candidates
+#1 filesystem complete image/jpeg "/Good.jpg" size=13259/13259 valid=valid:passed/passed sha=2cccadf014cad0f8 recovery=recovered "Good.jpg" => /Good.jpg
+#2 filesystem complete image/png "/B`d checksum.png" size=37207/37207 valid=valid:passed/passed sha=957e409b55e6ee6f recovery=recovered "B`d checksum.png" => /B`d checksum.png
+#3 hybrid complete audio/mp3 "/Longer.mp3" size=63355/63355 valid=valid:passed/unsupported sha=1a8c34c577116b99 recovery=recovered "Longer.mp3" => /Longer.mp3
+#4 carving complete image/jpeg "recovered_000004.jpg" size=8623/8623 valid=valid:passed/passed sha=b6819a28d6798e35 in=#3 recovery=recovered "recovered_000004.jpg" => /Folder/Inside.jpg
+# quick scan: 3 candidates
+#1 filesystem complete image/jpeg "/Good.jpg" size=13259/13259 valid=valid:passed/passed sha=2cccadf014cad0f8 recovery=recovered "Good.jpg" => /Good.jpg
+#2 filesystem complete image/png "/B`d checksum.png" size=37207/37207 valid=valid:passed/passed sha=957e409b55e6ee6f recovery=recovered "B`d checksum.png" => /B`d checksum.png
+#3 filesystem corrupted(validation-failed) audio/mp3 "/Longer.mp3" size=128891/128891 valid=invalid:failed/not-run sha=65887d461cc0500c recovery=recovered "Longer.mp3"

@@ -34,8 +34,121 @@ Error unsupported(std::string message) {
     return makeError(ErrorCode::UnsupportedFilesystem, std::move(message));
 }
 
-Error corrupted(std::string message) {
-    return makeError(ErrorCode::CorruptedFilesystem, "FAT32 boot sector: " + std::move(message));
+Error corrupted(std::string message, FatType type = FatType::Fat32) {
+    return makeError(ErrorCode::CorruptedFilesystem,
+                     std::string(type == FatType::Fat16 ? "FAT16" : "FAT32") + " boot sector: " + std::move(message));
+}
+
+// The checks FAT32 and FAT16 share: sector and cluster sizes, the reserved
+// region, the FAT count and the media descriptor.
+std::optional<Error> checkCommonFields(std::span<const std::byte> s, BootSector& b) {
+    const std::uint8_t jump = loadU8(s, 0);
+    if (!((jump == 0xEB && loadU8(s, 2) == 0x90) || jump == 0xE9)) {
+        b.warnings.push_back("boot sector has no x86 jump instruction");
+    }
+    if (b.bytesPerSector != 512 && b.bytesPerSector != 1024 && b.bytesPerSector != 2048 &&
+        b.bytesPerSector != 4096) {
+        return corrupted("invalid bytes per sector " + std::to_string(b.bytesPerSector), b.type);
+    }
+    if (b.sectorsPerCluster == 0 || !std::has_single_bit(b.sectorsPerCluster)) {
+        return corrupted("invalid sectors per cluster " + std::to_string(b.sectorsPerCluster), b.type);
+    }
+    b.clusterSize = static_cast<std::uint32_t>(b.bytesPerSector) * b.sectorsPerCluster;
+    if (b.clusterSize > kMaxClusterSize) {
+        return corrupted("cluster size " + std::to_string(b.clusterSize) + " is too large", b.type);
+    }
+    if (b.clusterSize > 32 * 1024) {
+        b.warnings.push_back("cluster size above 32 KiB is non-standard");
+    }
+    if (b.reservedSectors == 0) {
+        return corrupted("no reserved sectors", b.type);
+    }
+    if (b.fatCount == 0 || b.fatCount > 4) {
+        return corrupted("invalid FAT count " + std::to_string(b.fatCount), b.type);
+    }
+    if (b.fatCount != 2) {
+        b.warnings.push_back("FAT count " + std::to_string(b.fatCount) + " is unusual");
+    }
+    if (b.media != 0xF0 && b.media < 0xF8) {
+        b.warnings.push_back(std::format("unusual media descriptor 0x{:02X}", b.media));
+    }
+    return std::nullopt;
+}
+
+// FAT12 and FAT16 boot sectors: 16-bit FAT size and a fixed root directory
+// (after P20). FAT16 is accepted; FAT12 (fewer than 4085 clusters) is not.
+Result<BootSector> parseSmallFat(std::span<const std::byte> s, BootSector b, std::uint16_t rootEntries,
+                                 std::uint16_t totalSectors16, std::uint16_t fatSectors16, std::uint64_t sourceSize) {
+    b.type = FatType::Fat16;
+    b.fatSectors = fatSectors16;
+    b.totalSectors = totalSectors16 != 0 ? totalSectors16 : loadLe32(s, 32);
+    b.rootEntries = rootEntries;
+    b.rootCluster = 0;
+    b.fsInfoSector = 0;
+    b.backupBootSector = 0;
+    const std::uint8_t extendedSignature = loadU8(s, 38);
+    if (extendedSignature == 0x29 || extendedSignature == 0x28) {
+        b.volumeId = loadLe32(s, 39);
+    }
+    if (extendedSignature == 0x29) {
+        b.volumeLabel = trimmedAscii(s.subspan(43, 11));
+        if (b.volumeLabel == "NO NAME") {
+            b.volumeLabel.clear();
+        }
+    }
+    if (const std::optional<Error> invalid = checkCommonFields(s, b)) {
+        return *invalid;
+    }
+    if (b.fatSectors == 0) {
+        return corrupted("the 16-bit FAT size is zero", b.type);
+    }
+    if (rootEntries == 0) {
+        return corrupted("no root directory entries", b.type);
+    }
+    if (b.totalSectors == 0) {
+        return corrupted("total sector count is zero", b.type);
+    }
+
+    // Layout: reserved sectors, the FATs, the root directory, then cluster 2.
+    const std::uint64_t bps = b.bytesPerSector;
+    const std::uint64_t rootDirSectors = (static_cast<std::uint64_t>(rootEntries) * 32 + bps - 1) / bps;
+    const std::uint64_t rootSector =
+        b.reservedSectors + static_cast<std::uint64_t>(b.fatCount) * b.fatSectors;  // < 2^19
+    const std::uint64_t dataSector = rootSector + rootDirSectors;
+    if (dataSector >= b.totalSectors) {
+        return corrupted("the FAT and root directory regions extend past the end of the volume", b.type);
+    }
+    b.fatOffset = b.reservedSectors * bps;
+    b.fatBytes = static_cast<std::uint64_t>(b.fatSectors) * bps;
+    b.rootDirOffset = rootSector * bps;
+    b.rootDirBytes = static_cast<std::uint64_t>(rootEntries) * 32;
+    b.dataOffset = dataSector * bps;
+    b.volumeBytes = static_cast<std::uint64_t>(b.totalSectors) * bps;
+
+    std::uint64_t clusters = (b.totalSectors - dataSector) / b.sectorsPerCluster;
+    if (clusters < kMinFat16Clusters) {
+        return unsupported("FAT12 volume (" + std::to_string(clusters) + " clusters): only FAT16 and FAT32 are supported");
+    }
+    if (clusters > kMaxFat16Clusters) {
+        return corrupted(std::to_string(clusters) + " clusters are too many for 16-bit FAT entries", b.type);
+    }
+    const std::uint64_t fatCapacity = b.fatBytes / 2;  // entries, including the two reserved ones
+    if (fatCapacity < 3) {
+        return corrupted("FAT is too small", b.type);
+    }
+    if (clusters > fatCapacity - 2) {
+        b.warnings.push_back("FAT covers only " + std::to_string(fatCapacity - 2) + " of " +
+                             std::to_string(clusters) + " clusters; the rest is unreachable");
+        clusters = fatCapacity - 2;
+    }
+    b.clusterCount = static_cast<std::uint32_t>(clusters);
+    b.mirrored = true;  // FAT16 has no flag for one active FAT: the copies are kept identical
+    b.activeFat = 0;
+    if (b.volumeBytes > sourceSize) {
+        b.warnings.push_back("volume is larger than its source (" + std::to_string(b.volumeBytes) + " > " +
+                             std::to_string(sourceSize) + " bytes); the image may be truncated");
+    }
+    return b;
 }
 
 }  // namespace
@@ -61,6 +174,10 @@ Result<BootSector> parseBootSector(std::span<const std::byte> s, std::uint64_t s
     const std::uint16_t totalSectors16 = loadLe16(s, 19);
     b.media = loadU8(s, 21);
     const std::uint16_t fatSectors16 = loadLe16(s, 22);
+    // FAT12/16 use the 16-bit FAT size and a fixed root directory.
+    if (fatSectors16 != 0 || rootEntries != 0) {
+        return parseSmallFat(s, std::move(b), rootEntries, totalSectors16, fatSectors16, sourceSize);
+    }
     b.totalSectors = loadLe32(s, 32);
     b.fatSectors = loadLe32(s, 36);
     b.extFlags = loadLe16(s, 40);
@@ -79,49 +196,17 @@ Result<BootSector> parseBootSector(std::span<const std::byte> s, std::uint64_t s
         }
     }
 
-    // FAT32 identity: FAT12/16 use the 16-bit FAT size and a fixed root directory.
-    if (fatSectors16 != 0 || rootEntries != 0) {
-        return unsupported("FAT12/FAT16 volume (only FAT32 is supported)");
-    }
     if (b.fatSectors == 0) {
         return unsupported("not a FAT32 boot sector");
     }
-
-    const std::uint8_t jump = loadU8(s, 0);
-    if (!((jump == 0xEB && loadU8(s, 2) == 0x90) || jump == 0xE9)) {
-        b.warnings.push_back("boot sector has no x86 jump instruction");
-    }
-    if (b.bytesPerSector != 512 && b.bytesPerSector != 1024 && b.bytesPerSector != 2048 &&
-        b.bytesPerSector != 4096) {
-        return corrupted("invalid bytes per sector " + std::to_string(b.bytesPerSector));
-    }
-    if (b.sectorsPerCluster == 0 || !std::has_single_bit(b.sectorsPerCluster)) {
-        return corrupted("invalid sectors per cluster " + std::to_string(b.sectorsPerCluster));
-    }
-    b.clusterSize = static_cast<std::uint32_t>(b.bytesPerSector) * b.sectorsPerCluster;
-    if (b.clusterSize > kMaxClusterSize) {
-        return corrupted("cluster size " + std::to_string(b.clusterSize) + " is too large");
-    }
-    if (b.clusterSize > 32 * 1024) {
-        b.warnings.push_back("cluster size above 32 KiB is non-standard");
-    }
-    if (b.reservedSectors == 0) {
-        return corrupted("no reserved sectors");
-    }
-    if (b.fatCount == 0 || b.fatCount > 4) {
-        return corrupted("invalid FAT count " + std::to_string(b.fatCount));
-    }
-    if (b.fatCount != 2) {
-        b.warnings.push_back("FAT count " + std::to_string(b.fatCount) + " is unusual");
+    if (const std::optional<Error> invalid = checkCommonFields(s, b)) {
+        return *invalid;
     }
     if (totalSectors16 != 0) {
         b.warnings.push_back("16-bit total sector field is set on a FAT32 volume");
     }
     if (b.totalSectors == 0) {
         return corrupted("total sector count is zero");
-    }
-    if (b.media != 0xF0 && b.media < 0xF8) {
-        b.warnings.push_back(std::format("unusual media descriptor 0x{:02X}", b.media));
     }
     if (fsVersion != 0) {
         b.warnings.push_back("unknown FAT32 version " + std::to_string(fsVersion));

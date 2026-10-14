@@ -3,7 +3,7 @@
 A read-only file recovery engine for Windows 11, written in C++20. It is aimed at deleted media on USB flash
 drives and other removable storage.
 
-> **Status: early development.** Phases P0–P19 are implemented: project skeleton, read-only storage
+> **Status: final validation done, not production-ready.** Phases P0–P20 are implemented: project skeleton, read-only storage
 > access, disk imaging with bad-sector handling, MBR/GPT partition detection, FAT32 and exFAT parsing,
 > the NTFS foundation (MFT, FILE records, resident and non-resident data, data runs), all including
 > deleted entries, and filesystem-based recovery: recovery candidates from FAT32, exFAT and NTFS metadata,
@@ -29,7 +29,16 @@ drives and other removable storage.
 > report what was found and written; a command stopped by Ctrl+C or a crash goes on when it is run again. P19 adds
 > the API a user interface builds on: one object that lists the disks, inspects, images, scans, lists and previews
 > what was found, recovers it and reports on it, with progress and events, through headers that hold nothing of the
-> filesystems or the engine's types. Passing builds and tests do **not** mean the engine is production-ready.
+> filesystems or the engine's types. P20 validates the whole: a corruption corpus of 26 generated disks checked
+> against their original files and a recorded baseline (the regression suite), libFuzzer with AddressSanitizer on
+> every parser of untrusted data, clang-tidy and `/analyze` with every finding triaged, audits (RAII, threads,
+> integer overflow, bounds, error paths, cancellation, memory, I/O failures), a security review, benchmarks against
+> performance targets, multi-TiB drives and bad sectors; the executables are hardened (static C++ runtime, Control
+> Flow Guard, CET, DLLs from System32 only). Since P20, FAT16 volumes are read, and ZIP archives (with the DOCX,
+> XLSX, JAR and APK files built on ZIP) are carved and checked member by member, every CRC-32
+> ([docs/formats/archives.md](docs/formats/archives.md)). Passing builds and tests do **not** mean the engine is
+> production-ready: see [docs/testing/validation.md](docs/testing/validation.md) for what was checked and what is
+> still open, and [docs/limitations.md](docs/limitations.md) for every known limitation.
 
 ## Safety model
 
@@ -41,6 +50,10 @@ drives and other removable storage.
 - Before imaging, the engine checks that the destination is not the source image. For a physical disk, it
   also checks that the destination volume is not on that disk. If the engine can't tell which disk the
   destination is on, it refuses to write.
+- The executables need nothing installed: the C++ runtime is linked in, so running them does not write to the
+  computer's system drive (which may be the disk being recovered). They load their DLLs from System32 only, and
+  are built with Control Flow Guard and CET shadow stack compatibility, because they read untrusted data, usually
+  as an administrator.
 
 ## Layout
 
@@ -52,10 +65,10 @@ drives and other removable storage.
 | `src/storage/windows` | All Win32 storage code (private) |
 | `include/imaging`, `src/imaging` | `ImageWriter` and image metadata |
 | `include/partition`, `src/partition` | MBR/GPT detection, `PartitionSource` |
-| `include/filesystem`, `src/filesystem` | Filesystem-independent model, FAT32, exFAT, NTFS |
+| `include/filesystem`, `src/filesystem` | Filesystem-independent model, FAT32 (and FAT16), exFAT, NTFS |
 | `include/recovery`, `src/recovery` | Also the `recovery_candidates` library: recovery candidates, filesystem-based recovery, reconstruction, recovery output; `recovery_mp4`: MP4 recovery (P12); `recovery_fragments`: fragment reconstruction (P13) |
 | `include/carving`, `src/carving` | Carving framework: signatures, format interface and registry, signature scanner, file carver, validators |
-| `include/formats`, `src/formats` | Carvable formats: the images of P9 (JPEG, PNG, WEBP, GIF, BMP), the audio of P10 (MP3, WAV, M4A, AAC) and the MP4 video of P12; the MP4 parser of P11 |
+| `include/formats`, `src/formats` | Carvable formats: the images of P9 (JPEG, PNG, WEBP, GIF, BMP), the audio of P10 (MP3, WAV, M4A, AAC), the MP4 video of P12 and ZIP archives (after P20); the MP4 parser of P11 |
 | `include/validation`, `src/validation` | Validation levels and the media decoders (P14); `src/validation/windows`: the playability checker on WIC and Media Foundation (private) |
 | `include/evaluation`, `src/evaluation` | Candidate evaluation (P14): one evaluated candidate per file, content identity, duplicates |
 | `include/scan`, `src/scan` | Scanning (P15): the scan coordinator, the scan's source (pause gate, block cache), updates and checkpoints, the recovery job |
@@ -63,11 +76,13 @@ drives and other removable storage.
 | `include/metadata`, `src/metadata` | Metadata for a user interface (P17): candidate descriptions and conditions, duplicate groups, media metadata and previews read from a candidate's content, recovery status |
 | `include/report`, `src/report` | The session report (text and JSON) and the text formatting the CLI and the API write with |
 | `include/api`, `src/api` | The GUI-facing API (P19): `recovery_api.hpp` and `api_types.hpp` (what a user interface includes), `api_platform.hpp` (test hooks) |
-| `tools/recovery_cli` | The `recovery` command line (P18): `cli/` holds the commands (library `recovery_cli_lib`), `main.cpp` and `windows/` the program (the console, Ctrl+C) |
-| `tests/unit`, `tests/integration`, `tests/filesystem`, `tests/corruption`, `tests/recovery`, `tests/carving`, `tests/formats`, `tests/validation`, `tests/evaluation`, `tests/scan`, `tests/session`, `tests/metadata`, `tests/cli`, `tests/api` | GoogleTest suites; `tests/support` holds the simulated devices, volume and image file builders, samples from other encoders, and test-only carving formats |
+| `tools/recovery_cli` | The `recovery` command line (P18): `cli/` holds the commands (library `recovery_cli_lib`), `main.cpp` and `windows/` the program (the console, Ctrl+C). Imaging is its `recovery image` command |
+| `tools/test_image_generator` | P20, development only: writes the corruption corpus's disk images with their original files, and the fuzzers' seeds |
+| `tools/benchmark` | P20, development only: `recovery_benchmark`, the engine's throughput and memory against the performance targets |
+| `tools/static_analysis` | P20: `run_clang_tidy.py`, the clang-tidy runs whose findings were triaged |
+| `fuzz/` | P20: the libFuzzer targets (preset `msvc-fuzz`), the script that runs them, and the inputs that once failed |
+| `tests/unit`, `tests/integration`, `tests/filesystem`, `tests/corruption`, `tests/recovery`, `tests/carving`, `tests/formats`, `tests/validation`, `tests/evaluation`, `tests/scan`, `tests/session`, `tests/metadata`, `tests/cli`, `tests/api`, `tests/corpus` | GoogleTest suites; `tests/support` holds the simulated devices, volume and image file builders, samples from other encoders, test-only carving formats and the corpus's scenarios; `tests/corpus/baseline` holds the corpus's expected results |
 | `docs/` | Architecture, recovery and testing notes; known limitations in `docs/limitations.md` |
-
-Directories for later phases (`tools/disk_image_tool`, `tools/test_image_generator`) already exist and are empty.
 
 ## Building on Windows 11
 
@@ -89,10 +104,11 @@ Other presets:
 | `msvc-release` | Optimised build |
 | `msvc-asan` | AddressSanitizer (RelWithDebInfo) |
 | `msvc-analyze` | MSVC `/analyze` on engine and tool code |
+| `msvc-fuzz` | The libFuzzer targets with AddressSanitizer (no tests, no tools); `ctest --preset msvc-fuzz` runs a short smoke run of each and the saved regressions |
 
 Warnings are errors (`/W4 /WX`). To run only one group of tests: `ctest --preset msvc-debug -L unit`,
 `-L integration`, `-L filesystem`, `-L corruption`, `-L recovery`, `-L carving`, `-L formats`, `-L validation`,
-`-L evaluation`, `-L scan`, `-L session`, `-L metadata`, `-L cli` or `-L api`.
+`-L evaluation`, `-L scan`, `-L session`, `-L metadata`, `-L cli`, `-L api` or `-L corpus`.
 
 See [docs/testing/testing.md](docs/testing/testing.md) for how to test safely.
 

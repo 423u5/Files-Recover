@@ -2,8 +2,10 @@
 
 #include "recovery/result.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <span>
 
 namespace recovery::storage {
@@ -42,11 +44,27 @@ public:
     // Flushes OS buffers to the device (FlushFileBuffers).
     [[nodiscard]] Status flush();
     [[nodiscard]] Result<std::uint64_t> size() const;
+
+    using FileTime = std::chrono::sys_time<std::chrono::milliseconds>;
+    // Sets the file's creation, last write and last access times (UTC); unset
+    // ones are left as they are, and so are times Windows cannot hold (before
+    // 1601). A recovered file keeps the times its filesystem recorded (L37).
+    // Call after the last write: a write sets the last write time again.
+    [[nodiscard]] Status setTimes(std::optional<FileTime> created, std::optional<FileTime> modified,
+                                  std::optional<FileTime> accessed);
+
     void close() noexcept;
 
 private:
     void* handle_ = nullptr;  // Win32 HANDLE
 };
+
+// A local wall-clock time (FAT records no time zone) as UTC, by this
+// computer's time zone and the daylight saving rules of that date: the file
+// then shows the clock time it had on the card. nullopt when Windows cannot
+// convert it.
+[[nodiscard]] std::optional<DestinationFile::FileTime> localTimeToUtc(
+    std::chrono::local_time<std::chrono::milliseconds> local);
 
 // Atomically replaces `target` with `replacement` (both destination files).
 [[nodiscard]] Status replaceFile(const std::filesystem::path& replacement, const std::filesystem::path& target);

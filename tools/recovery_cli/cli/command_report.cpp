@@ -34,7 +34,7 @@ constexpr std::array<std::string_view, 2> kFormats = {"text", "json"};
 constexpr std::uint32_t kSharingViolation = 32;
 
 // Writes `text` to the output stream, or to the new file `path` (checked
-// against `source` when there is one).
+// against `source` when there is one; its folder created when missing).
 ExitCode deliver(const std::string& text, const std::optional<std::filesystem::path>& path,
                  const storage::SourceInfo* source, Context& context) {
     if (!path.has_value()) {
@@ -42,10 +42,8 @@ ExitCode deliver(const std::string& text, const std::optional<std::filesystem::p
         context.out().flush();
         return ExitCode::Success;
     }
-    if (source != nullptr) {
-        if (Status safe = storage::checkDestinationSafety(*source, *path, context.diskResolver()); !safe.ok()) {
-            return context.fail("cannot write the report to '" + displayPath(*path) + "'", safe.error());
-        }
+    if (Status ready = context.prepareFolderFor(*path, source); !ready.ok()) {
+        return context.fail("cannot write the report to '" + displayPath(*path) + "'", ready.error());
     }
     Result<storage::DestinationFile> file =
         storage::DestinationFile::open(*path, storage::DestinationFile::OpenMode::CreateNew);

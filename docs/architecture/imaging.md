@@ -19,6 +19,9 @@ read block (blockSize, default 1 MiB)
 - A single read error never stops imaging. Only non-I/O failures stop it: an invalid request, a closed
   source, or a destination write failure. In that case the metadata is saved with state `failed`, and the
   image can be resumed.
+- P20: a device that is gone or not ready (`ReadStatus::DeviceLost`, pulled out mid-read) stops imaging at once,
+  as such a failure: the rest of the device is not read sector by sector as bad sectors, nothing is recorded as
+  unreadable, and the image resumes from `bytes_completed` once the device is back.
 - Unreadable sectors are zero-filled in the image. The metadata records exactly which byte ranges those are.
 - `BadRegionMap` merges runs of adjacent sectors that have the same error code.
 

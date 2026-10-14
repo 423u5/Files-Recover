@@ -26,7 +26,7 @@ recovered file and never touches a session's journal: the engine does all of tha
 | startScan() | `startScan(SourceRef, ScanSettings)`: a new session, its scan started; returns the session's id |
 | pauseScan(), resumeScan(), cancelScan() | By session id. `resumeScan` also runs again a scan that did not complete (cancelled, failed, interrupted by a crash, paused when the program ended) from its last update |
 | getProgress() | `getProgress(session)` from any thread at any time: the operation, its state, its stage and figures, live from the engine, or how the last operation ended |
-| getCandidates() | `getCandidates(session, CandidateQuery)`: a page of the candidates delivered so far, filtered by kind, condition, recovery state, deleted or not, duplicates |
+| getCandidates() | `getCandidates(session, CandidateQuery)`: a page of the candidates delivered so far, filtered by kind (`MediaKind`: other, image, audio, video, and archive since ZIP is carved), condition, recovery state, deleted or not, duplicates |
 | recoverCandidate(), recoverCandidates(), recoverAll() | Recovery jobs of the session to a destination folder (`RecoveryOptions`), converging on it; `recoverAll` takes a `CandidateFilter`. `pauseRecovery`, `resumeRecovery`, `cancelRecovery` |
 | getSession() | `getSession(session)`: everything the session holds but its candidates: source, settings, scan state and history, volumes, recovery jobs, errors, unreadable regions, repairs. `listSessions`, `openSession`, `closeSession` |
 | exportReport() | `exportReport(session, file, ReportOptions)`: the session report as JSON (`recovery-session-report`, the CLI's document) or text, to a new file |
@@ -161,10 +161,13 @@ the API.
 
 ## Candidates, details and previews
 
-The API keeps every candidate of an open session as a list shows it (`CandidateInfo`, made with P17's
-`describeCandidate`). It also keeps what each recovery job did with each candidate: a `RecoveryRecord` per job,
-updated through P16's update hooks as the scan and the jobs record their updates. `getCandidates` filters and pages
-that list without touching the engine. A candidate's `recovery` state follows P17's rule, first match wins:
+The API keeps an index of every candidate of an open session: what a filter selects it by (kind, condition,
+deleted, duplicate: four bytes each), and what each recovery job did with it (a `RecoveryRecord` per job), updated
+through P16's update hooks as the scan and the jobs record their updates. `getCandidates` filters with the index,
+then makes the page's `CandidateInfo`s (P17's `describeCandidate`) from the session's candidates, a few at a time;
+`getCandidateDetails` makes its one. Keeping only the index keeps the API's memory per file found small (L212):
+opening a session indexes its candidates a few at a time too. A candidate's `recovery` state follows P17's rule,
+first match wins:
 Recovered, Pending, Failed, NotRecovered (`ApiRecoveryTest.TheListsRecoveryStateAgreesWithTheEnginesIndex`
 checks it against `metadata::RecoveryJobIndex`).
 

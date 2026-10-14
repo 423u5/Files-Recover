@@ -34,6 +34,11 @@ public:
     // Active volume-label entry, if one was seen.
     [[nodiscard]] const std::optional<std::string>& volumeLabel() const noexcept { return volumeLabel_; }
 
+    // Slots skipped as garbage: an invalid 8.3 name together with reserved
+    // attribute bits, a first cluster outside the volume or a file size
+    // larger than the volume (deleted slots like that are skipped silently).
+    [[nodiscard]] std::size_t garbageSlots() const noexcept { return garbageSlots_; }
+
 private:
     struct LongNamePart {
         std::uint8_t ordinal = 0;  // 0 for deleted slots
@@ -49,6 +54,7 @@ private:
     std::vector<LongNamePart> pending_;  // on-disk order
     bool pendingDeleted_ = false;
     std::optional<std::string> volumeLabel_;
+    std::size_t garbageSlots_ = 0;
 };
 
 // Decodes a FAT date/time. Returns nullopt for an unset date; sets `invalid`

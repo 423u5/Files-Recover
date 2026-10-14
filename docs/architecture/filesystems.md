@@ -69,6 +69,12 @@ and `Resident` with `FileAllocation::residentData`, NTFS allocation issues (`Inv
   character becomes `_` (`NameReconstructed`).
 - Deleted slots that can't be former entries (invalid name bytes, reserved attribute bits, out-of-range
   cluster) are ignored.
+- Active slots that are clearly other data are skipped too (P20, found by the corruption corpus: a folder
+  cluster overwritten with a photo listed some 30 junk files): an invalid 8.3 name *and* reserved attribute bits,
+  a first cluster outside the volume, or a file size beyond the volume. The folder reports how many with a
+  `DirectoryInvalid` scan issue ("N slots hold no directory entry (other data in the directory's clusters)"). An
+  active slot with an invalid name alone is still listed and flagged `InvalidName` (see L200 in
+  [../limitations.md](../limitations.md)).
 - Timestamps are decoded as local time with no zone (`Timestamp::local`). Out-of-range fields set
   `InvalidTimestamp`.
 

@@ -91,25 +91,35 @@ Fat32ImageBuilder::Fat32ImageBuilder(Fat32BuilderOptions options)
     : options_(std::move(options)),
       clusterSize_(static_cast<std::uint32_t>(options_.bytesPerSector) * options_.sectorsPerCluster),
       fatSectors_(static_cast<std::uint32_t>(
-          ((static_cast<std::uint64_t>(options_.clusterCount) + 2) * 4 + options_.bytesPerSector - 1) /
+          ((static_cast<std::uint64_t>(options_.clusterCount) + 2) * (options_.fat16 ? 2 : 4) +
+           options_.bytesPerSector - 1) /
           options_.bytesPerSector)) {
+    if (options_.fat16 && (options_.clusterCount < 4085 || options_.clusterCount > 65524)) {
+        throw std::runtime_error("a FAT16 volume has 4085 to 65524 clusters");
+    }
     const std::uint64_t totalSectors = options_.reservedSectors +
-                                       static_cast<std::uint64_t>(options_.fatCount) * fatSectors_ +
+                                       static_cast<std::uint64_t>(options_.fatCount) * fatSectors_ + rootDirSectors() +
                                        static_cast<std::uint64_t>(options_.clusterCount) * options_.sectorsPerCluster;
     image_.assign(static_cast<std::size_t>(totalSectors * options_.bytesPerSector), std::byte{0});
 
-    writeBootSector(0);
-    writeFsInfo(1);
-    if (options_.reservedSectors > 7) {
-        writeBootSector(6);
-        writeFsInfo(7);
-    }
-    setFat(0, 0x0FFFFF00 | 0xF8);
-    setFat(1, kEndOfChain);
-    setFat(root(), kEndOfChain);
-
     Directory& rootDirectory = directories_[root()];
-    rootDirectory.clusters = {root()};
+    if (options_.fat16) {
+        writeFat16BootSector();
+        setFat(0, 0xFFF8);
+        setFat(1, kEndOfChain);
+        rootDirectory.fixed = true;
+    } else {
+        writeBootSector(0);
+        writeFsInfo(1);
+        if (options_.reservedSectors > 7) {
+            writeBootSector(6);
+            writeFsInfo(7);
+        }
+        setFat(0, 0x0FFFFF00 | 0xF8);
+        setFat(1, kEndOfChain);
+        setFat(root(), kEndOfChain);
+        rootDirectory.clusters = {root()};
+    }
     if (!options_.label.empty()) {
         const std::span<std::byte> label = slot(rootDirectory, rootDirectory.nextSlot++);
         std::string padded = options_.label;
@@ -151,6 +161,44 @@ void Fat32ImageBuilder::writeBootSector(std::uint32_t sector) {
     s[511] = std::byte{0xAA};
 }
 
+void Fat32ImageBuilder::writeFat16BootSector() {
+    const std::span<std::byte> s = std::span<std::byte>(image_).subspan(0, 512);
+    s[0] = std::byte{0xEB};
+    s[1] = std::byte{0x3C};
+    s[2] = std::byte{0x90};
+    std::memcpy(s.data() + 3, "MSDOS5.0", 8);
+    storeLe16(s, 11, options_.bytesPerSector);
+    s[13] = static_cast<std::byte>(options_.sectorsPerCluster);
+    storeLe16(s, 14, options_.reservedSectors);
+    s[16] = static_cast<std::byte>(options_.fatCount);
+    storeLe16(s, 17, options_.rootEntries);
+    const std::uint64_t totalSectors = image_.size() / options_.bytesPerSector;
+    if (totalSectors < 0x10000) {
+        storeLe16(s, 19, static_cast<std::uint16_t>(totalSectors));
+    } else {
+        storeLe32(s, 32, static_cast<std::uint32_t>(totalSectors));
+    }
+    s[21] = std::byte{0xF8};
+    storeLe16(s, 22, static_cast<std::uint16_t>(fatSectors_));
+    storeLe16(s, 24, 63);
+    storeLe16(s, 26, 255);
+    s[36] = std::byte{0x80};
+    s[38] = std::byte{0x29};
+    storeLe32(s, 39, options_.volumeId);
+    std::string label = options_.label.empty() ? "NO NAME" : options_.label;
+    label.resize(11, ' ');
+    std::memcpy(s.data() + 43, label.data(), 11);
+    std::memcpy(s.data() + 54, "FAT16   ", 8);
+    s[510] = std::byte{0x55};
+    s[511] = std::byte{0xAA};
+}
+
+std::uint32_t Fat32ImageBuilder::rootDirSectors() const noexcept {
+    return options_.fat16
+               ? (static_cast<std::uint32_t>(options_.rootEntries) * 32 + options_.bytesPerSector - 1) / options_.bytesPerSector
+               : 0;
+}
+
 void Fat32ImageBuilder::writeFsInfo(std::uint32_t sector) {
     const std::span<std::byte> s =
         std::span<std::byte>(image_).subspan(static_cast<std::size_t>(sector) * options_.bytesPerSector, 512);
@@ -167,10 +215,17 @@ std::uint64_t Fat32ImageBuilder::fatOffset(std::uint32_t copy) const {
 }
 
 std::uint64_t Fat32ImageBuilder::clusterOffset(std::uint32_t cluster) const {
-    return fatOffset(options_.fatCount) + static_cast<std::uint64_t>(cluster - 2) * clusterSize_;
+    return fatOffset(options_.fatCount) + static_cast<std::uint64_t>(rootDirSectors()) * options_.bytesPerSector +
+           static_cast<std::uint64_t>(cluster - 2) * clusterSize_;
 }
 
 void Fat32ImageBuilder::setFatInCopy(std::uint32_t copy, std::uint32_t cluster, std::uint32_t value) {
+    if (options_.fat16) {
+        // FAT32 values stand for FAT16's of the same meaning (0x0FFFFFFF: 0xFFFF, 0x0FFFFFF7: 0xFFF7).
+        storeLe16(image_, static_cast<std::size_t>(fatOffset(copy) + static_cast<std::uint64_t>(cluster) * 2),
+                  static_cast<std::uint16_t>(value & 0xFFFF));
+        return;
+    }
     storeLe32(image_, static_cast<std::size_t>(fatOffset(copy) + static_cast<std::uint64_t>(cluster) * 4), value);
 }
 
@@ -181,6 +236,11 @@ void Fat32ImageBuilder::setFat(std::uint32_t cluster, std::uint32_t value) {
 }
 
 std::uint32_t Fat32ImageBuilder::fat(std::uint32_t cluster, std::uint32_t copy) const {
+    if (options_.fat16) {
+        const std::uint16_t raw =
+            loadLe16(image_, static_cast<std::size_t>(fatOffset(copy) + static_cast<std::uint64_t>(cluster) * 2));
+        return raw >= 0xFFF8 ? kEndOfChain : (raw == 0xFFF7 ? 0x0FFFFFF7 : raw);
+    }
     return loadLe32(image_, static_cast<std::size_t>(fatOffset(copy) + static_cast<std::uint64_t>(cluster) * 4));
 }
 
@@ -208,6 +268,13 @@ std::uint32_t Fat32ImageBuilder::allocate() {
 }
 
 std::span<std::byte> Fat32ImageBuilder::slot(Directory& directory, std::size_t index) {
+    if (directory.fixed) {
+        if (index >= options_.rootEntries) {
+            throw std::runtime_error("the FAT16 root directory is full");
+        }
+        return std::span<std::byte>(image_).subspan(static_cast<std::size_t>(fatOffset(options_.fatCount) + index * 32),
+                                                    32);
+    }
     const std::size_t perCluster = clusterSize_ / 32;
     while (index / perCluster >= directory.clusters.size()) {
         const std::uint32_t added = allocate();
@@ -401,14 +468,19 @@ std::span<std::byte> Fat32ImageBuilder::shortEntry(const Entry& entry) {
 
 std::uint64_t Fat32ImageBuilder::shortEntryOffset(const Entry& entry) const {
     const Directory& directory = directories_.at(entry.directory);
+    if (directory.fixed) {
+        return fatOffset(options_.fatCount) + entry.shortSlot * 32;
+    }
     const std::size_t perCluster = clusterSize_ / 32;
     return clusterOffset(directory.clusters.at(entry.shortSlot / perCluster)) + (entry.shortSlot % perCluster) * 32;
 }
 
 std::vector<std::byte> Fat32ImageBuilder::build() {
-    writeFsInfo(1);
-    if (options_.reservedSectors > 7) {
-        writeFsInfo(7);
+    if (!options_.fat16) {
+        writeFsInfo(1);
+        if (options_.reservedSectors > 7) {
+            writeFsInfo(7);
+        }
     }
     return image_;
 }

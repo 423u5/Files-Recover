@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 
 #include <fstream>
+#include <regex>
 #include <set>
 
 namespace recovery::cli {
@@ -120,6 +121,47 @@ TEST_F(CliErrorsTest, ImageOutputs) {
     expectError(cli.run({"image", "--source", "\\\\.\\PhysicalDrive7", "--output", arg(dir.path() / "disk.img")}),
                 "image", "destination is on the source disk (PhysicalDrive7)");
     EXPECT_FALSE(std::filesystem::exists(dir.path() / "disk.img"));
+}
+
+// Found imaging a real USB stick: `image --output X\a.img --log X\a.log` with
+// no folder X failed with a bare "(system error 3)". The folders of a log, an
+// image and a report are created when missing, as recover's destination is,
+// never on the source; a folder that cannot be created says why in words.
+TEST_F(CliErrorsTest, MissingOutputFoldersAreCreatedButNeverOnTheSource) {
+    const std::filesystem::path copy = dir.path() / "images" / "2026" / "copy.img";
+    const std::filesystem::path log = dir.path() / "logs" / "image.log";
+    const CliResult imaged = cli.run({"image", "--source", arg(image), "--output", arg(copy), "--log", arg(log)});
+    EXPECT_EQ(imaged.code, ExitCode::Success) << imaged;
+    EXPECT_TRUE(::recovery::test::readFile(copy) == test::card());
+    EXPECT_TRUE(std::filesystem::is_regular_file(log));
+
+    const std::string id = scanned();
+    const std::filesystem::path report = dir.path() / "reports" / "card.txt";
+    const CliResult reported = cli.run({"report", "--session", id, "--output", arg(report)});
+    EXPECT_EQ(reported.code, ExitCode::Success) << reported;
+    EXPECT_TRUE(std::filesystem::is_regular_file(report));
+
+    // A file holds the folder's name: the error explains, it does not end in a bare code.
+    const std::filesystem::path blocker = dir.path() / "blocker";
+    ::recovery::test::writeFile(blocker, Bytes(3, std::byte{1}));
+    const CliResult blocked = cli.run({"image", "--source", arg(image), "--output", arg(blocker / "copy.img")});
+    expectError(blocked, "image", "cannot create the folder '" + arg(blocker) + "'");
+    EXPECT_FALSE(std::regex_search(blocked.err, std::regex(R"(system error \d+\))"))) << blocked;
+
+    // On the source disk: refused before any folder is made, for the image and for the log.
+    const test::SimulatedDisk disk = test::simulatedDisk(test::card());
+    cli.environment().diskOpener = disk.opener;
+    cli.environment().diskResolver = [](const std::filesystem::path&) -> Result<std::vector<std::uint32_t>> {
+        return std::vector<std::uint32_t>{7};
+    };
+    expectError(cli.run({"image", "--source", "\\\\.\\PhysicalDrive7", "--output",
+                         arg(dir.path() / "on-disk" / "disk.img")}),
+                "image", "destination is on the source disk (PhysicalDrive7)");
+    expectError(cli.run({"image", "--source", "\\\\.\\PhysicalDrive7", "--output", arg(dir.path() / "x.img"), "--log",
+                         arg(dir.path() / "on-disk-log" / "x.log")}),
+                "image", "destination is on the source disk (PhysicalDrive7)");
+    EXPECT_FALSE(std::filesystem::exists(dir.path() / "on-disk"));
+    EXPECT_FALSE(std::filesystem::exists(dir.path() / "on-disk-log"));
 }
 
 TEST_F(CliErrorsTest, SessionsFolders) {

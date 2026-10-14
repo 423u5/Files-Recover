@@ -241,6 +241,88 @@ TEST_F(PhysicalDiskSourceTest, CloseAndReopen) {
     EXPECT_TRUE(source.read(ByteOffset{0}, buffer).ok());
 }
 
+// P20 (I/O failure audit): a disk that is unplugged, or whose card is taken
+// out, fails every read from then on. That is not a bad sector: the read says
+// so, and the callers stop instead of retrying sector by sector.
+TEST_F(PhysicalDiskSourceTest, ADeviceThatIsGoneIsNotABadSector) {
+    auto config = makeConfig(4 * kMiB);
+    config->failingRanges = {{1 * kMiB, 4 * kMiB}};
+    PhysicalDiskSource source(0, std::make_shared<MockDeviceOpener>(config));
+    RECOVERY_ASSERT_OK(source.open());
+    std::vector<std::byte> buffer(64 * kKiB);
+    EXPECT_TRUE(source.read(ByteOffset{0}, buffer).ok());
+
+    for (const std::uint32_t lost : {21U, 55U, 433U, 1006U, 1110U, 1112U, 1167U, 1617U, 4319U}) {
+        config->failureCode = lost;
+        const ReadResult read = source.read(ByteOffset{2 * kMiB}, buffer);
+        EXPECT_EQ(read.status, ReadStatus::DeviceLost) << lost;
+        EXPECT_EQ(read.systemErrorCode, lost);
+        EXPECT_TRUE(isDeviceLostError(lost));
+        const Error error = toError(read);
+        EXPECT_EQ(error.code, ErrorCode::IoError);
+        EXPECT_NE(error.message.find("removed or is not ready"), std::string::npos) << error.message;
+    }
+    for (const std::uint32_t bad : {23U, 27U, 30U, 31U, 1117U}) {  // CRC, sector not found, read fault, ...
+        config->failureCode = bad;
+        EXPECT_EQ(source.read(ByteOffset{2 * kMiB}, buffer).status, ReadStatus::IoError) << bad;
+        EXPECT_FALSE(isDeviceLostError(bad));
+    }
+    // Unaligned reads go through the bounce buffer and say the same.
+    config->failureCode = 1167;
+    std::vector<std::byte> unaligned(1000);
+    EXPECT_EQ(source.read(ByteOffset{2 * kMiB + 7}, unaligned).status, ReadStatus::DeviceLost);
+}
+
+// Found imaging a real USB stick (2026-10-12): its flash failed, every read
+// answered ERROR_SEM_TIMEOUT and the disk then reported no media. The media
+// check's outcome: there; gone, not ready or not answering (a lost or an
+// ambiguous error); or unknown (the check is not supported or denied).
+TEST(MediaCheckTest, AFailedCheckSaysTheDeviceIsGoneOnlyWhenItsErrorSaysSo) {
+    EXPECT_EQ(mediaPresenceFromCheck(true, 0), std::optional<bool>(true));
+    for (const std::uint32_t gone : {21U, 1112U, 1167U, 1617U, 121U, 31U, 1117U, 995U}) {
+        EXPECT_EQ(mediaPresenceFromCheck(false, gone), std::optional<bool>(false)) << gone;
+    }
+    for (const std::uint32_t unknown : {1U, 5U, 50U, 87U}) {  // invalid function, denied, not supported, parameter
+        EXPECT_EQ(mediaPresenceFromCheck(false, unknown), std::nullopt) << unknown;
+    }
+}
+
+// L203 (resolved after P20): an error that a bad sector and a device pulled
+// out behind some USB bridges both give is checked with the device: gone, the
+// operation stops (DeviceLost); still there, or unknown, it is a bad sector.
+// A plain media error never asks.
+TEST_F(PhysicalDiskSourceTest, AnAmbiguousErrorAsksTheDeviceWhetherItIsStillThere) {
+    auto config = makeConfig(4 * kMiB);
+    config->failingRanges = {{1 * kMiB, 4 * kMiB}};
+    auto opener = std::make_shared<MockDeviceOpener>(config);
+    PhysicalDiskSource source(0, opener);
+    RECOVERY_ASSERT_OK(source.open());
+    std::vector<std::byte> buffer(64 * kKiB);
+
+    for (const std::uint32_t ambiguous : {31U, 121U, 995U, 1117U}) {
+        EXPECT_TRUE(isAmbiguousDeviceError(ambiguous));
+        EXPECT_FALSE(isDeviceLostError(ambiguous));
+        config->failureCode = ambiguous;
+        config->mediaPresent = false;
+        const ReadResult gone = source.read(ByteOffset{2 * kMiB}, buffer);
+        EXPECT_EQ(gone.status, ReadStatus::DeviceLost) << ambiguous;
+        EXPECT_EQ(gone.systemErrorCode, ambiguous);
+        config->mediaPresent = true;
+        EXPECT_EQ(source.read(ByteOffset{2 * kMiB}, buffer).status, ReadStatus::IoError) << ambiguous;
+        config->mediaPresent = std::nullopt;
+        EXPECT_EQ(source.read(ByteOffset{2 * kMiB}, buffer).status, ReadStatus::IoError) << ambiguous;
+    }
+    EXPECT_EQ(opener->stats()->mediaQueries, 12U);
+
+    for (const std::uint32_t bad : {23U, 27U, 30U}) {  // CRC, sector not found, read fault
+        EXPECT_FALSE(isAmbiguousDeviceError(bad));
+        config->failureCode = bad;
+        config->mediaPresent = false;
+        EXPECT_EQ(source.read(ByteOffset{2 * kMiB}, buffer).status, ReadStatus::IoError) << bad;
+    }
+    EXPECT_EQ(opener->stats()->mediaQueries, 12U) << "a media error does not ask";
+}
+
 TEST(PhysicalDiskPathTest, DevicePathFormat) {
     EXPECT_EQ(PhysicalDiskSource::devicePathFor(0).native(), L"\\\\.\\PhysicalDrive0");
     EXPECT_EQ(PhysicalDiskSource::devicePathFor(12).native(), L"\\\\.\\PhysicalDrive12");

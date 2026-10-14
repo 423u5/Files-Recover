@@ -1,0 +1,20 @@
+# corpus scenario cluster-sizes: GPT: FAT32 with 512-byte and 32 KiB clusters, exFAT with 128 KiB, NTFS with 64 KiB
+# image 32538624 bytes, sha256 1de505cb00e1c629, 8 originals
+# deep scan: 8 candidates
+#1 filesystem complete image/jpeg "/fat512.jpg" size=12504/12504 valid=valid:passed/passed sha=5d3d39310aa45488 recovery=recovered "Volume 1 (FAT32, FAT512)/fat512.jpg" => /fat512.jpg
+#2 filesystem complete video/mp4 "/fat512.mp4" size=107929/107929 valid=valid:passed/passed sha=a84f139bb7c2c080 recovery=recovered "Volume 1 (FAT32, FAT512)/fat512.mp4" => /fat512.mp4
+#3 filesystem complete image/jpeg "/fat32k.jpg" size=19299/19299 valid=valid:passed/passed sha=d56f904664b64962 recovery=recovered "Volume 2 (FAT32, FAT32K)/fat32k.jpg" => /fat32k.jpg
+#4 filesystem complete audio/wav "/fat32k.wav" size=120100/120100 valid=valid:passed/not-applicable sha=b363116d675e9b97 recovery=recovered "Volume 2 (FAT32, FAT32K)/fat32k.wav" => /fat32k.wav
+#5 filesystem complete image/png "/exfat128k.png" size=58027/58027 valid=valid:passed/passed sha=2dc800729440f347 recovery=recovered "Volume 3 (exFAT, EX128K)/exfat128k.png" => /exfat128k.png
+#6 filesystem complete audio/mp3 "/exfat128k.mp3" size=126049/126049 valid=valid:passed/unsupported sha=1302f076f8505c8d recovery=recovered "Volume 3 (exFAT, EX128K)/exfat128k.mp3" => /exfat128k.mp3
+#7 filesystem complete image/jpeg "/ntfs64k.jpg" size=16087/16087 valid=valid:passed/passed sha=04fadccdf9be1c49 recovery=recovered "Volume 4 (NTFS, NT64K)/ntfs64k.jpg" => /ntfs64k.jpg
+#8 filesystem complete video/mp4 "/ntfs64k.mp4" size=154286/154286 valid=valid:passed/passed sha=d38fdf548a951e60 recovery=recovered "Volume 4 (NTFS, NT64K)/ntfs64k.mp4" => /ntfs64k.mp4
+# quick scan: 8 candidates
+#1 filesystem complete image/jpeg "/fat512.jpg" size=12504/12504 valid=valid:passed/passed sha=5d3d39310aa45488 recovery=recovered "Volume 1 (FAT32, FAT512)/fat512.jpg" => /fat512.jpg
+#2 filesystem complete video/mp4 "/fat512.mp4" size=107929/107929 valid=valid:passed/passed sha=a84f139bb7c2c080 recovery=recovered "Volume 1 (FAT32, FAT512)/fat512.mp4" => /fat512.mp4
+#3 filesystem complete image/jpeg "/fat32k.jpg" size=19299/19299 valid=valid:passed/passed sha=d56f904664b64962 recovery=recovered "Volume 2 (FAT32, FAT32K)/fat32k.jpg" => /fat32k.jpg
+#4 filesystem complete audio/wav "/fat32k.wav" size=120100/120100 valid=valid:passed/not-applicable sha=b363116d675e9b97 recovery=recovered "Volume 2 (FAT32, FAT32K)/fat32k.wav" => /fat32k.wav
+#5 filesystem complete image/png "/exfat128k.png" size=58027/58027 valid=valid:passed/passed sha=2dc800729440f347 recovery=recovered "Volume 3 (exFAT, EX128K)/exfat128k.png" => /exfat128k.png
+#6 filesystem complete audio/mp3 "/exfat128k.mp3" size=126049/126049 valid=valid:passed/unsupported sha=1302f076f8505c8d recovery=recovered "Volume 3 (exFAT, EX128K)/exfat128k.mp3" => /exfat128k.mp3
+#7 filesystem complete image/jpeg "/ntfs64k.jpg" size=16087/16087 valid=valid:passed/passed sha=04fadccdf9be1c49 recovery=recovered "Volume 4 (NTFS, NT64K)/ntfs64k.jpg" => /ntfs64k.jpg
+#8 filesystem complete video/mp4 "/ntfs64k.mp4" size=154286/154286 valid=valid:passed/passed sha=d38fdf548a951e60 recovery=recovered "Volume 4 (NTFS, NT64K)/ntfs64k.mp4" => /ntfs64k.mp4

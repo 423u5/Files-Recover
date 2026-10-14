@@ -25,6 +25,7 @@
 #include "recovery/version.hpp"
 #include "scan/scan_test_support.hpp"
 #include "session_test_support.hpp"
+#include "support/card_fixtures.hpp"
 #include "support/memory_source.hpp"
 #include "support/test_files.hpp"
 #include "support/test_macros.hpp"
@@ -35,6 +36,7 @@
 #include <chrono>
 #include <functional>
 #include <map>
+#include <optional>
 #include <random>
 #include <set>
 #include <thread>
@@ -325,6 +327,46 @@ TEST(RecoverySessionTest, RecoveredFilesAndTheirReportsAreKept) {
         session->addRecoveryJob(dir / "x", {evaluation::EvaluatedCandidateId{1}, evaluation::EvaluatedCandidateId{1}})
             .ok());
     EXPECT_FALSE(session->addRecoveryJob({}).ok());
+}
+
+// P20 (corpus finding F4): the files of a source with several volumes are kept
+// apart, a folder per volume; the scan's candidates decide, not a job's.
+TEST(RecoverySessionTest, EachVolumeOfASourceWithSeveralGetsItsOwnFolder) {
+    TempDir dir;
+    MemoryStorageSource source(::recovery::test::threeVolumeDisk());
+    RECOVERY_ASSERT_OK(source.open());
+    scan::ScanConfiguration configuration;
+    configuration.mode = ScanMode::Quick;
+    const std::unique_ptr<RecoverySession> session = created(dir.path(), source, configuration);
+    ASSERT_NE(session, nullptr);
+    const Result<scan::ScanSummary> summary = runScan(*session, source);
+    RECOVERY_ASSERT_OK(summary);
+    ASSERT_EQ(session->candidateCount(), 3U);
+
+    const Result<std::uint32_t> all = session->addRecoveryJob(dir / "all");
+    RECOVERY_ASSERT_OK(all);
+    RECOVERY_ASSERT_OK(session->runRecovery(*all, source));
+    std::vector<std::string> paths;
+    for (const auto& [path, bytes] : filesBelow(dir / "all")) {
+        paths.push_back(path);
+    }
+    EXPECT_EQ(paths, (std::vector<std::string>{"Volume 1 (FAT32, FATVOL)\\A.JPG", "Volume 2 (exFAT, EXVOL)\\B.PNG",
+                                               "Volume 3 (NTFS, NTVOL)\\C.WAV"}));
+
+    // One file of the third volume alone still goes below its volume's folder.
+    std::optional<evaluation::EvaluatedCandidateId> wav;
+    for (const evaluation::EvaluatedCandidate& candidate : session->candidates()) {
+        if (candidate.data.filename == "C.WAV") {
+            wav = candidate.id;
+        }
+    }
+    ASSERT_TRUE(wav.has_value());
+    const Result<std::uint32_t> one = session->addRecoveryJob(dir / "one", {*wav});
+    RECOVERY_ASSERT_OK(one);
+    RECOVERY_ASSERT_OK(session->runRecovery(*one, source));
+    const std::map<std::string, Bytes> files = filesBelow(dir / "one");
+    ASSERT_EQ(files.size(), 1U);
+    EXPECT_EQ(files.begin()->first, "Volume 3 (NTFS, NTVOL)\\C.WAV");
 }
 
 // ===========================================================================
@@ -747,6 +789,51 @@ TEST(RecoverySessionTest, ARecoveryJobCutOffAnywhereResumesWithTheSameNames) {
         EXPECT_EQ(session->info().jobs[0].state, SessionState::Completed);
     }
     EXPECT_GE(cuts, 10U);
+}
+
+// P20 security review: the files a resumed job removes are named by the
+// journal. A journal naming a file outside the job's destination (damaged, or
+// written by someone else) cannot make the resume delete it; a file begun
+// inside the destination is still removed.
+TEST(RecoverySessionTest, AResumedJobRemovesOnlyFilesBegunInsideItsDestination) {
+    MemoryStorageSource source(card());
+    RECOVERY_ASSERT_OK(source.open());
+    TempDir dir;
+    const std::filesystem::path folder = dir / "session";
+    const std::filesystem::path destination = dir / "out";
+    test::writeJournal(folder, scanned().journal);
+    std::vector<evaluation::EvaluatedCandidateId> withData;
+    {
+        const std::unique_ptr<RecoverySession> session = opened(folder);
+        ASSERT_NE(session, nullptr);
+        RECOVERY_ASSERT_OK(session->addRecoveryJob(destination));
+        for (std::uint64_t id = 1; id <= session->candidateCount() && withData.size() < 2; ++id) {
+            const auto candidate = session->candidate(evaluation::EvaluatedCandidateId{id});
+            if (candidate.has_value() && candidate->data.expectedSize > 0) {
+                withData.push_back(candidate->id);
+            }
+        }
+    }
+    ASSERT_EQ(withData.size(), 2U);
+
+    const std::filesystem::path elsewhere = dir / "elsewhere.txt";
+    const std::filesystem::path inside = destination / "begun.txt";
+    std::filesystem::create_directories(destination);
+    ::recovery::test::writeFile(elsewhere, Bytes{std::byte{1}});
+    ::recovery::test::writeFile(inside, Bytes{std::byte{2}});
+    std::vector<JournalRecord> records = test::readRecords(folder);
+    records.push_back(test::recordOf(FileStartedRecord{1, withData[0], toUtf8(elsewhere)}));
+    records.push_back(test::recordOf(FileStartedRecord{1, withData[1], toUtf8(inside)}));
+    test::writeJournal(folder, test::buildJournal(records));
+
+    const std::unique_ptr<RecoverySession> session = opened(folder);
+    ASSERT_NE(session, nullptr);
+    const Result<scan::RecoveryJobSummary> summary = session->runRecovery(1, source, {});
+    RECOVERY_ASSERT_OK(summary);
+    EXPECT_EQ(summary->outcome, scan::RecoveryJobOutcome::Completed);
+    ASSERT_TRUE(std::filesystem::exists(elsewhere));
+    EXPECT_EQ(::recovery::test::readFile(elsewhere), Bytes{std::byte{1}});
+    EXPECT_FALSE(std::filesystem::exists(inside));
 }
 
 // A run whose end was not recorded (a crash between its last update and its

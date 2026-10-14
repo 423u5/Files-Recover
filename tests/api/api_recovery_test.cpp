@@ -219,6 +219,9 @@ TEST_F(ApiRecoveryTest, TheListsRecoveryStateAgreesWithTheEnginesIndex) {
     }
 }
 
+// L199 (resolved after P20): recovering everything of a session without
+// candidates is nothing to do, as a filter matching nothing is, not an error;
+// a candidate asked for by id still does not exist.
 TEST(ApiRecoveryRefusalTest, AScanThatDeliveredNothingYetHasNothingToRecover) {
     std::atomic<bool> cancelled{false};
     RecoveryApi* api = nullptr;
@@ -234,7 +237,15 @@ TEST(ApiRecoveryRefusalTest, AScanThatDeliveredNothingYetHasNothingToRecover) {
     RecoveryOptions options;
     options.destination = world.folder() / "out";
     const Result<RecoveryStart> nothing = api->recoverAll(id, options);
-    RECOVERY_EXPECT_ERROR(nothing, ErrorCode::InvalidInput);
+    RECOVERY_ASSERT_OK(nothing);
+    EXPECT_EQ(nothing->requested, 0U);
+    EXPECT_TRUE(nothing->jobs.empty());
+    EXPECT_FALSE(nothing->newJob.has_value());
+    EXPECT_FALSE(std::filesystem::exists(options.destination));
+    const Result<Progress> idle = api->getProgress(id);
+    RECOVERY_ASSERT_OK(idle);
+    EXPECT_EQ(idle->state, OperationState::Cancelled) << "no operation started";
+    RECOVERY_EXPECT_ERROR(api->recoverCandidate(id, CandidateId{1}, options), ErrorCode::InvalidInput);
 }
 
 TEST(ApiRecoveryRefusalTest, NothingIsWrittenOnTheSourceDisk) {

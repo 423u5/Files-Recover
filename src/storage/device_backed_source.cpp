@@ -167,7 +167,14 @@ ReadResult DeviceBackedSource::readDirect(std::uint64_t offset, std::span<std::b
         }
         done += r.bytesRead;
         if (!r.success) {
-            result.status = ReadStatus::IoError;
+            // A removed device, said so or (behind some USB bridges) said
+            // ambiguously and confirmed by the device itself, is not a bad sector.
+            bool lost = isDeviceLostError(r.systemErrorCode);
+            if (!lost && isAmbiguousDeviceError(r.systemErrorCode)) {
+                const std::optional<bool> present = device_->mediaPresent();
+                lost = present.has_value() && !*present;
+            }
+            result.status = lost ? ReadStatus::DeviceLost : ReadStatus::IoError;
             result.bytesRead = done;
             result.systemErrorCode = r.systemErrorCode;
             return result;

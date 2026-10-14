@@ -18,9 +18,22 @@ inline constexpr std::uint32_t kMinStandardClusters = 65525;
 // Largest cluster count addressable by 28-bit FAT32 entries (clusters 2..0x0FFFFFF6).
 inline constexpr std::uint32_t kMaxClusters = 0x0FFFFFF5;
 inline constexpr std::uint32_t kMaxClusterSize = 256 * 1024;
+// FAT16 (after P20): the specification's cluster counts. Fewer than
+// kMinFat16Clusters is FAT12, which is not supported.
+inline constexpr std::uint32_t kMinFat16Clusters = 4085;
+inline constexpr std::uint32_t kMaxFat16Clusters = 65524;
 
-// Validated FAT32 boot sector (BIOS parameter block) with derived layout.
+// The module reads FAT32 and (after P20) FAT16: the same directory entries,
+// long names and chains; FAT16 has 16-bit FAT entries and a root directory of
+// fixed size between the FATs and cluster 2.
+enum class FatType : std::uint8_t {
+    Fat32,
+    Fat16,
+};
+
+// Validated FAT boot sector (BIOS parameter block) with derived layout.
 struct BootSector {
+    FatType type = FatType::Fat32;
     // Raw fields.
     std::string oemName;
     std::uint16_t bytesPerSector = 0;
@@ -46,8 +59,15 @@ struct BootSector {
     std::uint32_t clusterCount = 0;   // data clusters, numbered 2 .. clusterCount + 1
     std::uint32_t activeFat = 0;      // copy to read
     bool mirrored = true;             // all copies are kept identical
+    // FAT16: the root directory's fixed region (FAT32: 0; its root is the chain at rootCluster).
+    std::uint16_t rootEntries = 0;
+    std::uint64_t rootDirOffset = 0;
+    std::uint64_t rootDirBytes = 0;
 
     std::vector<std::string> warnings;
+
+    // Bytes per FAT entry: 4 (FAT32) or 2 (FAT16).
+    [[nodiscard]] std::uint32_t fatEntryBytes() const noexcept { return type == FatType::Fat16 ? 2 : 4; }
 
     [[nodiscard]] std::uint32_t lastCluster() const noexcept { return clusterCount + 1; }
     [[nodiscard]] bool isValidCluster(std::uint64_t cluster) const noexcept {
@@ -58,10 +78,11 @@ struct BootSector {
     }
 };
 
-// Parses a FAT32 boot sector. `sourceSize` is the size of the containing
-// volume source; a boot sector describing more is accepted with a warning
-// (truncated image). Returns UnsupportedFilesystem for non-FAT32 sectors
-// (including FAT12/FAT16) and CorruptedFilesystem for FAT32 sectors with
+// Parses a FAT32 or FAT16 boot sector. `sourceSize` is the size of the
+// containing volume source; a boot sector describing more is accepted with a
+// warning (truncated image). The type is decided as the specification says,
+// by the count of data clusters. Returns UnsupportedFilesystem for other
+// sectors (FAT12 included) and CorruptedFilesystem for FAT sectors with
 // impossible values.
 [[nodiscard]] Result<BootSector> parseBootSector(std::span<const std::byte> sector, std::uint64_t sourceSize);
 

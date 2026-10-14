@@ -157,7 +157,12 @@ is refused.
 2. Recreates the original directories below the destination (`preserveDirectories`, on by default). Every
    component goes through `safeFileName`. A name held by a file or a link gets a number (`DCIM (1)`), and links and
    junctions are never followed. Each new directory is checked with `checkDestinationSafety` again. An existing
-   plain directory is shared.
+   plain directory is shared. P20: `recover(candidate, onCreated, folder)` puts the tree below one more folder,
+   which a recovery job uses for a folder per volume: when the scan's candidates lie on more than one volume of a
+   source, each volume's files go below `Volume N (FS, LABEL)` (`Volume N` without a filesystem, `Outside the
+   volumes` for carves found elsewhere), so that the trees of a disk's partitions are not merged. The folder name
+   holds the volume's label, read from the source: it goes through `safeFileName` as one component. A source with
+   one volume keeps the layout it always had.
 3. Creates the file with `DestinationFile::CreateNew`. If the name is taken, it tries `name (1).ext`,
    `name (2).ext`, ... up to 10,000 times, so existing files are never overwritten. The check and the creation
    are atomic.

@@ -1,0 +1,21 @@
+# corpus scenario fat32-overwritten: FAT32: deleted files partly or wholly overwritten by newer files
+# image 8422400 bytes, sha256 df790449b4493d6f, 8 originals
+# deep scan: 9 candidates
+#1 reconstruction ambiguous(alternative-layout,data-missing,content-truncated,validation-failed) image/jpeg "/Overwritten middle.jpg" size=12288/18550 deleted fragmented valid=invalid:truncated/failed sha=f1bb1464d75d15c3 recovery=recovered(incomplete) "Overwritten middle.jpg"
+#2 reconstruction ambiguous(alternative-layout,data-missing,content-truncated,validation-failed) image/jpeg "/Overwritten middle.jpg" size=12288/18550 deleted fragmented valid=invalid:truncated/failed sha=1bcd320703256ecc recovery=recovered(incomplete) "Overwritten middle (1).jpg"
+#3 filesystem complete image/bmp "/NEW1.BMP" size=3654/3654 valid=valid:passed/not-applicable sha=849a2b25c2d10fd0 recovery=recovered "NEW1.BMP" => /NEW1.BMP
+#4 reconstruction partial(data-missing,content-truncated,reconstruction-partial) video/mp4 "/Overwritten moov.mp4" size=151552/155891 deleted fragmented valid=truncated:truncated/truncated sha=6022e9412aa441ea recovery=recovered(incomplete) "Overwritten moov.mp4"
+#5 filesystem complete image/png "/NEW2.PNG" size=9427/9427 valid=valid:passed/passed sha=4f335694fa2faf00 recovery=recovered "NEW2.PNG" => /NEW2.PNG
+#6 filesystem unrecoverable(reconstruction-failed,content-truncated,clusters-reallocated) audio/mp3 "/Fully overwritten.wav" size=32100/32100 deleted valid=truncated:truncated/unsupported sha=bc1fb5db0ec40863 recovery=recovered "Fully overwritten.wav" => part of /NEW3.MP3
+#7 filesystem complete audio/mp3 "/NEW3.MP3" size=84253/84253 valid=valid:passed/unsupported sha=af664ec23a8123df recovery=recovered "NEW3.MP3" => /NEW3.MP3
+#8 filesystem unrecoverable(reconstruction-failed,validation-failed,clusters-reallocated) image/jpeg "/Overwritten start.jpg" size=12079/12079 deleted valid=invalid:failed/not-run sha=83d28c084d7a3e8c recovery=recovered "Overwritten start.jpg"
+#9 filesystem unverified(not-validated) other/- "/NOTES.TXT" size=2000/2000 valid=not-validated:unsupported/not-run sha=65509ed7f997d832 recovery=recovered "NOTES.TXT" => /NOTES.TXT
+# quick scan: 8 candidates
+#1 filesystem corrupted(validation-failed,clusters-reallocated) image/jpeg "/Overwritten middle.jpg" size=18550/18550 deleted valid=invalid:failed/not-run sha=07a700bdb2e68da3 recovery=recovered "Overwritten middle.jpg"
+#2 filesystem complete image/bmp "/NEW1.BMP" size=3654/3654 valid=valid:passed/not-applicable sha=849a2b25c2d10fd0 recovery=recovered "NEW1.BMP" => /NEW1.BMP
+#3 filesystem corrupted(validation-failed,clusters-reallocated) video/mp4 "/Overwritten moov.mp4" size=155891/155891 deleted valid=invalid:failed/not-run sha=2c069c444a7b6926 recovery=recovered "Overwritten moov.mp4"
+#4 filesystem complete image/png "/NEW2.PNG" size=9427/9427 valid=valid:passed/passed sha=4f335694fa2faf00 recovery=recovered "NEW2.PNG" => /NEW2.PNG
+#5 filesystem partial(content-truncated,clusters-reallocated) audio/mp3 "/Fully overwritten.wav" size=32100/32100 deleted valid=truncated:truncated/unsupported sha=bc1fb5db0ec40863 recovery=recovered "Fully overwritten.wav" => part of /NEW3.MP3
+#6 filesystem complete audio/mp3 "/NEW3.MP3" size=84253/84253 valid=valid:passed/unsupported sha=af664ec23a8123df recovery=recovered "NEW3.MP3" => /NEW3.MP3
+#7 filesystem corrupted(validation-failed,clusters-reallocated) image/jpeg "/Overwritten start.jpg" size=12079/12079 deleted valid=invalid:failed/not-run sha=83d28c084d7a3e8c recovery=recovered "Overwritten start.jpg"
+#8 filesystem unverified(not-validated) other/- "/NOTES.TXT" size=2000/2000 valid=not-validated:unsupported/not-run sha=65509ed7f997d832 recovery=recovered "NOTES.TXT" => /NOTES.TXT

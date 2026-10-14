@@ -19,7 +19,9 @@
 namespace recovery::carving {
 
 enum class ValidationStatus : std::uint8_t {
-    // No validator ran (validation was turned off).
+    // No validator ran (validation was turned off), or the validator could
+    // not check the content: it holds a feature the validator does not
+    // support (an encrypted ZIP member). Such a file is never trusted.
     NotValidated,
     // Every element of the structure is consistent, and the structure ends
     // where the content ends.

@@ -1,0 +1,29 @@
+# corpus scenario ntfs-mixed: NTFS, 4 KiB clusters: resident, fragmented, sparse, hard-linked and deleted files
+# image 16777728 bytes, sha256 197fb7d0faecf36b, 13 originals
+# deep scan: 13 candidates
+#1 filesystem unverified(not-validated) other/- "/small.txt" size=300/300 valid=not-validated:unsupported/not-run sha=867f7a978803cf32 recovery=recovered "small.txt" => /small.txt
+#2 filesystem complete image/gif "/dot.gif" size=810/810 valid=valid:passed/passed sha=e677dfeaaf9a77f0 recovery=recovered "dot.gif" => /dot.gif
+#3 filesystem complete image/jpeg "/Link to photo.jpg" size=19830/19830 valid=valid:passed/passed sha=91ea0b3e61ec6b2b recovery=recovered "Link to photo.jpg" => /Photos/IMG_2001.JPG
+#4 filesystem complete image/png "/newer.png" size=21007/21007 valid=valid:passed/passed sha=237208dc42e7010e recovery=recovered "newer.png" => /newer.png
+#5 filesystem complete image/jpeg "/deleted photo.jpg" size=11769/11769 deleted valid=valid:passed/passed sha=0ca16f940e55a5d8 recovery=recovered "deleted photo.jpg" => /deleted photo.jpg
+#6 filesystem complete image/jpeg "/Photos/IMG_2001.JPG" size=19830/19830 valid=valid:passed/passed sha=91ea0b3e61ec6b2b dup=#3 recovery=recovered "Photos/IMG_2001.JPG" => /Photos/IMG_2001.JPG
+#7 filesystem complete image/jpeg "/Photos/fragmented.jpg" size=16093/16093 fragmented valid=valid:passed/passed sha=008500999c8d9c0f recovery=recovered "Photos/fragmented.jpg" => /Photos/fragmented.jpg
+#8 filesystem complete audio/mp3 "/Music/song.mp3" size=126049/126049 valid=valid:passed/unsupported sha=3321958eaa4e3e12 recovery=recovered "Music/song.mp3" => /Music/song.mp3
+#9 filesystem complete audio/wav "/Music/sparse.wav" size=96100/96100 fragmented valid=valid:passed/not-applicable sha=bde3022fdadb550f recovery=recovered "Music/sparse.wav" => /Music/sparse.wav
+#10 filesystem complete video/mp4 "/Video/clip.mp4" size=200715/200715 valid=valid:passed/passed sha=5093be070cd882ef recovery=recovered "Video/clip.mp4" => /Video/clip.mp4
+#11 filesystem complete image/png "/Trip/beach.png" size=58027/58027 deleted valid=valid:passed/passed sha=3fdfa5b3bb6ae6fe recovery=recovered "Trip/beach.png" => /Trip/beach.png
+#12 filesystem complete audio/mp3 "/Trip/waves.mp3" size=50817/50817 deleted valid=valid:passed/unsupported sha=ea7dabcf4c045c19 recovery=recovered "Trip/waves.mp3" => /Trip/waves.mp3
+#13 carving complete image/jpeg "recovered_000013.jpg" size=11511/11511 valid=valid:passed/passed sha=501d06e4c176d32b recovery=recovered "recovered_000013.jpg" => /reused record.jpg
+# quick scan: 12 candidates
+#1 filesystem unverified(not-validated) other/- "/small.txt" size=300/300 valid=not-validated:unsupported/not-run sha=867f7a978803cf32 recovery=recovered "small.txt" => /small.txt
+#2 filesystem complete image/gif "/dot.gif" size=810/810 valid=valid:passed/passed sha=e677dfeaaf9a77f0 recovery=recovered "dot.gif" => /dot.gif
+#3 filesystem complete image/jpeg "/Link to photo.jpg" size=19830/19830 valid=valid:passed/passed sha=91ea0b3e61ec6b2b recovery=recovered "Link to photo.jpg" => /Photos/IMG_2001.JPG
+#4 filesystem complete image/png "/newer.png" size=21007/21007 valid=valid:passed/passed sha=237208dc42e7010e recovery=recovered "newer.png" => /newer.png
+#5 filesystem complete image/jpeg "/deleted photo.jpg" size=11769/11769 deleted valid=valid:passed/passed sha=0ca16f940e55a5d8 recovery=recovered "deleted photo.jpg" => /deleted photo.jpg
+#6 filesystem complete image/jpeg "/Photos/IMG_2001.JPG" size=19830/19830 valid=valid:passed/passed sha=91ea0b3e61ec6b2b dup=#3 recovery=recovered "Photos/IMG_2001.JPG" => /Photos/IMG_2001.JPG
+#7 filesystem complete image/jpeg "/Photos/fragmented.jpg" size=16093/16093 fragmented valid=valid:passed/passed sha=008500999c8d9c0f recovery=recovered "Photos/fragmented.jpg" => /Photos/fragmented.jpg
+#8 filesystem complete audio/mp3 "/Music/song.mp3" size=126049/126049 valid=valid:passed/unsupported sha=3321958eaa4e3e12 recovery=recovered "Music/song.mp3" => /Music/song.mp3
+#9 filesystem complete audio/wav "/Music/sparse.wav" size=96100/96100 fragmented valid=valid:passed/not-applicable sha=bde3022fdadb550f recovery=recovered "Music/sparse.wav" => /Music/sparse.wav
+#10 filesystem complete video/mp4 "/Video/clip.mp4" size=200715/200715 valid=valid:passed/passed sha=5093be070cd882ef recovery=recovered "Video/clip.mp4" => /Video/clip.mp4
+#11 filesystem complete image/png "/Trip/beach.png" size=58027/58027 deleted valid=valid:passed/passed sha=3fdfa5b3bb6ae6fe recovery=recovered "Trip/beach.png" => /Trip/beach.png
+#12 filesystem complete audio/mp3 "/Trip/waves.mp3" size=50817/50817 deleted valid=valid:passed/unsupported sha=ea7dabcf4c045c19 recovery=recovered "Trip/waves.mp3" => /Trip/waves.mp3

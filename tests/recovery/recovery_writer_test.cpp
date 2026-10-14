@@ -6,6 +6,7 @@
 #include "recovery/recovery_writer.hpp"
 
 #include "recovery/filesystem_recovery.hpp"
+#include "storage/destination_file.hpp"
 #include "storage/disk_image_source.hpp"
 #include "storage/physical_disk_source.hpp"
 #include "support/candidate_helpers.hpp"
@@ -18,9 +19,14 @@
 
 #include <gtest/gtest.h>
 
+#include <windows.h>
+
 #include <algorithm>
+#include <chrono>
 #include <map>
+#include <optional>
 #include <set>
+#include <utility>
 
 namespace recovery {
 namespace {
@@ -204,6 +210,123 @@ TEST_F(RecoveryWriterTest, UnsafeNamesStayInsideTheDestination) {
         outside.insert(item.path().filename());
     }
     EXPECT_EQ(outside, std::set<std::filesystem::path>{"out"});
+}
+
+// P20 security review: the folder of a volume carries the volume's label,
+// read from the source like any name: it stays one safe component.
+TEST_F(RecoveryWriterTest, AFolderNameFromTheSourceStaysOneSafeComponent) {
+    RecoveryWriter output = writer();
+    const std::vector<SourceRegion> data{{0, 100, RegionKind::Stored, 0, false}};
+    const std::vector<std::pair<std::string, std::filesystem::path>> cases{
+        {"Volume 1 (FAT32, ../../evil)", "Volume 1 (FAT32, .._.._evil)"},
+        {"Volume 2 (exFAT, a\\b:c)", "Volume 2 (exFAT, a_b_c)"},
+        {"..", "_"},
+        {"CON", "_CON"},
+    };
+    for (const auto& [folder, expected] : cases) {
+        const Result<RecoveredFile> file = output.recover(handMade("x.txt", "/sub/x.txt", data), {}, folder);
+        RECOVERY_ASSERT_OK(file);
+        EXPECT_EQ(file->path, out() / expected / "sub" / "x.txt") << folder;
+        EXPECT_TRUE(std::filesystem::is_regular_file(file->path)) << folder;
+    }
+    std::set<std::filesystem::path> outside;
+    for (const auto& item : std::filesystem::directory_iterator(dir_.path())) {
+        outside.insert(item.path().filename());
+    }
+    EXPECT_EQ(outside, std::set<std::filesystem::path>{"out"});
+}
+
+// A file's creation, last write and last access times as Windows reports them.
+struct FileTimes {
+    storage::DestinationFile::FileTime created;
+    storage::DestinationFile::FileTime modified;
+    storage::DestinationFile::FileTime accessed;
+};
+
+storage::DestinationFile::FileTime fromFileTime(const FILETIME& time) {
+    const std::uint64_t value = (static_cast<std::uint64_t>(time.dwHighDateTime) << 32) | time.dwLowDateTime;
+    return storage::DestinationFile::FileTime(
+        std::chrono::milliseconds((static_cast<std::int64_t>(value) - 116'444'736'000'000'000) / 10'000));
+}
+
+std::optional<FileTimes> timesOf(const std::filesystem::path& path) {
+    const HANDLE file = ::CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
+                                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                                      FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return std::nullopt;
+    }
+    FILETIME created{};
+    FILETIME accessed{};
+    FILETIME modified{};
+    const BOOL read = ::GetFileTime(file, &created, &accessed, &modified);
+    ::CloseHandle(file);
+    if (!read) {
+        return std::nullopt;
+    }
+    return FileTimes{fromFileTime(created), fromFileTime(modified), fromFileTime(accessed)};
+}
+
+filesystem::Timestamp at(int year, int month, int day, int hour, int minute, int second, bool local) {
+    const std::chrono::sys_days date{std::chrono::year{year} / std::chrono::month{static_cast<unsigned>(month)} /
+                                     std::chrono::day{static_cast<unsigned>(day)}};
+    return filesystem::Timestamp{
+        std::chrono::time_point_cast<std::chrono::milliseconds>(date + std::chrono::hours{hour} +
+                                                                std::chrono::minutes{minute} +
+                                                                std::chrono::seconds{second}),
+        local};
+}
+
+// L37 (resolved after P20): a recovered file gets the times its filesystem
+// recorded. UTC times (NTFS, exFAT) are set as they are.
+TEST_F(RecoveryWriterTest, ARecoveredFileKeepsItsRecordedUtcTimes) {
+    RecoveryWriter output = writer();
+    RecoveryCandidate candidate = handMade("dated.txt", "/dated.txt", {{0, 100, RegionKind::Stored, 0, false}});
+    candidate.filesystemEvidence.created = at(2019, 5, 4, 10, 11, 12, false);
+    candidate.filesystemEvidence.modified = at(2020, 6, 7, 13, 14, 15, false);
+    candidate.filesystemEvidence.accessed = at(2021, 8, 9, 16, 17, 18, false);
+    const Result<RecoveredFile> file = output.recover(candidate);
+    RECOVERY_ASSERT_OK(file);
+    const std::optional<FileTimes> times = timesOf(file->path);
+    ASSERT_TRUE(times.has_value());
+    EXPECT_EQ(times->created, candidate.filesystemEvidence.created->time);
+    EXPECT_EQ(times->modified, candidate.filesystemEvidence.modified->time);
+    EXPECT_EQ(times->accessed, candidate.filesystemEvidence.accessed->time);
+}
+
+// FAT's local wall-clock times show the same clock time on this computer (by
+// its time zone's rules for each date); a carve, without times, keeps those of
+// its recovery.
+TEST_F(RecoveryWriterTest, LocalTimesShowTheSameClockTimeAndCarvesKeepTheirRecoveryTimes) {
+    RecoveryWriter output = writer();
+    RecoveryCandidate candidate = handMade("card.jpg", "/DCIM/card.jpg", {{0, 100, RegionKind::Stored, 0, false}});
+    candidate.filesystemEvidence.created = at(2021, 1, 15, 9, 0, 0, true);    // winter
+    candidate.filesystemEvidence.modified = at(2021, 7, 15, 14, 30, 2, true);  // summer
+    const Result<RecoveredFile> file = output.recover(candidate);
+    RECOVERY_ASSERT_OK(file);
+    const std::optional<FileTimes> times = timesOf(file->path);
+    ASSERT_TRUE(times.has_value());
+    for (const auto& [recorded, set] : {std::pair{*candidate.filesystemEvidence.created, times->created},
+                                        std::pair{*candidate.filesystemEvidence.modified, times->modified}}) {
+        // The UTC time Windows holds, shown in this computer's time zone, is the recorded clock time.
+        const std::int64_t value = set.time_since_epoch().count() * 10'000 + 116'444'736'000'000'000;
+        FILETIME utc{static_cast<DWORD>(value & 0xFFFFFFFF), static_cast<DWORD>(value >> 32)};
+        SYSTEMTIME utcFields{};
+        SYSTEMTIME localFields{};
+        ASSERT_TRUE(::FileTimeToSystemTime(&utc, &utcFields));
+        ASSERT_TRUE(::SystemTimeToTzSpecificLocalTime(nullptr, &utcFields, &localFields));
+        const filesystem::Timestamp shown = at(localFields.wYear, localFields.wMonth, localFields.wDay,
+                                               localFields.wHour, localFields.wMinute, localFields.wSecond, true);
+        EXPECT_EQ(shown, recorded);
+    }
+
+    const auto before = std::chrono::system_clock::now() - std::chrono::minutes(1);
+    const Result<RecoveredFile> carve =
+        output.recover(handMade("recovered_000001.jpg", "", {{0, 100, RegionKind::Stored, 0, false}}));
+    RECOVERY_ASSERT_OK(carve);
+    const std::optional<FileTimes> now = timesOf(carve->path);
+    ASSERT_TRUE(now.has_value());
+    EXPECT_GT(now->modified, std::chrono::time_point_cast<std::chrono::milliseconds>(before));
 }
 
 TEST_F(RecoveryWriterTest, DirectoryNameHeldByAFileGetsANumber) {

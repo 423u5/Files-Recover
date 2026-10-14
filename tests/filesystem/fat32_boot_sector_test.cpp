@@ -130,8 +130,10 @@ TEST_P(Fat32BootSectorRejectTest, IsRejected) {
 INSTANTIATE_TEST_SUITE_P(
     Fields, Fat32BootSectorRejectTest,
     ::testing::Values(BootCase{"MissingSignature", 510, 2, 0, ErrorCode::UnsupportedFilesystem},
-                      BootCase{"Fat16RootEntries", 17, 2, 512, ErrorCode::UnsupportedFilesystem},
-                      BootCase{"Fat16FatSize", 22, 2, 9, ErrorCode::UnsupportedFilesystem},
+                      // After P20 FAT16 is read: a FAT16 root without a 16-bit FAT size, and a
+                      // 16-bit FAT size without a root, are corrupt FAT16 boot sectors.
+                      BootCase{"Fat16RootEntries", 17, 2, 512, ErrorCode::CorruptedFilesystem},
+                      BootCase{"Fat16FatSize", 22, 2, 9, ErrorCode::CorruptedFilesystem},
                       BootCase{"ZeroFat32Size", 36, 4, 0, ErrorCode::UnsupportedFilesystem},
                       BootCase{"BytesPerSector1000", 11, 2, 1000, ErrorCode::CorruptedFilesystem},
                       BootCase{"BytesPerSectorZero", 11, 2, 0, ErrorCode::CorruptedFilesystem},

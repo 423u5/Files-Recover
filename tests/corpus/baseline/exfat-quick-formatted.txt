@@ -1,0 +1,7 @@
+# corpus scenario exfat-quick-formatted: exFAT quick-formatted after use
+# image 8417280 bytes, sha256 63fec62c50acef9b, 3 originals
+# deep scan: 3 candidates
+#1 carving complete image/jpeg "recovered_000001.jpg" size=19382/19382 valid=valid:passed/passed sha=62127d67c9715362 recovery=recovered "recovered_000001.jpg" => /Photo.jpg
+#2 carving complete video/mp4 "recovered_000002.mp4" size=157261/157261 valid=valid:passed/passed sha=565c5f4bb565d459 recovery=recovered "recovered_000002.mp4" => /Clip.mp4
+#3 carving complete audio/wav "recovered_000003.wav" size=80100/80100 valid=valid:passed/not-applicable sha=5aecaca19d632a0a recovery=recovered "recovered_000003.wav" => /Recording.wav
+# quick scan: 0 candidates

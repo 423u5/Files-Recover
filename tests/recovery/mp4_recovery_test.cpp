@@ -255,8 +255,9 @@ void expectConsistent(const Mp4Candidate& candidate) {
     EXPECT_EQ(candidate.hasWarning(Mp4Warning::SamplesMisframed), structure.samplesMisframed() > 0);
     const bool inside = candidate.allocation.has_value() && candidate.allocation->insideActiveFile;
     EXPECT_EQ(candidate.hasWarning(Mp4Warning::InsideActiveFile), inside);
+    // P20: only clusters a listed file holds count (allocated to no listed file: evidence only).
     EXPECT_EQ(candidate.hasWarning(Mp4Warning::AllocatedClusters),
-              !inside && candidate.allocation.has_value() && candidate.allocation->allocatedClusters > 0);
+              !inside && candidate.data.method == RecoveryMethod::Carving && candidate.data.reallocatedBytes() > 0);
 }
 
 // A volume opened for recovery, with its filesystem candidates.
@@ -1110,6 +1111,14 @@ TEST(Mp4RecoveryTest, CarvedFilesCarryWhereTheyLieInTheAllocation) {
     const Mp4Built taken = test::makeMp4(moovFirst(83));
     plant(builder, 4400, taken.bytes);
     (void)builder.addFileInClusters(root, "NEW.BIN", test::makePattern(2 * kClusterSize, 84), {4406, 4407});
+    // P20: in a chain still in the FAT that no entry names (its folder was
+    // lost): allocated, but to no file the volume lists.
+    const Bytes lost = test::makeMp4(seeded(86)).bytes;
+    plant(builder, 4600, lost);
+    const std::uint32_t lostClusters = clustersFor(lost.size());
+    for (std::uint32_t i = 0; i < lostClusters; ++i) {
+        builder.setFat(4600 + i, i + 1 < lostClusters ? 4600 + i + 1 : 0x0FFFFFFF);
+    }
     // Inside an active file: the video of a motion photo, after the picture.
     const Bytes jpeg = test::makeJpeg();
     const Bytes video = test::makeMp4(seeded(85)).bytes;
@@ -1121,8 +1130,8 @@ TEST(Mp4RecoveryTest, CarvedFilesCarryWhereTheyLieInTheAllocation) {
     Mp4RecoveryOptions options;
     options.firstId = 41;
     const Recovered recovered = recover(source, {&volume}, options);
-    ASSERT_EQ(recovered.candidates.size(), 4u);
-    EXPECT_EQ(recovered.report.carving, 4u);
+    ASSERT_EQ(recovered.candidates.size(), 5u);
+    EXPECT_EQ(recovered.report.carving, 5u);
     EXPECT_EQ(recovered.report.filesystemExamined, 0u);
 
     // In source order: the motion photo's clusters come first.
@@ -1185,6 +1194,23 @@ TEST(Mp4RecoveryTest, CarvedFilesCarryWhereTheyLieInTheAllocation) {
             EXPECT_EQ(partly->structure.tracks[t].samplesReallocated, touched[t]);
         }
         EXPECT_TRUE(partly->hasWarning(Mp4Warning::SamplesDamaged));
+    }
+
+    const Mp4Candidate* orphaned = recovered.carvedAt(builder.clusterOffset(4600));
+    ASSERT_NE(orphaned, nullptr);
+    {
+        SCOPED_TRACE(describeMp4(*orphaned));
+        EXPECT_EQ(orphaned->data.filename, "recovered_000045.mp4");
+        ASSERT_TRUE(orphaned->allocation.has_value());
+        EXPECT_EQ(orphaned->allocation->allocatedClusters, lostClusters);
+        EXPECT_TRUE(orphaned->allocation->activeFiles.empty());
+        EXPECT_FALSE(orphaned->allocation->insideActiveFile);
+        // Allocated to no listed file: nothing says its bytes are another file's.
+        EXPECT_TRUE(orphaned->warnings.empty());
+        ASSERT_EQ(orphaned->data.sourceRegions.size(), 1u);
+        EXPECT_FALSE(orphaned->data.sourceRegions.front().reallocated);
+        EXPECT_EQ(orphaned->structure.samplesDamaged(), 0u);
+        expectRecovered(source, orphaned, lost);
     }
 }
 

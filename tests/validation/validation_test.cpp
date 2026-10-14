@@ -215,6 +215,26 @@ TEST(ValidationLevelsTest, UnsupportedAndNotApplicableMediaLeaveAValidStructureV
     }
 }
 
+TEST(ValidationLevelsTest, AValidatorThatCannotCheckTheContentLeavesItUnchecked) {
+    // A validator that runs but cannot check the content (an encrypted ZIP
+    // member) says NotValidated: the structure is Unsupported, the media
+    // level still runs, playability does not, and nothing is Valid.
+    Fixture fixture(ValidationStatus::NotValidated, levelOf(LevelStatus::NotApplicable));
+    FakePlayer player(levelOf(LevelStatus::Passed));
+    ValidationOptions options;
+    options.playability = &player;
+    Result<ValidationState> state = fixture.run(options);
+    RECOVERY_ASSERT_OK(state);
+    EXPECT_EQ(state->structural.status, LevelStatus::Unsupported);
+    EXPECT_EQ(state->structural.detail, "scripted verdict");
+    EXPECT_EQ(state->media.status, LevelStatus::NotApplicable);
+    EXPECT_EQ(state->playability.status, LevelStatus::NotRun);
+    EXPECT_EQ(state->playability.detail, "the structure could not be checked");
+    EXPECT_EQ(player.calls, 0);
+    EXPECT_EQ(state->status(), ValidationStatus::NotValidated);
+    EXPECT_FALSE(state->deepestPassed().has_value());
+}
+
 TEST(ValidationLevelsTest, WithoutAFormatNothingIsValidated) {
     MediaValidatorRegistry registry;
     const std::vector<std::byte> data = test::bytesOf("anything");

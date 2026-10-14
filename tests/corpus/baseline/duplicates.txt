@@ -1,0 +1,19 @@
+# corpus scenario duplicates: FAT32: the same content under other names, in other folders, deleted, and unnamed
+# image 8422400 bytes, sha256 286cf48cce809e3a, 8 originals
+# deep scan: 8 candidates
+#1 hybrid complete image/jpeg "/Deleted copy.jpg" size=19606/19606 deleted valid=valid:passed/passed sha=1f6488dd2a965440 recovery=recovered "Deleted copy.jpg" => /A/PHOTO.JPG
+#2 filesystem complete image/jpeg "/A/PHOTO.JPG" size=19606/19606 valid=valid:passed/passed sha=1f6488dd2a965440 dup=#1 recovery=recovered "A/PHOTO.JPG" => /A/PHOTO.JPG
+#3 filesystem complete audio/mp3 "/A/SONG.MP3" size=84253/84253 valid=valid:passed/unsupported sha=cf8cb3e41ebc1354 recovery=recovered "A/SONG.MP3" => /A/SONG.MP3
+#4 filesystem complete video/mp4 "/A/CLIP.MP4" size=123298/123298 valid=valid:passed/passed sha=56271711f4115429 recovery=recovered "A/CLIP.MP4" => /A/CLIP.MP4
+#5 filesystem complete image/jpeg "/B/Photo copy.jpg" size=19606/19606 valid=valid:passed/passed sha=1f6488dd2a965440 dup=#1 recovery=recovered "B/Photo copy.jpg" => /A/PHOTO.JPG
+#6 filesystem complete audio/mp3 "/B/Song (2).mp3" size=84253/84253 valid=valid:passed/unsupported sha=cf8cb3e41ebc1354 dup=#3 recovery=recovered "B/Song (2).mp3" => /A/SONG.MP3
+#7 filesystem complete video/mp4 "/B/CLIP.MP4" size=123298/123298 valid=valid:passed/passed sha=56271711f4115429 dup=#4 recovery=recovered "B/CLIP.MP4" => /A/CLIP.MP4
+#8 carving complete image/jpeg "recovered_000008.jpg" size=19606/19606 valid=valid:passed/passed sha=1f6488dd2a965440 dup=#1 recovery=recovered "recovered_000008.jpg" => /A/PHOTO.JPG
+# quick scan: 7 candidates
+#1 hybrid complete image/jpeg "/Deleted copy.jpg" size=19606/19606 deleted valid=valid:passed/passed sha=1f6488dd2a965440 recovery=recovered "Deleted copy.jpg" => /A/PHOTO.JPG
+#2 filesystem complete image/jpeg "/A/PHOTO.JPG" size=19606/19606 valid=valid:passed/passed sha=1f6488dd2a965440 dup=#1 recovery=recovered "A/PHOTO.JPG" => /A/PHOTO.JPG
+#3 filesystem complete audio/mp3 "/A/SONG.MP3" size=84253/84253 valid=valid:passed/unsupported sha=cf8cb3e41ebc1354 recovery=recovered "A/SONG.MP3" => /A/SONG.MP3
+#4 filesystem complete video/mp4 "/A/CLIP.MP4" size=123298/123298 valid=valid:passed/passed sha=56271711f4115429 recovery=recovered "A/CLIP.MP4" => /A/CLIP.MP4
+#5 filesystem complete image/jpeg "/B/Photo copy.jpg" size=19606/19606 valid=valid:passed/passed sha=1f6488dd2a965440 dup=#1 recovery=recovered "B/Photo copy.jpg" => /A/PHOTO.JPG
+#6 filesystem complete audio/mp3 "/B/Song (2).mp3" size=84253/84253 valid=valid:passed/unsupported sha=cf8cb3e41ebc1354 dup=#3 recovery=recovered "B/Song (2).mp3" => /A/SONG.MP3
+#7 filesystem complete video/mp4 "/B/CLIP.MP4" size=123298/123298 valid=valid:passed/passed sha=56271711f4115429 dup=#4 recovery=recovered "B/CLIP.MP4" => /A/CLIP.MP4

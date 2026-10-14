@@ -42,6 +42,7 @@ void addContentPreview(detail::Extraction& x) {
             preview.height = out.video->height;
             preview.orientation = orientationForRotation(out.video->rotation);
             break;
+        case MediaKind::Archive:
         case MediaKind::Unknown:
             return;
     }
@@ -59,7 +60,7 @@ Result<MediaMetadata> extractMetadata(carving::IContentReader& content, std::str
     out.formatId = std::string(formatId);
     out.kind = kindOfFormat(formatId);
     out.mediaType = std::string(mediaTypeOfFormat(formatId));
-    if (out.kind == MediaKind::Unknown) {
+    if (out.kind == MediaKind::Unknown || out.kind == MediaKind::Archive) {
         return out;
     }
     detail::Extraction x{content, options, out};

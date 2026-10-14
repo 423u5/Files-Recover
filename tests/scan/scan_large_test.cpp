@@ -17,6 +17,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <map>
 
 namespace recovery::scan {
@@ -191,8 +192,15 @@ TEST(ScanLargeImageTest, MemoryStaysBoundedWhateverTheImageSize) {
     }
     // Warm the registries and the card first, so that they are not counted.
     (void)peakHeapOfAScan(5 * kGiB64 / 4);
-    const std::int64_t small = peakHeapOfAScan(5 * kGiB64 / 4);
-    const std::int64_t large = peakHeapOfAScan(5 * kGiB64);
+    std::int64_t small = peakHeapOfAScan(5 * kGiB64 / 4);
+    std::int64_t large = peakHeapOfAScan(5 * kGiB64);
+    // A peak also holds whatever a busy scheduler let pile up in flight (blocks read ahead, carves made ahead: L197),
+    // never less than the scan needs. So a difference beyond the allowance is measured again, twice at most, and the
+    // lowest peak of each size counts: memory that grows with the image is in every measurement.
+    for (int retry = 0; retry < 2 && large - small > static_cast<std::int64_t>(2 * kMiB); ++retry) {
+        small = std::min(small, peakHeapOfAScan(5 * kGiB64 / 4));
+        large = std::min(large, peakHeapOfAScan(5 * kGiB64));
+    }
     RecordProperty("peak_heap_1_25_gib", std::to_string(small));
     RecordProperty("peak_heap_5_gib", std::to_string(large));
     const ScanRunOptions options = largeRunOptions();

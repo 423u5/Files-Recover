@@ -157,6 +157,10 @@ TEST(ApiImagingTest, ADiskWithBadSectorsIsImagedWithZerosAndTheirList) {
 
     std::fill(data.begin() + 4096, data.begin() + 8192, std::byte{0});
     EXPECT_EQ(::recovery::test::readFile(image), data);
+    // L1: the finished image's SHA-256, its zeros included.
+    Sha256 hash;
+    hash.update(data);
+    EXPECT_EQ(done->imaging->sha256, hash.finish().hex());
 
     // Its events, by imaging.
     ASSERT_TRUE(world.log().waitFor([&](const std::vector<Event>& events) {
@@ -206,6 +210,7 @@ TEST(ApiImagingTest, ACancelledImageResumes) {
     RECOVERY_ASSERT_OK(stopped);
     EXPECT_EQ(stopped->state, OperationState::Cancelled);
     EXPECT_LT(stopped->imaging->bytesImaged, data.size());
+    EXPECT_TRUE(stopped->imaging->sha256.empty()) << "no hash for an unfinished image";
     RECOVERY_EXPECT_ERROR(api.cancelImaging(*first), ErrorCode::InvalidInput);
 
     // Without `resume` the unfinished image is not touched.

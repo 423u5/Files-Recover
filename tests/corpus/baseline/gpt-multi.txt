@@ -1,0 +1,13 @@
+# corpus scenario gpt-multi: GPT: FAT32, exFAT, NTFS, a partition without a filesystem, unpartitioned space
+# image 25198592 bytes, sha256 5e9aa834b3ff41f9, 6 originals
+# deep scan: 6 candidates
+#1 filesystem complete image/jpeg "/gpt fat.jpg" size=12601/12601 valid=valid:passed/passed sha=3d71f248dcc7f120 recovery=recovered "Volume 1 (FAT32, GPTFAT)/gpt fat.jpg" => /gpt fat.jpg
+#2 filesystem complete audio/mp3 "/gpt exfat.mp3" size=84253/84253 valid=valid:passed/unsupported sha=3ded3e19bf401eaf recovery=recovered "Volume 2 (exFAT, GPTEX)/gpt exfat.mp3" => /gpt exfat.mp3
+#3 filesystem complete video/mp4 "/gpt ntfs.mp4" size=123071/123071 valid=valid:passed/passed sha=018a706dc1623d45 recovery=recovered "Volume 3 (NTFS, GPTNT)/gpt ntfs.mp4" => /gpt ntfs.mp4
+#4 carving complete image/jpeg "recovered_000004.jpg" size=12142/12142 valid=valid:passed/passed sha=29f660812f1ddf2c recovery=recovered "Volume 4/recovered_000004.jpg" => (unnamed original 4)
+#5 carving complete audio/mp3 "recovered_000005.mp3" size=63355/63355 valid=valid:passed/unsupported sha=df9cacf4e3a85d00 recovery=recovered "Volume 4/recovered_000005.mp3" => (unnamed original 5)
+#6 carving complete image/png "recovered_000006.png" size=37207/37207 valid=valid:passed/passed sha=38cf2c62043a77bf recovery=recovered "Outside the volumes/recovered_000006.png" => (unnamed original 6)
+# quick scan: 3 candidates
+#1 filesystem complete image/jpeg "/gpt fat.jpg" size=12601/12601 valid=valid:passed/passed sha=3d71f248dcc7f120 recovery=recovered "Volume 1 (FAT32, GPTFAT)/gpt fat.jpg" => /gpt fat.jpg
+#2 filesystem complete audio/mp3 "/gpt exfat.mp3" size=84253/84253 valid=valid:passed/unsupported sha=3ded3e19bf401eaf recovery=recovered "Volume 2 (exFAT, GPTEX)/gpt exfat.mp3" => /gpt exfat.mp3
+#3 filesystem complete video/mp4 "/gpt ntfs.mp4" size=123071/123071 valid=valid:passed/passed sha=018a706dc1623d45 recovery=recovered "Volume 3 (NTFS, GPTNT)/gpt ntfs.mp4" => /gpt ntfs.mp4

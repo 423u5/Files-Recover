@@ -1,0 +1,104 @@
+# corpus scenario nearly-full: FAT32 card filled to the last clusters, files deleted and partly reused
+# image 2643968 bytes, sha256 605e2997bd0693cc, 49 originals
+# deep scan: 51 candidates
+#1 filesystem complete image/jpeg "/P000.JPG" size=18859/18859 valid=valid:passed/passed sha=c2ef61cbb580cc5e recovery=recovered "P000.JPG" => /P000.JPG
+#2 filesystem complete image/jpeg "/P001.JPG" size=18971/18971 valid=valid:passed/passed sha=e7184b367eff6615 recovery=recovered "P001.JPG" => /P001.JPG
+#3 filesystem unrecoverable(reconstruction-failed,validation-failed,clusters-reallocated) image/jpeg "/_002.MP3" size=126049/126049 deleted valid=invalid:failed/not-run sha=531ea53a3e6d9f04 recovery=recovered "_002.MP3"
+#4 filesystem complete image/jpeg "/P003.JPG" size=18789/18789 valid=valid:passed/passed sha=603e3704460836bf recovery=recovered "P003.JPG" => /P003.JPG
+#5 filesystem complete image/jpeg "/P004.JPG" size=18474/18474 valid=valid:passed/passed sha=2c3426e681dcf625 recovery=recovered "P004.JPG" => /P004.JPG
+#6 reconstruction partial(data-missing,content-truncated,reconstruction-partial) audio/mp3 "/_005.MP3" size=118784/126049 deleted fragmented valid=truncated:truncated/unsupported sha=3a5c7911cc25f831 recovery=recovered(incomplete) "_005.MP3"
+#7 filesystem complete image/jpeg "/P006.JPG" size=18334/18334 valid=valid:passed/passed sha=0a919143dc8b3919 recovery=recovered "P006.JPG" => /P006.JPG
+#8 filesystem complete image/jpeg "/P007.JPG" size=18525/18525 valid=valid:passed/passed sha=5ffad92da9baab1d recovery=recovered "P007.JPG" => /P007.JPG
+#9 hybrid complete audio/mp3 "/_008.MP3" size=126049/126049 deleted valid=valid:passed/unsupported sha=4cbd086850ee9a6d recovery=recovered "_008.MP3" => /_008.MP3
+#10 hybrid complete image/jpeg "/_009.JPG" size=19013/19013 deleted valid=valid:passed/passed sha=800a9c14f9c64248 recovery=recovered "_009.JPG" => /_009.JPG
+#11 filesystem complete image/jpeg "/P010.JPG" size=18999/18999 valid=valid:passed/passed sha=33eff4fa1a06308d recovery=recovered "P010.JPG" => /P010.JPG
+#12 filesystem complete audio/mp3 "/S011.MP3" size=126049/126049 valid=valid:passed/unsupported sha=488465cd3564b585 recovery=recovered "S011.MP3" => /S011.MP3
+#13 filesystem complete image/jpeg "/P012.JPG" size=18574/18574 valid=valid:passed/passed sha=8303dfd80f04c381 recovery=recovered "P012.JPG" => /P012.JPG
+#14 filesystem complete image/jpeg "/P013.JPG" size=18449/18449 valid=valid:passed/passed sha=b2dee53591136730 recovery=recovered "P013.JPG" => /P013.JPG
+#15 filesystem complete audio/mp3 "/S014.MP3" size=126049/126049 valid=valid:passed/unsupported sha=ac7a92e66bce121d recovery=recovered "S014.MP3" => /S014.MP3
+#16 filesystem complete image/jpeg "/P015.JPG" size=18698/18698 valid=valid:passed/passed sha=bf8d2be85e437b11 recovery=recovered "P015.JPG" => /P015.JPG
+#17 filesystem complete image/jpeg "/P016.JPG" size=18945/18945 valid=valid:passed/passed sha=b2553439868e66ee recovery=recovered "P016.JPG" => /P016.JPG
+#18 filesystem complete audio/mp3 "/S017.MP3" size=126049/126049 valid=valid:passed/unsupported sha=0f61547cdc4a023b recovery=recovered "S017.MP3" => /S017.MP3
+#19 filesystem complete image/jpeg "/P018.JPG" size=18938/18938 valid=valid:passed/passed sha=6d0e8e53264c7d5f recovery=recovered "P018.JPG" => /P018.JPG
+#20 filesystem complete image/jpeg "/P019.JPG" size=18690/18690 valid=valid:passed/passed sha=94d2ff2fada780c5 recovery=recovered "P019.JPG" => /P019.JPG
+#21 filesystem complete audio/mp3 "/S020.MP3" size=126049/126049 valid=valid:passed/unsupported sha=84af7a3db7333b39 recovery=recovered "S020.MP3" => /S020.MP3
+#22 filesystem complete image/jpeg "/P021.JPG" size=18326/18326 valid=valid:passed/passed sha=44d8b027368c5cce recovery=recovered "P021.JPG" => /P021.JPG
+#23 filesystem complete image/jpeg "/P022.JPG" size=18385/18385 valid=valid:passed/passed sha=2ad1e02ca1d9e4f1 recovery=recovered "P022.JPG" => /P022.JPG
+#24 filesystem complete audio/mp3 "/S023.MP3" size=126049/126049 valid=valid:passed/unsupported sha=ad8c8cd25ae0add0 recovery=recovered "S023.MP3" => /S023.MP3
+#25 filesystem complete image/jpeg "/P024.JPG" size=18876/18876 valid=valid:passed/passed sha=c4a253a68e34a1f9 recovery=recovered "P024.JPG" => /P024.JPG
+#26 filesystem complete image/jpeg "/P025.JPG" size=18975/18975 valid=valid:passed/passed sha=ca07d0aafccf840d recovery=recovered "P025.JPG" => /P025.JPG
+#27 filesystem complete audio/mp3 "/S026.MP3" size=126049/126049 valid=valid:passed/unsupported sha=8ff6fbc5020a9d36 recovery=recovered "S026.MP3" => /S026.MP3
+#28 filesystem complete image/jpeg "/P027.JPG" size=18759/18759 valid=valid:passed/passed sha=a09845508b6a646c recovery=recovered "P027.JPG" => /P027.JPG
+#29 filesystem complete image/jpeg "/P028.JPG" size=19006/19006 valid=valid:passed/passed sha=b88957934c110f7e recovery=recovered "P028.JPG" => /P028.JPG
+#30 filesystem complete audio/mp3 "/S029.MP3" size=126049/126049 valid=valid:passed/unsupported sha=508836b4d0ebf1c4 recovery=recovered "S029.MP3" => /S029.MP3
+#31 filesystem complete image/jpeg "/P030.JPG" size=18693/18693 valid=valid:passed/passed sha=5f37517fdbd5bc66 recovery=recovered "P030.JPG" => /P030.JPG
+#32 filesystem complete image/jpeg "/P031.JPG" size=18489/18489 valid=valid:passed/passed sha=6693370129ae0006 recovery=recovered "P031.JPG" => /P031.JPG
+#33 filesystem complete audio/mp3 "/S032.MP3" size=126049/126049 valid=valid:passed/unsupported sha=a6415efc75e52487 recovery=recovered "S032.MP3" => /S032.MP3
+#34 filesystem complete image/jpeg "/P033.JPG" size=18626/18626 valid=valid:passed/passed sha=d5356f61048ede08 recovery=recovered "P033.JPG" => /P033.JPG
+#35 filesystem complete image/jpeg "/P034.JPG" size=18823/18823 valid=valid:passed/passed sha=66d16f88e68e2955 recovery=recovered "P034.JPG" => /P034.JPG
+#36 filesystem complete audio/mp3 "/S035.MP3" size=126049/126049 valid=valid:passed/unsupported sha=777d089c33458efa recovery=recovered "S035.MP3" => /S035.MP3
+#37 filesystem complete image/jpeg "/P036.JPG" size=19002/19002 valid=valid:passed/passed sha=b866440be01ed02d recovery=recovered "P036.JPG" => /P036.JPG
+#38 filesystem complete image/jpeg "/P037.JPG" size=18831/18831 valid=valid:passed/passed sha=7f701e401b57139f recovery=recovered "P037.JPG" => /P037.JPG
+#39 filesystem complete audio/mp3 "/S038.MP3" size=126049/126049 valid=valid:passed/unsupported sha=d821f3c5cbf5ce22 recovery=recovered "S038.MP3" => /S038.MP3
+#40 filesystem complete image/jpeg "/P039.JPG" size=18351/18351 valid=valid:passed/passed sha=cd4a1d18aa9b03c3 recovery=recovered "P039.JPG" => /P039.JPG
+#41 filesystem complete image/jpeg "/P040.JPG" size=18309/18309 valid=valid:passed/passed sha=3cd87d674bb3656b recovery=recovered "P040.JPG" => /P040.JPG
+#42 filesystem complete audio/mp3 "/S041.MP3" size=126049/126049 valid=valid:passed/unsupported sha=3194662fde745c02 recovery=recovered "S041.MP3" => /S041.MP3
+#43 filesystem complete image/jpeg "/P042.JPG" size=18728/18728 valid=valid:passed/passed sha=d9fa409452bbbe74 recovery=recovered "P042.JPG" => /P042.JPG
+#44 filesystem complete image/jpeg "/P043.JPG" size=18971/18971 valid=valid:passed/passed sha=25bb308c7f42ce51 recovery=recovered "P043.JPG" => /P043.JPG
+#45 filesystem complete audio/mp3 "/S044.MP3" size=126049/126049 valid=valid:passed/unsupported sha=f3ed78a09dfb825c recovery=recovered "S044.MP3" => /S044.MP3
+#46 filesystem complete image/jpeg "/P045.JPG" size=18876/18876 valid=valid:passed/passed sha=8ff608387e484f95 recovery=recovered "P045.JPG" => /P045.JPG
+#47 filesystem complete image/jpeg "/P046.JPG" size=18631/18631 valid=valid:passed/passed sha=2794649c5f64f4a0 recovery=recovered "P046.JPG" => /P046.JPG
+#48 filesystem complete image/jpeg "/NEW1.JPG" size=2429/2429 valid=valid:passed/passed sha=8989e4c819d9d6f3 recovery=recovered "NEW1.JPG" => /NEW1.JPG
+#49 filesystem complete image/gif "/NEW2.GIF" size=4288/4288 valid=valid:passed/passed sha=7d264fb2f70870d7 recovery=recovered "NEW2.GIF" => /NEW2.GIF
+#50 carving corrupted(validation-failed) audio/mp3 "recovered_000050.mp3" size=123426/123426 valid=invalid:failed/not-run sha=f9518e3581e2dbc5 recovery=recovered "recovered_000050.mp3" => part of /_002.MP3
+#51 carving corrupted(validation-failed) audio/mp3 "recovered_000051.mp3" size=60314/60314 valid=invalid:failed/not-run sha=6b3cbbe720bddce6 recovery=recovered "recovered_000051.mp3" => part of /_005.MP3
+# quick scan: 49 candidates
+#1 filesystem complete image/jpeg "/P000.JPG" size=18859/18859 valid=valid:passed/passed sha=c2ef61cbb580cc5e recovery=recovered "P000.JPG" => /P000.JPG
+#2 filesystem complete image/jpeg "/P001.JPG" size=18971/18971 valid=valid:passed/passed sha=e7184b367eff6615 recovery=recovered "P001.JPG" => /P001.JPG
+#3 filesystem corrupted(validation-failed,clusters-reallocated) image/jpeg "/_002.MP3" size=126049/126049 deleted valid=invalid:failed/not-run sha=531ea53a3e6d9f04 recovery=recovered "_002.MP3"
+#4 filesystem complete image/jpeg "/P003.JPG" size=18789/18789 valid=valid:passed/passed sha=603e3704460836bf recovery=recovered "P003.JPG" => /P003.JPG
+#5 filesystem complete image/jpeg "/P004.JPG" size=18474/18474 valid=valid:passed/passed sha=2c3426e681dcf625 recovery=recovered "P004.JPG" => /P004.JPG
+#6 filesystem corrupted(validation-failed,clusters-reallocated) audio/mp3 "/_005.MP3" size=126049/126049 deleted valid=invalid:failed/not-run sha=6dddc13dacbf4f7f recovery=recovered "_005.MP3"
+#7 filesystem complete image/jpeg "/P006.JPG" size=18334/18334 valid=valid:passed/passed sha=0a919143dc8b3919 recovery=recovered "P006.JPG" => /P006.JPG
+#8 filesystem complete image/jpeg "/P007.JPG" size=18525/18525 valid=valid:passed/passed sha=5ffad92da9baab1d recovery=recovered "P007.JPG" => /P007.JPG
+#9 hybrid complete audio/mp3 "/_008.MP3" size=126049/126049 deleted valid=valid:passed/unsupported sha=4cbd086850ee9a6d recovery=recovered "_008.MP3" => /_008.MP3
+#10 hybrid complete image/jpeg "/_009.JPG" size=19013/19013 deleted valid=valid:passed/passed sha=800a9c14f9c64248 recovery=recovered "_009.JPG" => /_009.JPG
+#11 filesystem complete image/jpeg "/P010.JPG" size=18999/18999 valid=valid:passed/passed sha=33eff4fa1a06308d recovery=recovered "P010.JPG" => /P010.JPG
+#12 filesystem complete audio/mp3 "/S011.MP3" size=126049/126049 valid=valid:passed/unsupported sha=488465cd3564b585 recovery=recovered "S011.MP3" => /S011.MP3
+#13 filesystem complete image/jpeg "/P012.JPG" size=18574/18574 valid=valid:passed/passed sha=8303dfd80f04c381 recovery=recovered "P012.JPG" => /P012.JPG
+#14 filesystem complete image/jpeg "/P013.JPG" size=18449/18449 valid=valid:passed/passed sha=b2dee53591136730 recovery=recovered "P013.JPG" => /P013.JPG
+#15 filesystem complete audio/mp3 "/S014.MP3" size=126049/126049 valid=valid:passed/unsupported sha=ac7a92e66bce121d recovery=recovered "S014.MP3" => /S014.MP3
+#16 filesystem complete image/jpeg "/P015.JPG" size=18698/18698 valid=valid:passed/passed sha=bf8d2be85e437b11 recovery=recovered "P015.JPG" => /P015.JPG
+#17 filesystem complete image/jpeg "/P016.JPG" size=18945/18945 valid=valid:passed/passed sha=b2553439868e66ee recovery=recovered "P016.JPG" => /P016.JPG
+#18 filesystem complete audio/mp3 "/S017.MP3" size=126049/126049 valid=valid:passed/unsupported sha=0f61547cdc4a023b recovery=recovered "S017.MP3" => /S017.MP3
+#19 filesystem complete image/jpeg "/P018.JPG" size=18938/18938 valid=valid:passed/passed sha=6d0e8e53264c7d5f recovery=recovered "P018.JPG" => /P018.JPG
+#20 filesystem complete image/jpeg "/P019.JPG" size=18690/18690 valid=valid:passed/passed sha=94d2ff2fada780c5 recovery=recovered "P019.JPG" => /P019.JPG
+#21 filesystem complete audio/mp3 "/S020.MP3" size=126049/126049 valid=valid:passed/unsupported sha=84af7a3db7333b39 recovery=recovered "S020.MP3" => /S020.MP3
+#22 filesystem complete image/jpeg "/P021.JPG" size=18326/18326 valid=valid:passed/passed sha=44d8b027368c5cce recovery=recovered "P021.JPG" => /P021.JPG
+#23 filesystem complete image/jpeg "/P022.JPG" size=18385/18385 valid=valid:passed/passed sha=2ad1e02ca1d9e4f1 recovery=recovered "P022.JPG" => /P022.JPG
+#24 filesystem complete audio/mp3 "/S023.MP3" size=126049/126049 valid=valid:passed/unsupported sha=ad8c8cd25ae0add0 recovery=recovered "S023.MP3" => /S023.MP3
+#25 filesystem complete image/jpeg "/P024.JPG" size=18876/18876 valid=valid:passed/passed sha=c4a253a68e34a1f9 recovery=recovered "P024.JPG" => /P024.JPG
+#26 filesystem complete image/jpeg "/P025.JPG" size=18975/18975 valid=valid:passed/passed sha=ca07d0aafccf840d recovery=recovered "P025.JPG" => /P025.JPG
+#27 filesystem complete audio/mp3 "/S026.MP3" size=126049/126049 valid=valid:passed/unsupported sha=8ff6fbc5020a9d36 recovery=recovered "S026.MP3" => /S026.MP3
+#28 filesystem complete image/jpeg "/P027.JPG" size=18759/18759 valid=valid:passed/passed sha=a09845508b6a646c recovery=recovered "P027.JPG" => /P027.JPG
+#29 filesystem complete image/jpeg "/P028.JPG" size=19006/19006 valid=valid:passed/passed sha=b88957934c110f7e recovery=recovered "P028.JPG" => /P028.JPG
+#30 filesystem complete audio/mp3 "/S029.MP3" size=126049/126049 valid=valid:passed/unsupported sha=508836b4d0ebf1c4 recovery=recovered "S029.MP3" => /S029.MP3
+#31 filesystem complete image/jpeg "/P030.JPG" size=18693/18693 valid=valid:passed/passed sha=5f37517fdbd5bc66 recovery=recovered "P030.JPG" => /P030.JPG
+#32 filesystem complete image/jpeg "/P031.JPG" size=18489/18489 valid=valid:passed/passed sha=6693370129ae0006 recovery=recovered "P031.JPG" => /P031.JPG
+#33 filesystem complete audio/mp3 "/S032.MP3" size=126049/126049 valid=valid:passed/unsupported sha=a6415efc75e52487 recovery=recovered "S032.MP3" => /S032.MP3
+#34 filesystem complete image/jpeg "/P033.JPG" size=18626/18626 valid=valid:passed/passed sha=d5356f61048ede08 recovery=recovered "P033.JPG" => /P033.JPG
+#35 filesystem complete image/jpeg "/P034.JPG" size=18823/18823 valid=valid:passed/passed sha=66d16f88e68e2955 recovery=recovered "P034.JPG" => /P034.JPG
+#36 filesystem complete audio/mp3 "/S035.MP3" size=126049/126049 valid=valid:passed/unsupported sha=777d089c33458efa recovery=recovered "S035.MP3" => /S035.MP3
+#37 filesystem complete image/jpeg "/P036.JPG" size=19002/19002 valid=valid:passed/passed sha=b866440be01ed02d recovery=recovered "P036.JPG" => /P036.JPG
+#38 filesystem complete image/jpeg "/P037.JPG" size=18831/18831 valid=valid:passed/passed sha=7f701e401b57139f recovery=recovered "P037.JPG" => /P037.JPG
+#39 filesystem complete audio/mp3 "/S038.MP3" size=126049/126049 valid=valid:passed/unsupported sha=d821f3c5cbf5ce22 recovery=recovered "S038.MP3" => /S038.MP3
+#40 filesystem complete image/jpeg "/P039.JPG" size=18351/18351 valid=valid:passed/passed sha=cd4a1d18aa9b03c3 recovery=recovered "P039.JPG" => /P039.JPG
+#41 filesystem complete image/jpeg "/P040.JPG" size=18309/18309 valid=valid:passed/passed sha=3cd87d674bb3656b recovery=recovered "P040.JPG" => /P040.JPG
+#42 filesystem complete audio/mp3 "/S041.MP3" size=126049/126049 valid=valid:passed/unsupported sha=3194662fde745c02 recovery=recovered "S041.MP3" => /S041.MP3
+#43 filesystem complete image/jpeg "/P042.JPG" size=18728/18728 valid=valid:passed/passed sha=d9fa409452bbbe74 recovery=recovered "P042.JPG" => /P042.JPG
+#44 filesystem complete image/jpeg "/P043.JPG" size=18971/18971 valid=valid:passed/passed sha=25bb308c7f42ce51 recovery=recovered "P043.JPG" => /P043.JPG
+#45 filesystem complete audio/mp3 "/S044.MP3" size=126049/126049 valid=valid:passed/unsupported sha=f3ed78a09dfb825c recovery=recovered "S044.MP3" => /S044.MP3
+#46 filesystem complete image/jpeg "/P045.JPG" size=18876/18876 valid=valid:passed/passed sha=8ff608387e484f95 recovery=recovered "P045.JPG" => /P045.JPG
+#47 filesystem complete image/jpeg "/P046.JPG" size=18631/18631 valid=valid:passed/passed sha=2794649c5f64f4a0 recovery=recovered "P046.JPG" => /P046.JPG
+#48 filesystem complete image/jpeg "/NEW1.JPG" size=2429/2429 valid=valid:passed/passed sha=8989e4c819d9d6f3 recovery=recovered "NEW1.JPG" => /NEW1.JPG
+#49 filesystem complete image/gif "/NEW2.GIF" size=4288/4288 valid=valid:passed/passed sha=7d264fb2f70870d7 recovery=recovered "NEW2.GIF" => /NEW2.GIF

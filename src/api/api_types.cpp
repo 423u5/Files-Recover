@@ -69,6 +69,8 @@ std::string_view toString(FilesystemKind kind) noexcept {
         return "exfat";
     case FilesystemKind::Ntfs:
         return "ntfs";
+    case FilesystemKind::Fat16:
+        return "fat16";
     }
     return "unknown";
 }
@@ -147,6 +149,8 @@ std::string_view toString(MediaKind kind) noexcept {
         return "audio";
     case MediaKind::Video:
         return "video";
+    case MediaKind::Archive:
+        return "archive";
     }
     return "unknown";
 }

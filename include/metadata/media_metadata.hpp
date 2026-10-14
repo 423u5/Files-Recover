@@ -52,13 +52,16 @@ enum class MediaKind : std::uint8_t {
     Image,
     Audio,
     Video,
+    // An archive of other files: ZIP, and the formats built on it (DOCX,
+    // XLSX, JAR, APK), whose kind is not told apart yet. No media metadata.
+    Archive,
 };
 
 [[nodiscard]] std::string_view toString(MediaKind kind) noexcept;
 
 // The kind of a carving format's files: "jpeg", "png", "gif", "bmp" and
-// "webp" are images, "mp3", "wav", "aac" and "m4a" audio, "mp4" video.
-// Unknown for any other id (and the empty one).
+// "webp" are images, "mp3", "wav", "aac" and "m4a" audio, "mp4" video, "zip"
+// an archive. Unknown for any other id (and the empty one).
 [[nodiscard]] MediaKind kindOfFormat(std::string_view formatId) noexcept;
 
 // The media type (MIME) of a carving format's files ("image/jpeg",

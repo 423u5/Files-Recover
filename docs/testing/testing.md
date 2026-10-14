@@ -20,10 +20,12 @@ ctest --preset msvc-debug -L session
 ctest --preset msvc-debug -L metadata
 ctest --preset msvc-debug -L cli
 ctest --preset msvc-debug -L api
+ctest --preset msvc-debug -L corpus    # P20: the corruption corpus, large drives, the logging review
 ```
 
 Run the same suite under AddressSanitizer with `msvc-asan`. Run static analysis on the engine code with
-`cmake --build --preset msvc-analyze`.
+`cmake --build --preset msvc-analyze`. The fuzz targets (P20) have a preset of their own, `msvc-fuzz`, whose tests
+(label `fuzz`) run each target briefly and replay the inputs that once failed (see "Fuzzing" below).
 
 ## Suites
 
@@ -31,11 +33,11 @@ Run the same suite under AddressSanitizer with `msvc-asan`. Run static analysis 
 | --- | --- | --- |
 | `unit` | `tests/unit` | Memory only (core, storage, imaging metadata, partitions, reconstruction of hand-made candidates and their data as file content, output names), plus temporary files for the destination-guard tests |
 | `integration` | `tests/integration` | Temporary files under `%TEMP%\recovery-tests\<random>`, deleted afterwards; the Windows disk resolver; the Windows disk list (P19: disks opened with desired access 0, nothing read) |
-| `filesystem` | `tests/filesystem` | FAT32, exFAT and NTFS volumes generated in memory: normal, deleted, fragmented, contiguous, resident, Unicode, different cluster, sector and record sizes |
+| `filesystem` | `tests/filesystem` | FAT32 (and FAT16, after P20), exFAT and NTFS volumes generated in memory: normal, deleted, fragmented, contiguous, resident, Unicode, different cluster, sector and record sizes |
 | `corruption` | `tests/corruption` | Damaged FAT32, exFAT and NTFS metadata: loops, cross-links, truncated chains, damaged entry sets, torn and damaged FILE records, invalid run lists, directory cycles, orphans, unreadable sectors, hostile boot sectors and sizes, random mutation (also of recovery candidates and their reconstruction) |
 | `recovery` | `tests/recovery` | Recovery candidates from generated FAT32, exFAT and NTFS volumes (contiguous, fragmented, deleted, partly overwritten, sparse, resident, Unicode and duplicate names, partitioned disks), their reconstructed data compared with the original files, and recovered files written below `%TEMP%\recovery-tests\<random>`. MP4 recovery (P12): FILESYSTEM, HYBRID and CARVING candidates from volumes and virtual sources larger than 4 GiB. Fragment reconstruction (P13): fragmented files on volumes whose free space holds old data, every status, mutation fuzzing |
 | `carving` | `tests/carving` | The carving framework with test-only formats: signatures, registration, scanning, candidate generation, boundaries, bad sectors, cancellation, and virtual images up to 1 TiB (memory only), plus one temporary disk image file |
-| `formats` | `tests/formats` | The image formats (JPEG, PNG, WEBP, GIF, BMP) and the audio formats (MP3, WAV, M4A, raw AAC): files from the test builders and from other encoders, truncation at every position, damaged headers, segments, chunks, frames and boxes, false signatures, fragmentation, mutation fuzzing, and carving whole images with every format registered. The MP4 parser: builder files of every layout, files from FFmpeg, GPAC and Media Foundation checked against FFmpeg's demuxer, corrupt and misplaced boxes, damaged tables, truncation, scattered files, limits and fuzzing. P12: movie fragments, the analysis (audio or video, moov discovery, sample framing), the MP4 carving format, and carving whole sources with video registered |
+| `formats` | `tests/formats` | The image formats (JPEG, PNG, WEBP, GIF, BMP), the audio formats (MP3, WAV, M4A, raw AAC) and ZIP archives (after P20): files from the test builders and from other encoders, truncation at every position, damaged headers, segments, chunks, frames and boxes, false signatures, fragmentation, mutation fuzzing, and carving whole images with every format registered. The MP4 parser: builder files of every layout, files from FFmpeg, GPAC and Media Foundation checked against FFmpeg's demuxer, corrupt and misplaced boxes, damaged tables, truncation, scattered files, limits and fuzzing. P12: movie fragments, the analysis (audio or video, moov discovery, sample framing), the MP4 carving format, and carving whole sources with video registered |
 | `validation` | `tests/validation` | P14: the validation levels, and every media decoder on builder files, files of independent encoders and generated vectors (PNG zlib streams, libwebp coding tools, fdkaac CRC-protected ADTS, libx264 and libx265 video), data written bit by bit that breaks one rule each, damage the structure cannot see, truncation, limits and fuzzing; the Windows playability checker (WIC, Media Foundation), skipping missing codecs |
 | `evaluation` | `tests/evaluation` | P14: content identity (SHA-256, preliminary hash, duplicates) and candidate evaluation on FAT32 cards with carves, MP4 candidates and reconstructions merged into one candidate per file |
 | `scan` | `tests/scan` | P15: the scan coordinator on a used FAT32 card (against the stages run one after the other, on 1-8 workers, cancelled in every stage and after every update, its sink failing, its source failing, paused), the scan's source, checkpoints, a 6 GiB virtual image and heap measurements, and the recovery job writing to temporary directories |
@@ -43,6 +45,7 @@ Run the same suite under AddressSanitizer with `msvc-asan`. Run static analysis 
 | `metadata` | `tests/metadata` | P17: media metadata of builder files and of files of independent writers checked against exiftool and ffprobe, previews and their bytes, invalid media (garbage, truncation at every position, mutation fuzzing, damaged Exif and ID3), missing metadata; conditions, duplicates under different names, and recovery status, on the scan tests' card and a session written below `%TEMP%\recovery-tests\<random>` |
 | `cli` | `tests/cli`, `tests/CMakeLists.txt` | P18: the command line run in-process on the scan tests' card written as an image file, a disk with three volumes and simulated physical disks: every command, usage errors, invalid paths, errors, Ctrl+C at every stage, journals cut as crashes leave them; files and sessions below `%TEMP%\recovery-tests\<random>`. `recovery.exe` run as a process: exit codes, Unicode paths, a real Ctrl+Break |
 | `api` | `tests/api`, `tests/CMakeLists.txt` | P19: the GUI-facing API on the scan tests' card as an image file and as simulated physical disks, a disk of three volumes, a simulated disk list: a user interface's workflow compiled against the API's public headers alone, scans, events, concurrent queries, cancellation in every stage, pause and resume, recovery, sessions restored after a close and after a crash, reports, details and previews, imaging around bad sectors; files and sessions below `%TEMP%\recovery-tests\<random>` |
+| `corpus` | `tests/corpus`, `tests/support/corpus.cpp` | P20: the corruption corpus (28 generated disks: P20's 26, a FAT16 card and ZIP archives since, covering the plan's 16 categories, each scanned Deep and Quick through the API, recovered, checked against its original files and its recorded baseline), drives of up to 16 TiB as virtual sources, an opt-in sparse image of tens of GiB, and the logging review; images and sessions in memory or below `%TEMP%\recovery-tests\<random>` |
 
 ## Test images
 
@@ -439,6 +442,25 @@ damaged metadata or on bad sectors, and planted in free space or inside an activ
 reconstructed and compared with the original file, and every sample's damage is counted exactly from where the
 builder put it. Sources larger than 4 GiB are `VirtualSource`s with files spread over them by `spreadMp4`.
 
+## Archive format tests (after P20)
+
+`tests/formats/zip_format_test.cpp` checks ZIP ([../formats/archives.md](../formats/archives.md)) on archives that
+Python's `zipfile` wrote and on reworked ones (`tests/support/zip_samples.cpp`): DEFLATE with Huffman codes, stored,
+empty members and folders, data descriptors for every method, ZIP64 extra fields and end records, a comment, an APK
+signing block, a DOCX's first members, LZMA and bzip2 members (not checked: `NotValidated`), encrypted members; no
+prefix complete; damaged data, central directory entries, end records and sizes; an archive seen from a later member;
+header checks; the limits; the DEFLATE decoder; carving with the image formats (a PNG stored in a verified archive is
+skipped, in a damaged one carved); fuzzing. `tests/validation/zip_validation_test.cpp` checks the validation levels,
+`tests/recovery/fragment_recovery_test.cpp` that a damaged archive in one piece is no seed and that an archive in two
+pieces is reconstructed, and the corpus scenario `zip-archives` all of it through the API. The samples are written by
+
+```bash
+python3 tests/reference/make_zip_samples.py tests/support/zip_samples.cpp   # Windows' Python too; writes the .cpp itself
+```
+
+which checks every archive with `zipfile.testzip()` first; `tests/support/zip_builders.cpp` builds archives of stored
+members in C++.
+
 ## Fragment reconstruction tests
 
 `tests/recovery/fragment_recovery_test.cpp` ([../recovery/fragment_recovery.md](../recovery/fragment_recovery.md))
@@ -615,6 +637,136 @@ engine's two error headers). It cannot compile against anything else of the engi
 checked against the reference scan's candidates (`journalCandidates` reads a session's journal once the API has
 closed it) and the card's originals, byte for byte. A crash is the session folder copied while the scan runs
 (through shared reads, as the journal is open), then opened by a new API.
+
+## Corruption corpus (P20)
+
+`tests/support/corpus.cpp` holds 28 scenarios (P20's 26; since then `fat16-card` and `zip-archives`): disk images built the same, byte for byte, every time, each with the
+original files it holds and what recovery must give back of each (found by the filesystem with its name, found by
+carving only, found but damaged, or lost; expected Complete, Unverified or either; some only in a deep scan).
+Together they cover the plan's 16 categories (normal, deleted, large, small, fragmented and partially overwritten
+files, corrupt filesystem metadata, corrupt media, duplicates, Unicode and long names, cluster sizes, nearly full
+and quick-formatted drives, bad regions, multiple partitions) on FAT32, exFAT and NTFS, MBR and GPT disks, 512 and
+4096-byte sectors. `CorpusCoverageTest` fails when a category has no scenario or a baseline no scenario.
+
+`CorpusTest/<scenario>` runs each through the API as a user interface would: a Deep and a Quick scan of the image
+file, every candidate recovered to a temporary folder, and the reports exported. It checks that every original comes
+back as its scenario says, that every Complete candidate is an original or a contiguous part of one (nothing false
+is called complete), that each recovered file's SHA-256 is its candidate's, and that duplicates point at the first.
+Then it compares one line per candidate (how it was found, condition and reasons, kind, path, sizes, validation,
+SHA-256 prefix, duplicate and container links, unreadable bytes, what recovery wrote, and which original it is) with
+`tests/corpus/baseline/<scenario>.txt`, whose header holds the image's SHA-256. This is the regression suite: any
+change in what the engine finds, or how it judges it, fails here with the new lines printed. After a deliberate
+change, run the suite with `RECOVERY_CORPUS_UPDATE=1` to rewrite the baselines and review them in the diff.
+
+The images can be written as files, for manual testing:
+
+```powershell
+test_image_generator list                                    # the scenarios and their categories
+test_image_generator manifest fat32-deleted                  # what an image holds and what must come back
+test_image_generator write --output D:\corpus --originals    # every image, its manifest and its original files
+```
+
+## Large drives (P20)
+
+`LargeDriveTest` builds a 16 TiB GPT disk as a virtual source (zeros except where something is written) with a
+FAT32, an exFAT and an NTFS volume at 3, 8 and 15 TiB, and an MBR disk whose partition crosses the 2 TiB boundary.
+Quick scans find every volume and every file with its SHA-256 while reading less than 1 GiB. With
+`RECOVERY_LARGE_IMAGE_DIR` set (and `RECOVERY_LARGE_IMAGE_GIB`, default 64), `ASparseImageFileOfTensOfGibIsScannedDeep`
+also writes a sparse image file of that size there, with files at its start and end, deep-scans it through the API and
+prints the time and the peak working set; otherwise it is skipped.
+
+## Logging review (P20)
+
+`LoggingReviewTest` runs a scan and a recovery with a memory sink at Trace level. It checks that the records the
+plan asks for are there with their fields (the scan's start with the source, its type, sector size, device and known
+unreadable regions; each volume; unreadable regions; the evaluation; the scan's end with every metric; each file
+recovered; the recovery job's end with its bytes, speed and time), and that a marker stored in a file's content and
+in a JPEG comment appears in no record: the logs never hold file content.
+
+## Fuzzing (P20)
+
+The `fuzz/` targets use MSVC's libFuzzer (`/fsanitize=fuzzer`) with AddressSanitizer. Preset `msvc-fuzz` builds the
+engine libraries instrumented for coverage and the targets only (tests and tools cannot link the coverage
+instrumentation without libFuzzer's runtime).
+
+| Target | What the input is |
+| --- | --- |
+| `fuzz_partition` | The start of a disk (MBR with extended partitions, GPT and its backup, superfloppies); the first byte picks 512 or 4096-byte sectors |
+| `fuzz_filesystem` | A FAT32, exFAT or NTFS volume: opened for recovery (backup boot records too), every candidate listed and its data reconstructed |
+| `fuzz_formats` | A file's content for every carving format (ZIP too, since after P20, with the engine's DEFLATE decoder): header check, end detection and structural validation, never past the bytes given |
+| `fuzz_media` | A file for the validation levels and every media decoder (JPEG, PNG inflate, GIF LZW, BMP RLE, VP8/VP8L, ADPCM, AAC, AVC, HEVC) |
+| `fuzz_mp4` | A file for the MP4 parser and analysis: boxes, movie, sample tables, fragments, moov search, sample framing |
+| `fuzz_metadata` | A file for media metadata and previews (Exif, ID3, RIFF INFO, MP4 user data, ...) |
+| `fuzz_journal` | A session journal read back after a crash, or one record's payload, which must encode and decode to the same bytes |
+| `fuzz_imgmeta` | An image's `.imgmeta` file: whatever parses must serialize and parse again to the same metadata |
+| `fuzz_carving` | A source for one signature scan with every format and every hit carved |
+| `fuzz_scan` | A disk for a whole deep scan (partitions, filesystems, MP4 recovery, fragment reconstruction, the source pass, the evaluation); the slowest |
+
+Seeds come from the test builders and samples: `test_image_generator fuzz-seeds --output <seeds>` writes small
+volumes, partition tables, every builder file and embedded sample (the ZIP samples and an archive with a PNG stored
+in it too), and real session journals below
+`<seeds>\<target>`. From a developer prompt (the targets need AddressSanitizer's runtime DLL):
+
+```powershell
+cmake --preset msvc-fuzz
+cmake --build --preset msvc-fuzz
+build\msvc-debug\tools\test_image_generator\test_image_generator.exe fuzz-seeds --output D:\fuzz-seeds
+powershell -File fuzz\run_fuzzers.ps1 -Seeds D:\fuzz-seeds -Work D:\fuzz-work -Seconds 1800 -Jobs 3
+ctest --preset msvc-fuzz                 # the smoke runs and the saved regressions (label fuzz)
+```
+
+`run_fuzzers.ps1` runs every target for `-Seconds` (a few at once), keeps each target's growing corpus in
+`<work>\corpus\<target>`, its log in `<work>\logs`, and any input that fails it in `<work>\artifacts\<target>`; it
+exits 1 when a target failed. Each input that once failed a target goes, minimised, to `fuzz/regressions/<target>/`
+after the fix, where `ctest` replays it (`fuzz.<target>.regressions`); `fuzz.<target>.smoke` runs each target from
+nothing for 2,000 inputs (200 for `scan`). What the campaigns found is in [validation.md](validation.md).
+
+## Static analysis (P20)
+
+`cmake --build --preset msvc-analyze` runs MSVC's `/analyze` on the engine and the tools, warnings as errors.
+`tools/static_analysis/run_clang_tidy.py` runs the clang-tidy that comes with Visual Studio over the engine and the
+CLI with the `compile_commands.json` of a configured preset:
+
+```powershell
+python tools\static_analysis\run_clang_tidy.py build\msvc-debug build\clang-tidy 3              # the P20 checks
+python tools\static_analysis\run_clang_tidy.py build\msvc-debug build\clang-tidy-int 3 --integer  # overflow pass
+```
+
+It writes one sorted line per finding to `<out>\findings.txt`. Every finding of P20's runs was triaged; see
+[validation.md](validation.md).
+
+## Benchmarks (P20)
+
+`recovery_benchmark` (built with the tests, `tools/benchmark`) makes its inputs in a work folder (an image of noise, a
+FAT32 card of photos, videos and music, a card of 20,000 small files), runs the engine on them as the CLI and the API
+do, and prints throughput and peak memory against the targets of [performance.md](performance.md):
+
+```powershell
+build\msvc-release\tools\benchmark\recovery_benchmark.exe --work D:\bench [--only deep-noise,recover] [--keep] [--json D:\bench.json]
+```
+
+It exits 3 when a target is missed. Run it on a release build of an idle computer; `--only` one benchmark at a time
+shows each one's peak memory alone (the process's peak includes building the inputs).
+
+It counts the heap itself (its own `operator new` and `delete`), so `quick-files` also says, per file found, the heap
+its candidates take once the scan is over ("kept", the sink keeping every candidate as a user interface does), the
+scan's peak overall and in each stage, and the engine's peak alone: a second scan whose sink keeps nothing and that
+runs without the read cache (a fixed cost, up to 64 MiB, that weighs on small scans only). `--sizes` prints the
+sizes of what a scan keeps per file found (L212).
+
+```text
+quick-files     580.1 MB/s     1.41 s   816840704 bytes  40000 files (28405/s)  peak 158 MiB  target >= 2000 files/s: met
+             heap kept 1335 B/file, peak 4353 B/file (volumes 2523, evaluation 4353, completed 3604, 166 MiB);
+             engine alone, no read cache: peak 845 B/file (volumes 845, evaluation 702, completed 591)
+```
+
+## Continuous integration
+
+`.github/workflows/windows-build.yml` configures, builds and tests the presets `msvc-debug`, `msvc-release`,
+`msvc-asan` and `msvc-fuzz` (P20: the fuzzers' smoke runs and regressions), and builds `msvc-analyze`, on GitHub's
+Windows runners. P20: a failed test becomes an annotation that names it and says why
+(`.github/scripts/report_failed_tests.ps1` reads ctest's JUnit output), since job logs need admin rights to read;
+the JUnit file and ctest's log are kept as an artifact for 14 days.
 
 ## Testing safely
 

@@ -184,7 +184,9 @@ enum class Mp4Warning : std::uint8_t {
     // Filesystem and hybrid candidates: the structure ends before or after
     // the size the metadata records (Mp4Candidate::recordedSize).
     SizeMismatch,
-    // Carving: some of the file's clusters are allocated to other data now.
+    // Carving: some of the file's clusters are allocated to other data now:
+    // to files the volume lists (P20: clusters allocated to no file it lists,
+    // such as a chain whose entry was lost, are only counted in the allocation).
     AllocatedClusters,
     // Carving: the file lies inside an active file's data (instead of
     // AllocatedClusters: its clusters are that file's).

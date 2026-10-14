@@ -47,10 +47,14 @@ bool acceptable(const PrefixCode& code, std::span<const std::uint8_t> lengths) {
     return false;
 }
 
+// zlib (RFC 1950): a 2-byte header and an Adler-32 around the DEFLATE data.
+// Raw: the DEFLATE data alone (ZIP members).
+enum class Framing : std::uint8_t { Zlib, Raw };
+
 class Inflater {
 public:
-    Inflater(ContentBytes& bytes, InflateSink& sink)
-        : bytes_(bytes), bits_(bytes), sink_(sink), window_(kWindowSize), out_(kOutputChunk) {}
+    Inflater(ContentBytes& bytes, InflateSink& sink, Framing framing)
+        : bytes_(bytes), bits_(bytes), sink_(sink), framing_(framing), window_(kWindowSize), out_(kOutputChunk) {}
 
     InflateOutcome run();
 
@@ -88,11 +92,14 @@ private:
     }
     bool flush() {
         const std::span<const std::uint8_t> data(out_.data(), outCount_);
-        adler_.update(data);
+        if (framing_ == Framing::Zlib) {
+            adler_.update(data);
+        }
         outCount_ = 0;
         return sink_.write(data);
     }
 
+    Failure zlibHeader();
     Failure stored();
     Failure dynamicCodes(PrefixCode& literals, PrefixCode& distances);
     Failure codes(const PrefixCode& literals, const PrefixCode& distances);
@@ -100,6 +107,7 @@ private:
     ContentBytes& bytes_;
     LsbBits bits_;
     InflateSink& sink_;
+    Framing framing_;
     std::vector<std::uint8_t> window_;
     std::vector<std::uint8_t> out_;
     std::size_t outCount_ = 0;
@@ -109,7 +117,8 @@ private:
     Adler32 adler_;
 };
 
-InflateOutcome Inflater::run() {
+// Reads the zlib header and sets the window it declares; the problem, if any.
+Inflater::Failure Inflater::zlibHeader() {
     const std::uint64_t start = bytes_.position();
     std::uint32_t cmf = 0;
     std::uint32_t flags = 0;
@@ -129,6 +138,15 @@ InflateOutcome Inflater::run() {
         return invalid(start, "the zlib stream needs a preset dictionary");
     }
     windowSize_ = 1U << ((cmf >> 4) + 8);
+    return std::nullopt;
+}
+
+InflateOutcome Inflater::run() {
+    if (framing_ == Framing::Zlib) {
+        if (Failure problem = zlibHeader(); problem.has_value()) {
+            return std::move(*problem);
+        }
+    }
 
     PrefixCode literals;
     PrefixCode distances;
@@ -181,17 +199,19 @@ InflateOutcome Inflater::run() {
     }
 
     bits_.alignToByte();
-    const std::uint64_t checksumAt = bits_.position();
-    std::uint32_t checksum = 0;
-    for (int i = 0; i < 4; ++i) {
-        std::uint32_t value = 0;
-        if (!bits_.read(8, value)) {
-            return ended("the Adler-32");
+    if (framing_ == Framing::Zlib) {
+        const std::uint64_t checksumAt = bits_.position();
+        std::uint32_t checksum = 0;
+        for (int i = 0; i < 4; ++i) {
+            std::uint32_t value = 0;
+            if (!bits_.read(8, value)) {
+                return ended("the Adler-32");
+            }
+            checksum = (checksum << 8) | value;
         }
-        checksum = (checksum << 8) | value;
-    }
-    if (checksum != adler_.value()) {
-        return invalid(checksumAt, "the Adler-32 of the data is wrong");
+        if (checksum != adler_.value()) {
+            return invalid(checksumAt, "the Adler-32 of the data is wrong");
+        }
     }
     InflateOutcome done = outcome(InflateOutcome::Kind::Done, 0, {});
     done.trailing = bits_.bufferedBits() / 8 + bytes_.remaining();
@@ -372,7 +392,12 @@ void Adler32::update(std::span<const std::uint8_t> data) noexcept {
 }
 
 InflateOutcome inflateZlib(ContentBytes& bytes, InflateSink& sink) {
-    const auto inflater = std::make_unique<Inflater>(bytes, sink);
+    const auto inflater = std::make_unique<Inflater>(bytes, sink, Framing::Zlib);
+    return inflater->run();
+}
+
+InflateOutcome inflateRaw(ContentBytes& bytes, InflateSink& sink) {
+    const auto inflater = std::make_unique<Inflater>(bytes, sink, Framing::Raw);
     return inflater->run();
 }
 

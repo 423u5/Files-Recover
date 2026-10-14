@@ -23,6 +23,7 @@
 
 #include "session/session_journal.hpp"
 
+#include "recovery/boxed.hpp"
 #include "recovery/text.hpp"
 
 #include <array>
@@ -58,6 +59,11 @@ template <class T>
 struct IsOptional : std::false_type {};
 template <class T>
 struct IsOptional<std::optional<T>> : std::true_type {};
+// Optional values held on the heap are encoded as optional values.
+template <class T>
+struct IsOptional<Boxed<T>> : std::true_type {};
+template <class T>
+struct IsOptional<SharedBox<T>> : std::true_type {};
 
 template <class T>
 struct IsPair : std::false_type {};
@@ -105,7 +111,7 @@ template <> struct EnumLimit<partition::PartitionScheme>
 template <> struct EnumLimit<partition::PartitionIssueKind>
     : EnumLimitOf<partition::PartitionIssueKind, partition::PartitionIssueKind::GptUnavailable> {};
 template <> struct EnumLimit<filesystem::FilesystemType>
-    : EnumLimitOf<filesystem::FilesystemType, filesystem::FilesystemType::Ntfs> {};
+    : EnumLimitOf<filesystem::FilesystemType, filesystem::FilesystemType::Fat16> {};
 template <> struct EnumLimit<filesystem::AllocationMethod>
     : EnumLimitOf<filesystem::AllocationMethod, filesystem::AllocationMethod::Resident> {};
 template <> struct EnumLimit<filesystem::AllocationIssue>

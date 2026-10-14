@@ -11,6 +11,7 @@
 
 #include "carving/file_carver.hpp"
 #include "carving/signature_scanner.hpp"
+#include "formats/archive_formats.hpp"
 #include "formats/audio_formats.hpp"
 #include "formats/image_formats.hpp"
 #include "formats/video_formats.hpp"
@@ -28,6 +29,7 @@
 #include "support/mp4_samples.hpp"
 #include "support/test_files.hpp"
 #include "support/test_macros.hpp"
+#include "validation/deflate_decoder.hpp"
 #include "validation/media_validator.hpp"
 
 #include "recovery/worker_pool.hpp"
@@ -70,7 +72,8 @@ const carving::FormatRegistry& allFormats() {
         const bool images = formats::registerImageFormats(formats).ok();
         const bool audio = formats::registerAudioFormats(formats).ok();
         const bool video = formats::registerVideoFormats(formats).ok();
-        EXPECT_TRUE(images && audio && video);
+        const bool archives = formats::registerArchiveFormats(formats, validation::deflateDecoder()).ok();
+        EXPECT_TRUE(images && audio && video && archives);
         return formats;
     }();
     return registry;
@@ -548,6 +551,50 @@ TEST(CandidateEvaluationTest, ACarveOfAFileTheMetadataKnowsJoinsIt) {
     EXPECT_EQ(evaluated.report.hybrid, 1U);
 }
 
+// The same carve added twice counts once, and the first added stays: a carve
+// is the same when its format, start, length and extents are (its verdict is
+// not compared).
+TEST(CandidateEvaluationTest, TheSameCarveAddedTwiceCountsOnce) {
+    Card card;
+    card.plant(1500, photo(30));
+    card.plant(2500, test::makePng({}));
+    test::MemoryStorageSource source(card.image());
+    RECOVERY_ASSERT_OK(source.open());
+    Volume volume = openVolume(source);
+    const std::vector<carving::FileCandidate> carves = carveAll(source);
+    const auto photoCarve = std::find_if(carves.begin(), carves.end(), [&](const carving::FileCandidate& carve) {
+        return carve.sourceOffset == card.offsetOf(1500);
+    });
+    ASSERT_NE(photoCarve, carves.end());
+    ASSERT_EQ(photoCarve->validation.status, ValidationStatus::Valid);
+
+    Inputs once{&volume};
+    once.carves = carves;
+    const Evaluated single = evaluateAll(source, std::move(once));
+
+    // A later copy of the photo's carve with another verdict, then every carve again.
+    Inputs twice{&volume};
+    twice.carves = carves;
+    carving::FileCandidate relabelled = *photoCarve;
+    relabelled.validation.status = ValidationStatus::Truncated;
+    twice.carves.push_back(relabelled);
+    twice.carves.insert(twice.carves.end(), carves.begin(), carves.end());
+    const Evaluated doubled = evaluateAll(source, std::move(twice));
+
+    ASSERT_EQ(doubled.candidates.size(), single.candidates.size());
+    for (std::size_t i = 0; i < single.candidates.size(); ++i) {
+        EXPECT_EQ(doubled.candidates[i].sourceOffset(), single.candidates[i].sourceOffset());
+        EXPECT_EQ(doubled.candidates[i].identity.sha256, single.candidates[i].identity.sha256);
+        EXPECT_EQ(doubled.candidates[i].otherCarves.size(), single.candidates[i].otherCarves.size());
+    }
+    EXPECT_EQ(doubled.report.carvesCompeting, single.report.carvesCompeting);
+    const EvaluatedCandidate* carved = doubled.startingAt(card.offsetOf(1500));
+    ASSERT_NE(carved, nullptr);
+    ASSERT_TRUE(carved->carve.has_value());
+    EXPECT_EQ(carved->carve->validation.status, ValidationStatus::Valid);
+    EXPECT_EQ(carved->validationStatus(), ValidationStatus::Valid);
+}
+
 TEST(CandidateEvaluationTest, ACarveInsideAnActiveFileIsLinkedToIt) {
     Card card;
     // A file that holds a whole photo at its middle (a motion photo, an archive).
@@ -577,6 +624,54 @@ TEST(CandidateEvaluationTest, ACarveInsideAnActiveFileIsLinkedToIt) {
     EXPECT_EQ(part->data.reallocatedBytes(), 0U);
     EXPECT_NE(describeEvaluated(*part).find("Part of candidate " + std::to_string(bundle->id.value())),
               std::string::npos);
+}
+
+// P20 (corpus finding F1): clusters allocated to no file the volume lists (a
+// chain whose entry was lost with its folder, a record that cannot be read)
+// say nothing against a carve's content; clusters an active file holds do.
+TEST(CandidateEvaluationTest, ACarveIsReallocatedOnlyWhereAListedFileHoldsItsClusters) {
+    Card card;
+    // A photo whose chain is still in the FAT, though no entry names it.
+    const Bytes lost = photo(30);
+    const std::vector<std::uint32_t> chain = run(1500, clustersFor(lost.size()));
+    ASSERT_GE(chain.size(), 2U);
+    card.plant(1500, lost);
+    for (std::size_t i = 0; i < chain.size(); ++i) {
+        card.builder().setFat(chain[i], i + 1 < chain.size() ? chain[i + 1] : 0x0FFFFFFF);
+    }
+    // A photo one of whose clusters an active file holds now, with the same bytes.
+    const Bytes shared = photo(31);
+    ASSERT_GE(clustersFor(shared.size()), 3U);
+    card.plant(300, shared);
+    const std::uint32_t middle = 300 + clustersFor(shared.size()) / 2;
+    const auto at = static_cast<std::ptrdiff_t>(middle - 300) * kClusterSize;
+    card.add("PIECE.BIN", Bytes(shared.begin() + at, shared.begin() + at + kClusterSize), middle);
+    test::MemoryStorageSource source(card.image());
+    RECOVERY_ASSERT_OK(source.open());
+    Volume volume = openVolume(source);
+    Inputs inputs{&volume};
+    inputs.carves = carveAll(source);
+    const Evaluated evaluated = evaluateAll(source, std::move(inputs));
+
+    const EvaluatedCandidate* carved = evaluated.startingAt(card.offsetOf(1500));
+    ASSERT_NE(carved, nullptr);
+    SCOPED_TRACE(describeEvaluated(*carved));
+    EXPECT_EQ(carved->recoveryMethod(), RecoveryMethod::Carving);
+    EXPECT_EQ(carved->validationStatus(), ValidationStatus::Valid);
+    EXPECT_EQ(carved->identity.sha256, sha256(lost));
+    ASSERT_TRUE(carved->allocation.has_value());
+    EXPECT_EQ(carved->allocation->allocatedClusters, chain.size());
+    EXPECT_FALSE(carved->allocation->insideActiveFile);
+    EXPECT_EQ(carved->data.reallocatedBytes(), 0U);
+    EXPECT_FALSE(carved->data.hasWarning(CandidateWarning::ClustersReallocated));
+
+    const EvaluatedCandidate* overlapping = evaluated.startingAt(card.offsetOf(300));
+    ASSERT_NE(overlapping, nullptr);
+    SCOPED_TRACE(describeEvaluated(*overlapping));
+    EXPECT_EQ(overlapping->recoveryMethod(), RecoveryMethod::Carving);
+    EXPECT_EQ(overlapping->validationStatus(), ValidationStatus::Valid);
+    EXPECT_EQ(overlapping->data.reallocatedBytes(), kClusterSize);
+    EXPECT_TRUE(overlapping->data.hasWarning(CandidateWarning::ClustersReallocated));
 }
 
 TEST(CandidateEvaluationTest, AnMp4CandidateReplacesItsFilesystemCandidateAndCarve) {
@@ -845,6 +940,17 @@ TEST(CandidateEvaluationTest, InputsAndOptionsAreChecked) {
     RECOVERY_EXPECT_OK(sinking.addVolume(*volume.recovery, volume.scan));
     const auto full = [](EvaluatedCandidate&&) { return makeError(ErrorCode::DestinationError, "full"); };
     RECOVERY_EXPECT_ERROR(sinking.run(full), ErrorCode::DestinationError);
+
+    // An evaluation runs once: the run takes its inputs.
+    std::size_t delivered = 0;
+    const auto count = [&](EvaluatedCandidate&&) {
+        ++delivered;
+        return success();
+    };
+    RECOVERY_EXPECT_OK(evaluation.run(count));
+    EXPECT_EQ(delivered, 1u);
+    RECOVERY_EXPECT_ERROR(evaluation.run(count), ErrorCode::InvalidInput);
+    EXPECT_EQ(delivered, 1u);
 }
 
 TEST(CandidateEvaluationTest, IdsAndHashesFollowTheOptions) {

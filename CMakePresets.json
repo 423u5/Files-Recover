@@ -42,23 +42,35 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "RECOVERY_ENABLE_MSVC_ANALYZE": "ON"
       }
+    },
+    {
+      "name": "msvc-fuzz",
+      "displayName": "MSVC libFuzzer + AddressSanitizer",
+      "inherits": "msvc-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "RECOVERY_BUILD_FUZZERS": "ON",
+        "RECOVERY_BUILD_TESTS": "OFF"
+      }
     }
   ],
   "buildPresets": [
     { "name": "msvc-debug", "configurePreset": "msvc-debug" },
     { "name": "msvc-release", "configurePreset": "msvc-release" },
     { "name": "msvc-asan", "configurePreset": "msvc-asan" },
-    { "name": "msvc-analyze", "configurePreset": "msvc-analyze" }
+    { "name": "msvc-analyze", "configurePreset": "msvc-analyze" },
+    { "name": "msvc-fuzz", "configurePreset": "msvc-fuzz" }
   ],
   "testPresets": [
     {
       "name": "test-base",
       "hidden": true,
       "output": { "outputOnFailure": true },
-      "execution": { "noTestsAction": "error", "stopOnFailure": false }
+      "execution": { "noTestsAction": "error", "stopOnFailure": false, "timeout": 900 }
     },
     { "name": "msvc-debug", "inherits": "test-base", "configurePreset": "msvc-debug" },
     { "name": "msvc-release", "inherits": "test-base", "configurePreset": "msvc-release" },
-    { "name": "msvc-asan", "inherits": "test-base", "configurePreset": "msvc-asan" }
+    { "name": "msvc-asan", "inherits": "test-base", "configurePreset": "msvc-asan" },
+    { "name": "msvc-fuzz", "inherits": "test-base", "configurePreset": "msvc-fuzz" }
   ]
 }

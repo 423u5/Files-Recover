@@ -1,5 +1,6 @@
 #include "evaluation/candidate_evaluation.hpp"
 
+#include "recovery/boxed.hpp"
 #include "recovery/candidate_content.hpp"
 #include "recovery/checked_math.hpp"
 #include "recovery/ordered_work.hpp"
@@ -13,6 +14,7 @@
 #include <set>
 #include <span>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -44,12 +46,12 @@ struct Proposal {
     std::string formatId;
     std::optional<CandidateId> filesystemCandidate;
     std::optional<CandidateId> mp4Candidate;
-    std::optional<FileCandidate> carve;
+    Boxed<FileCandidate> carve;
     std::vector<FileCandidate> otherCarves;
-    std::optional<Mp4Structure> mp4;
+    Boxed<Mp4Structure> mp4;
     std::vector<Mp4Warning> mp4Warnings;
-    std::optional<FragmentEvidence> fragments;
-    std::optional<AllocationEvidence> allocation;
+    Boxed<FragmentEvidence> fragments;
+    Boxed<AllocationEvidence> allocation;
     // The format's verdict on exactly these bytes, when the evidence has it.
     std::optional<carving::ValidationResult> knownStructure;
     // A filesystem candidate's own layout (no other stage replaced it).
@@ -61,15 +63,15 @@ struct Proposal {
     bool examineAllocation = false;
 };
 
-// A filesystem candidate, and what replaces it or joins it.
-struct Slot {
-    std::optional<std::uint64_t> start;
+// What replaces a filesystem candidate or joins it. Only the candidates
+// that have something have one: most have nothing (L212).
+struct SlotExtra {
     // Proposals that replace it (fragment reconstructions, an MP4 candidate).
     std::vector<Proposal> replacements;
-    std::optional<FileCandidate> carve;
+    Boxed<FileCandidate> carve;
     std::vector<FileCandidate> otherCarves;
     // Fragment reconstruction found nothing for it.
-    std::optional<FragmentEvidence> failedReconstruction;
+    Boxed<FragmentEvidence> failedReconstruction;
 };
 
 struct ActiveData {
@@ -82,9 +84,33 @@ struct AllocationScan {
     AllocationEvidence evidence;
     // Source ranges in clusters allocated now, merged.
     std::vector<std::pair<std::uint64_t, std::uint64_t>> allocated;
+    // Source ranges that the data of active files the volume lists covers, merged.
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> claimed;
     // The active file the range lies inside, if any.
     std::optional<std::size_t> container;
 };
+
+// The ranges both sorted, merged lists cover.
+std::vector<std::pair<std::uint64_t, std::uint64_t>> intersect(
+    const std::vector<std::pair<std::uint64_t, std::uint64_t>>& a,
+    const std::vector<std::pair<std::uint64_t, std::uint64_t>>& b) {
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> out;
+    std::size_t i = 0;
+    std::size_t j = 0;
+    while (i < a.size() && j < b.size()) {
+        const std::uint64_t begin = std::max(a[i].first, b[j].first);
+        const std::uint64_t end = std::min(a[i].second, b[j].second);
+        if (begin < end) {
+            out.emplace_back(begin, end);
+        }
+        if (a[i].second < b[j].second) {
+            ++i;
+        } else {
+            ++j;
+        }
+    }
+    return out;
+}
 
 int rank(ValidationStatus status) noexcept {
     switch (status) {
@@ -265,20 +291,42 @@ public:
                                  std::vector<FragmentCandidate> fragments, const EvaluatedCandidateSink& sink);
 
 private:
-    // One candidate to deliver: what it is made of, and the filesystem
-    // candidate it comes from.
+    // One candidate to deliver, in delivery order: a filesystem candidate
+    // with what joins it, a proposal that replaces a filesystem candidate, or
+    // a proposal of its own. Its Proposal is put together when it is
+    // evaluated (takeProposal), so that a run holds its inputs once, and
+    // what it holds goes as the candidates are delivered (L212).
+    enum class ItemKind : std::uint8_t {
+        Filesystem,
+        Replacement,
+        Loose,
+    };
     struct Item {
-        Proposal proposal;
-        std::optional<SlotRef> slot;
+        ItemKind kind = ItemKind::Filesystem;
+        // Filesystem, Replacement: the filesystem candidate.
+        SlotRef slot;
+        // Replacement: its index in the slot's replacements; Loose: in loose_.
+        std::size_t index = 0;
     };
 
     // Merges the inputs into the candidates to deliver, in delivery order.
     void plan(std::vector<FileCandidate>& carves, std::vector<Mp4Candidate>& mp4,
               std::vector<FragmentCandidate>& fragments);
-    void buildSlots();
+    // The filesystem candidate with this key, if an added volume has it.
+    [[nodiscard]] std::optional<SlotRef> slotOf(const FsKey& key);
+    // The filesystem candidates by where they start (sorted; candidates that
+    // start at the same place in scan order).
+    [[nodiscard]] const std::vector<std::pair<std::uint64_t, SlotRef>>& byStart();
     void takeFragments(std::vector<FragmentCandidate>& fragments);
     void takeMp4(std::vector<Mp4Candidate>& mp4);
     void takeCarves(std::vector<FileCandidate>& carves);
+    // Thread-safe once planned, for different items: the item's Proposal;
+    // what the plan held for it goes.
+    [[nodiscard]] Proposal takeProposal(const Item& item);
+    // What the plan holds for an item that is not evaluated (resumed after).
+    void release(const Item& item);
+    // The evaluated id of a filesystem candidate's first candidate.
+    [[nodiscard]] std::optional<EvaluatedCandidateId> firstIdOf(const SlotRef& slot) const;
     [[nodiscard]] Status cancelled() const;
     [[nodiscard]] std::optional<std::size_t> volumeAt(std::uint64_t sourceOffset) const;
     [[nodiscard]] const std::vector<ActiveData>& activeData(std::size_t volume);
@@ -300,22 +348,26 @@ private:
     const EvaluationOptions& options_;
     const std::vector<std::pair<FilesystemRecovery*, const CandidateScan*>>& volumes_;
 
-    std::vector<std::vector<Slot>> slots_;
-    std::map<FsKey, SlotRef> byId_;
-    std::multimap<std::uint64_t, SlotRef> byStart_;
+    // What replaces or joins the filesystem candidates that have something.
+    std::map<SlotRef, SlotExtra> extras_;
+    // Made when first needed (slotOf, byStart): the filesystem candidates by
+    // key and by where they start, sorted.
+    std::optional<std::vector<std::pair<FsKey, SlotRef>>> byId_;
+    std::optional<std::vector<std::pair<std::uint64_t, SlotRef>>> byStart_;
     // Starts taken by a replacement (an MP4 candidate or a reconstruction) -> where it is.
     std::map<std::uint64_t, std::pair<std::optional<SlotRef>, std::size_t>> claimed_;
-    // Proposals that belong to no added volume's filesystem candidate.
-    std::vector<Proposal> loose_;
+    // Proposals that belong to no added volume's filesystem candidate; each
+    // goes when its item is evaluated.
+    std::vector<std::unique_ptr<Proposal>> loose_;
     // Carve seeds that fragment reconstruction could not reconstruct: (start, format) -> evidence.
     std::map<std::pair<std::uint64_t, std::string>, FragmentEvidence> failedCarves_;
     // Carves that an MP4 candidate or a reconstruction already holds: (start, format).
     std::set<std::pair<std::uint64_t, std::string>> consumed_;
     std::map<std::size_t, std::vector<ActiveData>> active_;
-    // The candidates to deliver, in delivery order.
+    // The candidates to deliver, in delivery order: first the filesystem
+    // candidates' (slotItems_ of them, in slot order), then the loose ones.
     std::vector<Item> order_;
-    // The evaluated id of each filesystem candidate's first candidate.
-    std::map<SlotRef, EvaluatedCandidateId> slotFirstId_;
+    std::size_t slotItems_ = 0;
     // Per volume, held while its filesystem is used; and the lock of active_.
     std::vector<std::unique_ptr<std::mutex>> volumeLocks_;
     std::mutex activeLock_;
@@ -331,32 +383,48 @@ Status Run::cancelled() const {
     return success();
 }
 
-void Run::buildSlots() {
-    slots_.resize(volumes_.size());
-    for (std::size_t v = 0; v < volumes_.size(); ++v) {
-        FilesystemRecovery& volume = *volumes_[v].first;
-        const CandidateScan& scan = *volumes_[v].second;
-        slots_[v].resize(scan.candidates.size());
-        for (std::size_t i = 0; i < scan.candidates.size(); ++i) {
-            const RecoveryCandidate& candidate = scan.candidates[i];
-            const SlotRef ref{v, i};
-            byId_.emplace(FsKey{scan.volumeOffset, candidate.id.value()}, ref);
-            slots_[v][i].start = startOf(candidate, volume);
-            if (slots_[v][i].start.has_value()) {
-                byStart_.emplace(*slots_[v][i].start, ref);
+std::optional<SlotRef> Run::slotOf(const FsKey& key) {
+    if (!byId_.has_value()) {
+        std::vector<std::pair<FsKey, SlotRef>>& index = byId_.emplace();
+        for (std::size_t v = 0; v < volumes_.size(); ++v) {
+            const CandidateScan& scan = *volumes_[v].second;
+            for (std::size_t i = 0; i < scan.candidates.size(); ++i) {
+                index.emplace_back(FsKey{scan.volumeOffset, scan.candidates[i].id.value()}, SlotRef{v, i});
             }
         }
+        // A key given twice is the first candidate's.
+        std::sort(index.begin(), index.end());
     }
+    const auto at = std::lower_bound(byId_->begin(), byId_->end(), key,
+                                     [](const auto& entry, const FsKey& value) { return entry.first < value; });
+    if (at == byId_->end() || at->first != key) {
+        return std::nullopt;
+    }
+    return at->second;
+}
+
+const std::vector<std::pair<std::uint64_t, SlotRef>>& Run::byStart() {
+    if (!byStart_.has_value()) {
+        std::vector<std::pair<std::uint64_t, SlotRef>>& index = byStart_.emplace();
+        for (std::size_t v = 0; v < volumes_.size(); ++v) {
+            FilesystemRecovery& volume = *volumes_[v].first;
+            const CandidateScan& scan = *volumes_[v].second;
+            for (std::size_t i = 0; i < scan.candidates.size(); ++i) {
+                if (const std::optional<std::uint64_t> start = startOf(scan.candidates[i], volume)) {
+                    index.emplace_back(*start, SlotRef{v, i});
+                }
+            }
+        }
+        std::sort(index.begin(), index.end());
+    }
+    return *byStart_;
 }
 
 void Run::takeFragments(std::vector<FragmentCandidate>& fragments) {
     for (FragmentCandidate& candidate : fragments) {
         std::optional<SlotRef> seed;
         if (candidate.origin == SeedOrigin::Filesystem && candidate.filesystemCandidate.has_value()) {
-            const auto found = byId_.find(FsKey{candidate.volumeOffset, candidate.filesystemCandidate->value()});
-            if (found != byId_.end()) {
-                seed = found->second;
-            }
+            seed = slotOf(FsKey{candidate.volumeOffset, candidate.filesystemCandidate->value()});
         }
         const FragmentEvidence base = evidenceOf(candidate);
         if (candidate.carve.has_value()) {
@@ -365,7 +433,7 @@ void Run::takeFragments(std::vector<FragmentCandidate>& fragments) {
         if (candidate.status == ReconstructionStatus::Unrecoverable || candidate.hypotheses.empty()) {
             // Nothing validates: the seed keeps its own layout, with this evidence.
             if (seed.has_value()) {
-                slots_[seed->volume][seed->index].failedReconstruction = base;
+                extras_[*seed].failedReconstruction = base;
             } else if (candidate.carve.has_value()) {
                 consumed_.erase({candidate.carve->sourceOffset, candidate.carve->formatId});
                 failedCarves_.emplace(std::pair{candidate.carve->sourceOffset, candidate.carve->formatId}, base);
@@ -394,7 +462,7 @@ void Run::takeFragments(std::vector<FragmentCandidate>& fragments) {
             proposal.fragments = std::move(evidence);
             const std::optional<std::uint64_t> start = proposal.data.sourceOffset();
             if (seed.has_value()) {
-                Slot& slot = slots_[seed->volume][seed->index];
+                SlotExtra& slot = extras_[*seed];
                 if (start.has_value()) {
                     claimed_.emplace(*start, std::pair{seed, slot.replacements.size()});
                 }
@@ -403,7 +471,7 @@ void Run::takeFragments(std::vector<FragmentCandidate>& fragments) {
                 if (start.has_value()) {
                     claimed_.emplace(*start, std::pair{std::optional<SlotRef>{}, loose_.size()});
                 }
-                loose_.push_back(std::move(proposal));
+                loose_.push_back(std::make_unique<Proposal>(std::move(proposal)));
             }
         }
         if (seed.has_value()) {
@@ -416,16 +484,13 @@ void Run::takeMp4(std::vector<Mp4Candidate>& mp4) {
     for (Mp4Candidate& candidate : mp4) {
         std::optional<SlotRef> seed;
         if (candidate.filesystemCandidate.has_value()) {
-            const FsKey key{candidate.data.filesystemEvidence.volumeOffset, candidate.filesystemCandidate->value()};
-            const auto found = byId_.find(key);
-            if (found != byId_.end()) {
-                seed = found->second;
-            }
+            seed = slotOf(FsKey{candidate.data.filesystemEvidence.volumeOffset, candidate.filesystemCandidate->value()});
         }
         if (candidate.carving.has_value()) {
             consumed_.emplace(candidate.carving->sourceOffset, candidate.carving->formatId);
         }
-        if (seed.has_value() && !slots_[seed->volume][seed->index].replacements.empty()) {
+        if (const auto extra = seed.has_value() ? extras_.find(*seed) : extras_.end();
+            extra != extras_.end() && !extra->second.replacements.empty()) {
             // A reconstruction of the same file replaces it already.
             ++report_.superseded;
             continue;
@@ -454,7 +519,7 @@ void Run::takeMp4(std::vector<Mp4Candidate>& mp4) {
         }
         const std::optional<std::uint64_t> start = proposal.data.sourceOffset();
         if (seed.has_value()) {
-            Slot& slot = slots_[seed->volume][seed->index];
+            SlotExtra& slot = extras_[*seed];
             if (slot.failedReconstruction.has_value()) {
                 proposal.fragments = slot.failedReconstruction;
             }
@@ -467,23 +532,57 @@ void Run::takeMp4(std::vector<Mp4Candidate>& mp4) {
             if (start.has_value()) {
                 claimed_.emplace(*start, std::pair{std::optional<SlotRef>{}, loose_.size()});
             }
-            loose_.push_back(std::move(proposal));
+            loose_.push_back(std::make_unique<Proposal>(std::move(proposal)));
         }
     }
 }
 
 void Run::takeCarves(std::vector<FileCandidate>& carves) {
-    // The same carve added twice counts once.
-    std::vector<FileCandidate> unique;
-    for (FileCandidate& carve : carves) {
-        if (consumed_.contains({carve.sourceOffset, carve.formatId})) {
-            continue;
-        }
-        if (std::none_of(unique.begin(), unique.end(),
-                         [&](const FileCandidate& seen) { return sameCarve(seen, carve); })) {
-            unique.push_back(std::move(carve));
+    // The same carve added twice counts once: the first added stays. The
+    // carves are compared by start, format and length first, so that this
+    // takes n log n, not n^2 (L212: a deep scan of a large drive).
+    std::vector<std::size_t> byPlace;
+    byPlace.reserve(carves.size());
+    for (std::size_t i = 0; i < carves.size(); ++i) {
+        if (!consumed_.contains({carves[i].sourceOffset, carves[i].formatId})) {
+            byPlace.push_back(i);
         }
     }
+    const auto place = [&carves](std::size_t i) {
+        return std::tie(carves[i].sourceOffset, carves[i].formatId, carves[i].length);
+    };
+    std::sort(byPlace.begin(), byPlace.end(), [&](std::size_t a, std::size_t b) {
+        return place(a) != place(b) ? place(a) < place(b) : a < b;
+    });
+    std::vector<bool> keep(carves.size(), false);
+    std::size_t kept = 0;
+    for (std::size_t first = 0; first < byPlace.size();) {
+        std::size_t last = first + 1;
+        while (last < byPlace.size() && place(byPlace[last]) == place(byPlace[first])) {
+            ++last;
+        }
+        for (std::size_t k = first; k < last; ++k) {
+            const FileCandidate& carve = carves[byPlace[k]];
+            const bool seen = std::any_of(byPlace.begin() + static_cast<std::ptrdiff_t>(first),
+                                          byPlace.begin() + static_cast<std::ptrdiff_t>(k), [&](std::size_t earlier) {
+                                              return keep[earlier] && sameCarve(carves[earlier], carve);
+                                          });
+            if (!seen) {
+                keep[byPlace[k]] = true;
+                ++kept;
+            }
+        }
+        first = last;
+    }
+    byPlace = {};
+    std::vector<FileCandidate> unique;
+    unique.reserve(kept);
+    for (std::size_t i = 0; i < carves.size(); ++i) {
+        if (keep[i]) {
+            unique.push_back(std::move(carves[i]));
+        }
+    }
+    carves = {};
     // By start; the best first: Valid, Truncated, not validated, Invalid; then the longest.
     std::stable_sort(unique.begin(), unique.end(), [](const FileCandidate& a, const FileCandidate& b) {
         if (a.sourceOffset != b.sourceOffset) {
@@ -507,7 +606,7 @@ void Run::takeCarves(std::vector<FileCandidate>& carves) {
         // A replacement holds this start: the carves are its evidence.
         if (const auto claimed = claimed_.find(start); claimed != claimed_.end()) {
             const auto& [slot, index] = claimed->second;
-            Proposal& owner = slot.has_value() ? slots_[slot->volume][slot->index].replacements[index] : loose_[index];
+            Proposal& owner = slot.has_value() ? extras_.at(*slot).replacements[index] : *loose_[index];
             report_.carvesCompeting += group.size();
             for (FileCandidate& carve : group) {
                 owner.otherCarves.push_back(std::move(carve));
@@ -517,12 +616,15 @@ void Run::takeCarves(std::vector<FileCandidate>& carves) {
         // A filesystem candidate starts here (one whose first cluster another
         // file has not taken since): the same file.
         std::optional<SlotRef> owner;
-        const auto [from, to] = byStart_.equal_range(start);
-        for (auto at = from; at != to; ++at) {
+        const std::vector<std::pair<std::uint64_t, SlotRef>>& starts = byStart();
+        auto at = std::lower_bound(starts.begin(), starts.end(), start,
+                                   [](const auto& entry, std::uint64_t value) { return entry.first < value; });
+        for (; at != starts.end() && at->first == start; ++at) {
             const SlotRef ref = at->second;
             const RecoveryCandidate& candidate = volumes_[ref.volume].second->candidates[ref.index];
-            Slot& slot = slots_[ref.volume][ref.index];
-            if (!slot.replacements.empty() || slot.carve.has_value() || startReallocated(candidate)) {
+            const auto extra = extras_.find(ref);
+            if ((extra != extras_.end() && (!extra->second.replacements.empty() || extra->second.carve.has_value())) ||
+                startReallocated(candidate)) {
                 continue;
             }
             if (!owner.has_value() || (candidate.filesystemEvidence.state == filesystem::EntryState::Active &&
@@ -531,7 +633,7 @@ void Run::takeCarves(std::vector<FileCandidate>& carves) {
             }
         }
         if (owner.has_value()) {
-            Slot& slot = slots_[owner->volume][owner->index];
+            SlotExtra& slot = extras_[*owner];
             slot.carve = std::move(group.front());
             ++report_.carvesMerged;
             report_.carvesCompeting += group.size() - 1;
@@ -556,7 +658,7 @@ void Run::takeCarves(std::vector<FileCandidate>& carves) {
             proposal.otherCarves.push_back(std::move(group[i]));
         }
         proposal.examineAllocation = true;
-        loose_.push_back(std::move(proposal));
+        loose_.push_back(std::make_unique<Proposal>(std::move(proposal)));
     }
 }
 
@@ -658,6 +760,7 @@ Result<AllocationScan> Run::allocationOf(std::size_t volume, std::uint64_t begin
         if (at->end <= begin) {
             continue;
         }
+        scan.claimed.emplace_back(std::max(at->begin, begin), std::min(at->end, end));
         if (at->begin <= begin && at->end >= end && !scan.container.has_value()) {
             evidence.insideActiveFile = true;
             scan.container = at->candidate;
@@ -670,6 +773,17 @@ Result<AllocationScan> Run::allocationOf(std::size_t volume, std::uint64_t begin
             }
         }
     }
+    // The regions of active files are sorted by start, not merged (hard links share them).
+    std::sort(scan.claimed.begin(), scan.claimed.end());
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> merged;
+    for (const auto& range : scan.claimed) {
+        if (!merged.empty() && range.first <= merged.back().second) {
+            merged.back().second = std::max(merged.back().second, range.second);
+        } else {
+            merged.push_back(range);
+        }
+    }
+    scan.claimed = std::move(merged);
     return scan;
 }
 
@@ -749,13 +863,19 @@ Result<EvaluatedCandidate> Run::evaluate(Proposal proposal, std::optional<SlotRe
             }
             if (scan->container.has_value()) {
                 // Part of an active file: its clusters are that file's.
-                const auto found = slotFirstId_.find(SlotRef{*volume, *scan->container});
-                if (found != slotFirstId_.end()) {
-                    candidate.container = found->second;
+                candidate.container = firstIdOf(SlotRef{*volume, *scan->container});
+            } else {
+                // Clusters an active file holds were taken by it: what the
+                // carve read there may be that file's data. Clusters allocated
+                // to no file the volume lists (a chain whose entry is lost, a
+                // record that cannot be read) say nothing against the carve:
+                // its content is what is there, and its validation judges it.
+                const std::vector<std::pair<std::uint64_t, std::uint64_t>> taken =
+                    intersect(scan->allocated, scan->claimed);
+                if (!taken.empty()) {
+                    proposal.data.sourceRegions = markAllocated(proposal.data.sourceRegions, taken);
+                    proposal.data.warnings.push_back(CandidateWarning::ClustersReallocated);
                 }
-            } else if (!scan->allocated.empty()) {
-                proposal.data.sourceRegions = markAllocated(proposal.data.sourceRegions, scan->allocated);
-                proposal.data.warnings.push_back(CandidateWarning::ClustersReallocated);
             }
             candidate.allocation = std::move(scan->evidence);
         }
@@ -975,49 +1095,105 @@ Status Run::replay(const EvaluationRecord& record) {
 
 void Run::plan(std::vector<FileCandidate>& carves, std::vector<Mp4Candidate>& mp4,
                std::vector<FragmentCandidate>& fragments) {
-    buildSlots();
     takeFragments(fragments);
     takeMp4(mp4);
     takeCarves(carves);
-    std::uint64_t id = options_.firstId;
-    // The volumes' candidates, in scan order, each where its filesystem candidate is.
+    std::size_t items = loose_.size();
+    for (const auto& [recovery, scan] : volumes_) {
+        items += scan->candidates.size();
+    }
+    for (const auto& [slot, extra] : extras_) {
+        items += extra.replacements.size() > 1 ? extra.replacements.size() - 1 : 0;
+    }
+    order_.reserve(items);
+    // The volumes' candidates, in scan order, each where its filesystem
+    // candidate is: what replaces it, or itself with what joins it.
+    auto extra = extras_.begin();
     for (std::size_t v = 0; v < volumes_.size(); ++v) {
         const CandidateScan& scan = *volumes_[v].second;
         for (std::size_t i = 0; i < scan.candidates.size(); ++i) {
-            Slot& slot = slots_[v][i];
             const SlotRef ref{v, i};
-            std::vector<Proposal> proposals;
-            if (!slot.replacements.empty()) {
-                proposals = std::move(slot.replacements);
-            } else {
-                Proposal own;
-                own.data = scan.candidates[i];
-                own.filesystemCandidate = scan.candidates[i].id;
-                own.filesystemLayout = true;
-                own.fragments = std::move(slot.failedReconstruction);
-                if (slot.carve.has_value()) {
-                    own.formatId = slot.carve->formatId;
-                    own.carve = std::move(slot.carve);
-                    own.mergeCarve = true;
-                }
-                own.otherCarves = std::move(slot.otherCarves);
-                proposals.push_back(std::move(own));
+            while (extra != extras_.end() && extra->first < ref) {
+                ++extra;
             }
-            slotFirstId_.emplace(ref, EvaluatedCandidateId{id});
-            for (Proposal& proposal : proposals) {
-                order_.push_back(Item{std::move(proposal), ref});
-                ++id;
+            const std::size_t replacements =
+                extra != extras_.end() && extra->first == ref ? extra->second.replacements.size() : 0;
+            if (replacements == 0) {
+                order_.push_back(Item{ItemKind::Filesystem, ref, 0});
+            }
+            for (std::size_t k = 0; k < replacements; ++k) {
+                order_.push_back(Item{ItemKind::Replacement, ref, k});
             }
         }
     }
+    slotItems_ = order_.size();
     // The rest, in source order.
-    std::stable_sort(loose_.begin(), loose_.end(), [](const Proposal& a, const Proposal& b) {
-        return a.data.sourceOffset().value_or(UINT64_MAX) < b.data.sourceOffset().value_or(UINT64_MAX);
-    });
-    for (Proposal& proposal : loose_) {
-        order_.push_back(Item{std::move(proposal), std::nullopt});
+    std::stable_sort(loose_.begin(), loose_.end(),
+                     [](const std::unique_ptr<Proposal>& a, const std::unique_ptr<Proposal>& b) {
+                         return a->data.sourceOffset().value_or(UINT64_MAX) <
+                                b->data.sourceOffset().value_or(UINT64_MAX);
+                     });
+    for (std::size_t j = 0; j < loose_.size(); ++j) {
+        order_.push_back(Item{ItemKind::Loose, SlotRef{}, j});
     }
-    loose_.clear();
+}
+
+Proposal Run::takeProposal(const Item& item) {
+    switch (item.kind) {
+    case ItemKind::Filesystem: {
+        const RecoveryCandidate& candidate = volumes_[item.slot.volume].second->candidates[item.slot.index];
+        Proposal own;
+        own.data = candidate;
+        own.filesystemCandidate = candidate.id;
+        own.filesystemLayout = true;
+        if (const auto found = extras_.find(item.slot); found != extras_.end()) {
+            SlotExtra& extra = found->second;
+            own.fragments = std::move(extra.failedReconstruction);
+            if (extra.carve.has_value()) {
+                own.formatId = extra.carve->formatId;
+                own.carve = std::move(extra.carve);
+                own.mergeCarve = true;
+            }
+            own.otherCarves = std::move(extra.otherCarves);
+        }
+        return own;
+    }
+    case ItemKind::Replacement:
+        return std::move(extras_.find(item.slot)->second.replacements[item.index]);
+    case ItemKind::Loose: {
+        const std::unique_ptr<Proposal> proposal = std::move(loose_[item.index]);
+        return std::move(*proposal);
+    }
+    }
+    return Proposal{};
+}
+
+void Run::release(const Item& item) {
+    switch (item.kind) {
+    case ItemKind::Filesystem:
+        if (const auto found = extras_.find(item.slot); found != extras_.end()) {
+            found->second.carve.reset();
+            found->second.otherCarves = {};
+            found->second.failedReconstruction.reset();
+        }
+        break;
+    case ItemKind::Replacement:
+        extras_.find(item.slot)->second.replacements[item.index] = Proposal{};
+        break;
+    case ItemKind::Loose:
+        loose_[item.index].reset();
+        break;
+    }
+}
+
+std::optional<EvaluatedCandidateId> Run::firstIdOf(const SlotRef& slot) const {
+    const auto slots = order_.begin() + static_cast<std::ptrdiff_t>(slotItems_);
+    const auto at = std::lower_bound(order_.begin(), slots, slot,
+                                     [](const Item& item, const SlotRef& value) { return item.slot < value; });
+    if (at == slots || at->slot != slot) {
+        return std::nullopt;
+    }
+    return EvaluatedCandidateId{options_.firstId + static_cast<std::uint64_t>(at - order_.begin())};
 }
 
 Result<EvaluationReport> Run::run(std::vector<FileCandidate> carves, std::vector<Mp4Candidate> mp4,
@@ -1028,6 +1204,10 @@ Result<EvaluationReport> Run::run(std::vector<FileCandidate> carves, std::vector
         volumeLocks_.push_back(std::make_unique<std::mutex>());
     }
     plan(carves, mp4, fragments);
+    // The plan holds what the inputs held.
+    carves = {};
+    mp4 = {};
+    fragments = {};
     if (options_.resume.size() > order_.size()) {
         return makeError(ErrorCode::InvalidInput,
                          "candidate evaluation: more candidates to resume after than the inputs give");
@@ -1038,6 +1218,9 @@ Result<EvaluationReport> Run::run(std::vector<FileCandidate> carves, std::vector
             return replayed.error();
         }
     }
+    for (std::size_t k = 0; k < options_.resume.size(); ++k) {
+        release(order_[k]);
+    }
     std::size_t window = options_.window;
     if (options_.pool != nullptr && window == 0) {
         window = std::min<std::size_t>(EvaluationOptions::kMaxWindow, 2 * std::size_t{options_.pool->threadCount()});
@@ -1046,8 +1229,9 @@ Result<EvaluationReport> Run::run(std::vector<FileCandidate> carves, std::vector
         if (Status stop = cancelled(); !stop.ok()) {
             return stop.error();
         }
-        Item& item = order_[index];
-        return evaluate(std::move(item.proposal), item.slot);
+        const Item& item = order_[index];
+        return evaluate(takeProposal(item),
+                        item.kind == ItemKind::Loose ? std::nullopt : std::optional<SlotRef>(item.slot));
     };
     const auto consume = [&](std::size_t, EvaluatedCandidate&& candidate) -> Status {
         return deliver(std::move(candidate), sink);
@@ -1148,6 +1332,10 @@ Status CandidateEvaluation::addFragmentCandidate(FragmentCandidate candidate) {
 }
 
 Result<EvaluationReport> CandidateEvaluation::run(const EvaluatedCandidateSink& sink) {
+    if (ran_) {
+        return makeError(ErrorCode::InvalidInput,
+                         "candidate evaluation: it has run already (a run takes the candidates added)");
+    }
     if (Status valid = validate(options_); !valid.ok()) {
         return valid.error();
     }
@@ -1159,8 +1347,9 @@ Result<EvaluationReport> CandidateEvaluation::run(const EvaluatedCandidateSink& 
     for (const Volume& volume : volumes_) {
         volumes.emplace_back(volume.recovery, volume.scan);
     }
+    ran_ = true;
     Run run(*source_, *formats_, *media_, options_, volumes);
-    return run.run(carves_, mp4_, fragments_, sink);
+    return run.run(std::exchange(carves_, {}), std::exchange(mp4_, {}), std::exchange(fragments_, {}), sink);
 }
 
 }  // namespace recovery::evaluation

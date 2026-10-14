@@ -19,6 +19,7 @@
 #include "evaluation/evaluated_candidate.hpp"
 #include "filesystem/filesystem.hpp"
 #include "partition/partition_table.hpp"
+#include "recovery/boxed.hpp"
 #include "recovery/config.hpp"
 #include "recovery/filesystem_recovery.hpp"
 #include "recovery/fragment_recovery.hpp"
@@ -101,10 +102,12 @@ struct VolumeRecord {
     std::optional<partition::Partition> partition;
     // Set once the volume is done: the filesystem found in it and its
     // candidates, or why it could not be used (no filesystem the engine
-    // reads, a damaged one).
+    // reads, a damaged one). The candidates never change once found: the
+    // update that delivers them and every checkpoint that applies it share
+    // them (SharedBox, read like std::optional; L212).
     bool scanned = false;
     std::optional<filesystem::FilesystemType> filesystem;
-    std::optional<CandidateScan> candidates;
+    SharedBox<CandidateScan> candidates;
     std::optional<Error> error;
 };
 

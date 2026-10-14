@@ -302,7 +302,31 @@ struct AllocationScan {
     Mp4Allocation evidence;
     // Source ranges of the clusters allocated now, merged.
     std::vector<std::pair<std::uint64_t, std::uint64_t>> allocated;
+    // Source ranges that the data of active files the volume lists covers, merged.
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> claimed;
 };
+
+// The ranges both sorted, merged lists cover.
+std::vector<std::pair<std::uint64_t, std::uint64_t>> intersect(
+    const std::vector<std::pair<std::uint64_t, std::uint64_t>>& a,
+    const std::vector<std::pair<std::uint64_t, std::uint64_t>>& b) {
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> out;
+    std::size_t i = 0;
+    std::size_t j = 0;
+    while (i < a.size() && j < b.size()) {
+        const std::uint64_t begin = std::max(a[i].first, b[j].first);
+        const std::uint64_t end = std::min(a[i].second, b[j].second);
+        if (begin < end) {
+            out.emplace_back(begin, end);
+        }
+        if (a[i].second < b[j].second) {
+            ++i;
+        } else {
+            ++j;
+        }
+    }
+    return out;
+}
 
 // Active files' stored data on one volume, sorted by source offset.
 struct ActiveData {
@@ -640,6 +664,7 @@ Result<AllocationScan> Mp4RecoverySteps::Impl::allocationOf(std::size_t volume, 
         if (at->end <= begin) {
             continue;
         }
+        scan.claimed.emplace_back(std::max(at->begin, begin), std::min(at->end, end));
         if (at->begin <= begin && at->end >= end) {
             evidence.insideActiveFile = true;
         }
@@ -651,6 +676,17 @@ Result<AllocationScan> Mp4RecoverySteps::Impl::allocationOf(std::size_t volume, 
             }
         }
     }
+    // The regions of active files are sorted by start, not merged (hard links share them).
+    std::sort(scan.claimed.begin(), scan.claimed.end());
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> merged;
+    for (const auto& range : scan.claimed) {
+        if (!merged.empty() && range.first <= merged.back().second) {
+            merged.back().second = std::max(merged.back().second, range.second);
+        } else {
+            merged.push_back(range);
+        }
+    }
+    scan.claimed = std::move(merged);
     return scan;
 }
 
@@ -807,10 +843,17 @@ Status Mp4RecoverySteps::Impl::apply(Mp4HitWork::Impl& work) {
         }
         allocation = std::move(*scanned);
     }
-    // Clusters allocated now hold other data, unless the carve lies inside
-    // an active file: then they are that file's, and so are the carve's bytes.
-    const bool reused = allocation.has_value() && !allocation->evidence.insideActiveFile;
-    video.data.sourceRegions = regionsFor(carve, reused ? &*allocation : nullptr);
+    // Clusters an active file holds now may hold its data instead of the
+    // carve's, unless the carve lies inside that file: then they are that
+    // file's, and so are the carve's bytes. Clusters allocated to no file the
+    // volume lists (a chain or record whose entry is lost) say nothing
+    // against the carve's content (P20).
+    std::optional<AllocationScan> taken;
+    if (allocation.has_value() && !allocation->evidence.insideActiveFile) {
+        taken = AllocationScan{};
+        taken->allocated = intersect(allocation->allocated, allocation->claimed);
+    }
+    video.data.sourceRegions = regionsFor(carve, taken.has_value() ? &*taken : nullptr);
     video.data.fragmentation = FragmentationInfo{1, false};
     if (video.data.reallocatedBytes() > 0) {
         video.data.warnings.push_back(CandidateWarning::ClustersReallocated);
@@ -876,7 +919,7 @@ void Mp4RecoverySteps::Impl::finish(Mp4Candidate& candidate, std::uint64_t id) c
     if (candidate.allocation.has_value()) {
         if (candidate.allocation->insideActiveFile) {
             warnings.push_back(Mp4Warning::InsideActiveFile);
-        } else if (candidate.allocation->allocatedClusters > 0) {
+        } else if (candidate.data.reallocatedBytes() > 0) {
             warnings.push_back(Mp4Warning::AllocatedClusters);
         }
     }

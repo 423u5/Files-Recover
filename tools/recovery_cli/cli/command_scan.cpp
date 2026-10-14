@@ -7,12 +7,14 @@
 #include "cli/format.hpp"
 #include "cli/sessions.hpp"
 #include "cli/sources.hpp"
+#include "formats/archive_formats.hpp"
 #include "formats/audio_formats.hpp"
 #include "formats/image_formats.hpp"
 #include "formats/video_formats.hpp"
 #include "metadata/candidate_metadata.hpp"
 #include "recovery/config.hpp"
 #include "session/recovery_session.hpp"
+#include "validation/deflate_decoder.hpp"
 #include "validation/media_validator.hpp"
 #include "validation/windows_playability.hpp"
 
@@ -139,6 +141,7 @@ Result<Registries> makeRegistries() {
     for (Status registered : {formats::registerImageFormats(registries.formats),
                               formats::registerAudioFormats(registries.formats),
                               formats::registerVideoFormats(registries.formats),
+                              formats::registerArchiveFormats(registries.formats, validation::deflateDecoder()),
                               validation::registerMediaValidators(registries.media)}) {
         if (!registered.ok()) {
             return registered.error();

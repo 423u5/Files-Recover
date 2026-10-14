@@ -10,6 +10,7 @@
 
 #include "carving/content_reader.hpp"
 #include "diagnostics/logger.hpp"
+#include "formats/archive_formats.hpp"
 #include "formats/audio_formats.hpp"
 #include "formats/image_formats.hpp"
 #include "formats/video_formats.hpp"
@@ -29,6 +30,8 @@
 #include "support/test_files.hpp"
 #include "support/test_macros.hpp"
 #include "support/virtual_source.hpp"
+#include "support/zip_builders.hpp"
+#include "validation/deflate_decoder.hpp"
 
 #include <gtest/gtest.h>
 
@@ -143,6 +146,12 @@ carving::FormatRegistry allFormats() {
     EXPECT_TRUE(formats::registerImageFormats(registry).ok());
     EXPECT_TRUE(formats::registerAudioFormats(registry).ok());
     EXPECT_TRUE(formats::registerVideoFormats(registry).ok());
+    return registry;
+}
+
+carving::FormatRegistry withArchives() {
+    carving::FormatRegistry registry = allFormats();
+    EXPECT_TRUE(formats::registerArchiveFormats(registry, validation::deflateDecoder()).ok());
     return registry;
 }
 
@@ -673,6 +682,46 @@ TEST(FragmentRecoveryTest, CarvedFilesWithoutMetadataAreReconstructed) {
     expectReconstructed(source, pngCarve, png, 2);
     EXPECT_EQ(recovered.report.carvingSeeds, 2u);
     EXPECT_EQ(recovered.report.filesystemSeeds, 0u);
+}
+
+TEST(FragmentRecoveryTest, AnArchiveWhoseEndWasFoundIsDamagedNotFragmented) {
+    // A ZIP archive in one piece with a damaged member: its end is found (the
+    // central directory places every member from its start), so a bad CRC-32
+    // is damage where it lies, and the archive is no seed.
+    const carving::FormatRegistry registry = withArchives();
+    Card card;
+    Bytes archive = test::storedArchive({{"photo.jpg", photo(97)}, {"notes.txt", test::makePattern(3000, 98)}});
+    archive[archive.size() - 300] ^= std::byte{0x01};  // in notes.txt
+    card.plant(run(7400, clustersFor(archive.size())), archive);
+    test::MemoryStorageSource source(card.image());
+    RECOVERY_ASSERT_OK(source.open());
+    Volume volume = openVolume(source);
+    ASSERT_NE(volume.recovery, nullptr);
+    const Recovered recovered = reconstructAll(source, registry, {&volume});
+    EXPECT_EQ(recovered.carvedAt(card.offsetOf(7400)), nullptr);
+    EXPECT_EQ(recovered.report.carvingSeeds, 0u);
+}
+
+TEST(FragmentRecoveryTest, AFragmentedArchiveIsReconstructed) {
+    // A ZIP archive in two pieces, its entry gone: the walk breaks after the
+    // first member, whose data runs into the gap; the layout that puts the
+    // second piece back passes every member's CRC-32 and the central directory.
+    const carving::FormatRegistry registry = withArchives();
+    Card card;
+    const Bytes archive = test::storedArchive({{"a.bin", test::makePattern(2500, 99)},
+                                               {"b.bin", test::makePattern(2500, 100)}});
+    const std::uint32_t n = clustersFor(archive.size());
+    card.plant(pieces(n, {{7500, 4}, {7520, n}}), archive);
+    test::MemoryStorageSource source(card.image());
+    RECOVERY_ASSERT_OK(source.open());
+    Volume volume = openVolume(source);
+    ASSERT_NE(volume.recovery, nullptr);
+    const Recovered recovered = reconstructAll(source, registry, {&volume});
+    const FragmentCandidate* carve = recovered.carvedAt(card.offsetOf(7500));
+    ASSERT_NE(carve, nullptr);
+    EXPECT_EQ(carve->formatId, "zip");
+    EXPECT_EQ(carve->carve->end.status, carving::EndStatus::Broken);
+    expectReconstructed(source, carve, archive, 2);
 }
 
 TEST(FragmentRecoveryTest, FilesOfNoKnownFormatAreLeftAlone) {

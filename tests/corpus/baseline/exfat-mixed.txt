@@ -1,0 +1,18 @@
+# corpus scenario exfat-mixed: exFAT, 32 KiB clusters: contiguous, fragmented and deleted files
+# image 16809984 bytes, sha256 1db416a6308af3cc, 7 originals
+# deep scan: 7 candidates
+#1 filesystem complete audio/mp3 "/Song.mp3" size=167845/167845 valid=valid:passed/unsupported sha=c4935f33c2df2264 recovery=recovered "Song.mp3" => /Song.mp3
+#2 filesystem complete video/mp4 "/Clip.mp4" size=308675/308675 valid=valid:passed/passed sha=14c705bd4e80f846 recovery=recovered "Clip.mp4" => /Clip.mp4
+#3 filesystem complete image/webp "/Sticker.webp" size=412/412 valid=valid:passed/passed sha=f738d8e8a7bb6ec0 recovery=recovered "Sticker.webp" => /Sticker.webp
+#4 filesystem complete video/mp4 "/Fragmented.mp4" size=417117/417117 fragmented valid=valid:passed/passed sha=31c185b734aec328 recovery=recovered "Fragmented.mp4" => /Fragmented.mp4
+#5 filesystem complete image/jpeg "/Old photo.jpg" size=15397/15397 deleted valid=valid:passed/passed sha=a6122ab04ea38415 recovery=recovered "Old photo.jpg" => /Old photo.jpg
+#6 filesystem complete audio/wav "/Deleted chained.wav" size=160100/160100 deleted fragmented valid=valid:passed/not-applicable sha=202533ad89713275 recovery=recovered "Deleted chained.wav" => /Deleted chained.wav
+#7 filesystem complete image/jpeg "/DCIM/IMG_1001.JPG" size=19586/19586 valid=valid:passed/passed sha=043a0cf592217fe6 recovery=recovered "DCIM/IMG_1001.JPG" => /DCIM/IMG_1001.JPG
+# quick scan: 7 candidates
+#1 filesystem complete audio/mp3 "/Song.mp3" size=167845/167845 valid=valid:passed/unsupported sha=c4935f33c2df2264 recovery=recovered "Song.mp3" => /Song.mp3
+#2 filesystem complete video/mp4 "/Clip.mp4" size=308675/308675 valid=valid:passed/passed sha=14c705bd4e80f846 recovery=recovered "Clip.mp4" => /Clip.mp4
+#3 filesystem complete image/webp "/Sticker.webp" size=412/412 valid=valid:passed/passed sha=f738d8e8a7bb6ec0 recovery=recovered "Sticker.webp" => /Sticker.webp
+#4 filesystem complete video/mp4 "/Fragmented.mp4" size=417117/417117 fragmented valid=valid:passed/passed sha=31c185b734aec328 recovery=recovered "Fragmented.mp4" => /Fragmented.mp4
+#5 filesystem complete image/jpeg "/Old photo.jpg" size=15397/15397 deleted valid=valid:passed/passed sha=a6122ab04ea38415 recovery=recovered "Old photo.jpg" => /Old photo.jpg
+#6 filesystem complete audio/wav "/Deleted chained.wav" size=160100/160100 deleted fragmented valid=valid:passed/not-applicable sha=202533ad89713275 recovery=recovered "Deleted chained.wav" => /Deleted chained.wav
+#7 filesystem complete image/jpeg "/DCIM/IMG_1001.JPG" size=19586/19586 valid=valid:passed/passed sha=043a0cf592217fe6 recovery=recovered "DCIM/IMG_1001.JPG" => /DCIM/IMG_1001.JPG

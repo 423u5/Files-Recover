@@ -35,6 +35,7 @@
 #include "carving/file_candidate.hpp"
 #include "evaluation/content_identity.hpp"
 #include "filesystem/filesystem.hpp"
+#include "recovery/boxed.hpp"
 #include "recovery/fragment_recovery.hpp"
 #include "recovery/mp4_recovery.hpp"
 #include "recovery/recovery_candidate.hpp"
@@ -136,14 +137,18 @@ struct EvaluatedCandidate {
     // The carve that found the file, or that starts where the file starts,
     // and other carves that start there too (other formats, or another
     // carve of the same one).
-    std::optional<carving::FileCandidate> carve;
+    //
+    // The carve and the MP4, fragment and allocation evidence are held on
+    // the heap (Boxed, read like std::optional): most candidates have none of
+    // them, and a session keeps every candidate in memory (L212).
+    Boxed<carving::FileCandidate> carve;
     std::vector<carving::FileCandidate> otherCarves;
     // MP4 recovery's structure and sample evidence, and its warnings.
-    std::optional<Mp4Structure> mp4;
+    Boxed<Mp4Structure> mp4;
     std::vector<Mp4Warning> mp4Warnings;
-    std::optional<FragmentEvidence> fragments;
+    Boxed<FragmentEvidence> fragments;
     // Carved files on a volume: where they lie in its allocation.
-    std::optional<AllocationEvidence> allocation;
+    Boxed<AllocationEvidence> allocation;
     // The active file a carved file lies inside (an earlier candidate).
     std::optional<EvaluatedCandidateId> container;
     validation::ValidationState validation;

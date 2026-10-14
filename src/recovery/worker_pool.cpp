@@ -2,6 +2,8 @@
 
 #include "recovery/config.hpp"
 
+#include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -37,6 +39,12 @@ WorkerPool::WorkerPool(std::uint32_t threads, std::size_t queueCapacity)
     : threadCount_(threads), capacity_(queueCapacity) {}
 
 WorkerPool::~WorkerPool() {
+    // A worker that destroyed its pool would use it again when its task
+    // returns (P20 thread-safety audit): stop here rather than there.
+    if (isWorkerThread()) {
+        std::fputs("recovery: a worker pool was destroyed by one of its own tasks\n", stderr);
+        std::abort();
+    }
     shutdown();
 }
 
@@ -77,15 +85,17 @@ void WorkerPool::shutdown() {
     }
     notEmpty_.notify_all();
     notFull_.notify_all();
+    // A task shutting its own pool down cannot join its own worker, and a
+    // worker left detached would use the pool after the owner destroyed it
+    // (P20 thread-safety audit): it only stops the pool, and the destructor,
+    // on the owner's thread, joins every worker once their tasks are done.
+    if (isWorkerThread()) {
+        return;
+    }
     // A second caller waits here until the first has joined every worker.
     const std::lock_guard joining(joinMutex_);
     for (std::thread& thread : threads_) {
-        if (!thread.joinable()) {
-            continue;
-        }
-        if (thread.get_id() == std::this_thread::get_id()) {
-            thread.detach();  // a task shutting its own pool down: it ends when the task returns
-        } else {
+        if (thread.joinable()) {
             thread.join();
         }
     }

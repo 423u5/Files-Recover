@@ -852,9 +852,12 @@ void RunState::applyCarve(const carving::SignatureHit& hit, const HitPlace& plac
         filesystemSeeds_[seeded->second].carve = std::move(carve);
         return;
     }
+    // Found but Invalid: an end that belongs to another file, unless the
+    // format's found end proves the file is in one piece (damaged in place).
     const bool broken = carve.end.status == carving::EndStatus::Broken ||
                         (carve.end.status == carving::EndStatus::Found &&
-                         carve.validation.status == ValidationStatus::Invalid);
+                         carve.validation.status == ValidationStatus::Invalid &&
+                         !hit.format->descriptor().foundEndMeansContiguous);
     if (!valid && broken && options_.carve) {
         Seed seed;
         seed.origin = SeedOrigin::Carving;

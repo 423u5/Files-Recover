@@ -16,7 +16,9 @@
 #include "win32.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <limits>
+#include <optional>
 #include <utility>
 
 namespace recovery::storage {
@@ -33,6 +35,28 @@ HANDLE asHandle(void* handle) noexcept {
 
 Error destinationError(std::string message, DWORD systemError = 0) {
     return makeError(ErrorCode::DestinationError, std::move(message), systemError);
+}
+
+// FILETIME counts 100 ns since 1601-01-01; the Unix epoch is this far in.
+constexpr std::int64_t kUnixEpochIn100ns = 116'444'736'000'000'000;
+
+std::optional<FILETIME> toFileTime(const DestinationFile::FileTime& time) {
+    const std::int64_t milliseconds = time.time_since_epoch().count();
+    if (milliseconds < -kUnixEpochIn100ns / 10'000 ||
+        milliseconds > (std::numeric_limits<std::int64_t>::max() - kUnixEpochIn100ns) / 10'000) {
+        return std::nullopt;
+    }
+    const auto value = static_cast<std::uint64_t>(milliseconds * 10'000 + kUnixEpochIn100ns);
+    FILETIME fileTime{};
+    fileTime.dwLowDateTime = static_cast<DWORD>(value & 0xFFFF'FFFFULL);
+    fileTime.dwHighDateTime = static_cast<DWORD>(value >> 32);
+    return fileTime;
+}
+
+DestinationFile::FileTime fromFileTime(const FILETIME& fileTime) {
+    const std::uint64_t value = (static_cast<std::uint64_t>(fileTime.dwHighDateTime) << 32) | fileTime.dwLowDateTime;
+    return DestinationFile::FileTime(
+        std::chrono::milliseconds((static_cast<std::int64_t>(value) - kUnixEpochIn100ns) / 10'000));
 }
 
 }  // namespace
@@ -146,11 +170,44 @@ Result<std::uint64_t> DestinationFile::size() const {
     return static_cast<std::uint64_t>(size.QuadPart);
 }
 
+Status DestinationFile::setTimes(std::optional<FileTime> created, std::optional<FileTime> modified,
+                                 std::optional<FileTime> accessed) {
+    if (!isOpen()) {
+        return makeError(ErrorCode::InvalidInput, "destination file is not open");
+    }
+    const std::optional<FILETIME> creation = created.has_value() ? toFileTime(*created) : std::nullopt;
+    const std::optional<FILETIME> lastWrite = modified.has_value() ? toFileTime(*modified) : std::nullopt;
+    const std::optional<FILETIME> lastAccess = accessed.has_value() ? toFileTime(*accessed) : std::nullopt;
+    if (!creation && !lastWrite && !lastAccess) {
+        return success();
+    }
+    if (!::SetFileTime(asHandle(handle_), creation ? &*creation : nullptr, lastAccess ? &*lastAccess : nullptr,
+                       lastWrite ? &*lastWrite : nullptr)) {
+        const DWORD error = ::GetLastError();
+        return destinationError("cannot set the destination file's times", error);
+    }
+    return success();
+}
+
 void DestinationFile::close() noexcept {
     if (handle_ != nullptr) {
         ::CloseHandle(asHandle(handle_));
         handle_ = nullptr;
     }
+}
+
+std::optional<DestinationFile::FileTime> localTimeToUtc(std::chrono::local_time<std::chrono::milliseconds> local) {
+    // The local clock's fields, through FILETIME and SYSTEMTIME, converted by
+    // the time zone's rules for that date (not today's offset).
+    const std::optional<FILETIME> fields = toFileTime(DestinationFile::FileTime(local.time_since_epoch()));
+    SYSTEMTIME localTime{};
+    SYSTEMTIME utcTime{};
+    FILETIME utc{};
+    if (!fields.has_value() || !::FileTimeToSystemTime(&*fields, &localTime) ||
+        !::TzSpecificLocalTimeToSystemTime(nullptr, &localTime, &utcTime) || !::SystemTimeToFileTime(&utcTime, &utc)) {
+        return std::nullopt;
+    }
+    return fromFileTime(utc);
 }
 
 Status replaceFile(const std::filesystem::path& replacement, const std::filesystem::path& target) {

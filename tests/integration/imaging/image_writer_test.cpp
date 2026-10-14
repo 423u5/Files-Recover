@@ -95,6 +95,32 @@ TEST_F(ImageWriterTest, CreatesIdenticalImage) {
     }
 }
 
+Sha256Digest sha256Of(std::span<const std::byte> bytes) {
+    Sha256 hash;
+    hash.update(bytes);
+    return hash.finish();
+}
+
+// L1 (resolved after P20): a complete image gets the SHA-256 of the image
+// file, unreadable sectors as their zeros, in its summary and its metadata.
+TEST_F(ImageWriterTest, ACompleteImageGetsTheSha256OfItsFile) {
+    const Result<ImagingSummary> summary = image(options());
+    RECOVERY_ASSERT_OK(summary);
+    ASSERT_TRUE(summary->sha256.has_value());
+    EXPECT_EQ(*summary->sha256, sha256Of(data_));
+    EXPECT_EQ(*summary->sha256, sha256Of(test::readFile(imagePath_)));
+    EXPECT_EQ(metadata().sha256, summary->sha256);
+
+    std::filesystem::remove(imagePath_);
+    std::filesystem::remove(metadataPathFor(imagePath_));
+    source_.addBadSector(100, MemoryStorageSource::kErrorCrc);
+    const Result<ImagingSummary> damaged = image(options());
+    RECOVERY_ASSERT_OK(damaged);
+    ASSERT_TRUE(damaged->sha256.has_value());
+    EXPECT_EQ(*damaged->sha256, sha256Of(expectedWithZeroedSectors({100})));
+    EXPECT_EQ(metadata().sha256, damaged->sha256);
+}
+
 TEST_F(ImageWriterTest, ReadsSourceSequentiallyInBlocks) {
     RECOVERY_ASSERT_OK(image(options()));
     const std::size_t blocks = (kSourceSize + kBlock - 1) / kBlock;
@@ -362,6 +388,40 @@ TEST_F(ImageWriterResumeTest, ResumeCompletesImageWithoutRereadingDoneBlocks) {
     EXPECT_EQ(metadata().state, ImageState::Completed);
 }
 
+// L1: an image stopped and resumed (twice) gets the same SHA-256 as one made
+// at once; the part written before is read back from the image, not the source.
+TEST_F(ImageWriterResumeTest, AResumedImageGetsTheSameSha256) {
+    const Result<ImagingSummary> first = imageUntil(5 * kBlock);
+    RECOVERY_ASSERT_OK(first);
+    EXPECT_EQ(first->outcome, ImagingOutcome::Cancelled);
+    EXPECT_FALSE(first->sha256.has_value());
+    EXPECT_FALSE(metadata().sha256.has_value());
+
+    CancellationSource cancel;
+    ImagingOptions o = options();
+    o.resume = true;
+    o.cancellation = cancel.token();
+    o.onProgress = [cancel](const ImagingProgress& p) mutable {
+        if (p.bytesCompleted >= 20 * kBlock) {
+            cancel.requestCancellation();
+        }
+    };
+    const Result<ImagingSummary> second = image(std::move(o));
+    RECOVERY_ASSERT_OK(second);
+    EXPECT_EQ(second->outcome, ImagingOutcome::Cancelled);
+    EXPECT_FALSE(second->sha256.has_value());
+
+    const std::size_t readsBefore = source_.readCount();
+    const Result<ImagingSummary> last = resume();
+    RECOVERY_ASSERT_OK(last);
+    EXPECT_EQ(last->outcome, ImagingOutcome::Completed);
+    ASSERT_TRUE(last->sha256.has_value());
+    EXPECT_EQ(*last->sha256, sha256Of(data_));
+    EXPECT_EQ(metadata().sha256, last->sha256);
+    const std::size_t remainingBlocks = (kSourceSize - last->resumedFrom + kBlock - 1) / kBlock;
+    EXPECT_EQ(source_.readCount() - readsBefore, remainingBlocks) << "the hash does not read the source again";
+}
+
 TEST_F(ImageWriterResumeTest, ResumeKeepsBadRegionsFromEarlierRun) {
     source_.addBadSector(5);            // before the cancellation point
     source_.addBadSector(30 * 128 + 1);  // after it (block 30)
@@ -485,6 +545,43 @@ TEST(ImageWriterSafetyTest, ImagesPhysicalDiskToOtherDisk) {
     EXPECT_EQ(m->sourceType, storage::SourceType::PhysicalDisk);
     EXPECT_EQ(m->sourcePath, "\\\\.\\PhysicalDrive4");
     EXPECT_EQ(m->sectorSize, 4096u);
+}
+
+// P20 (I/O failure audit): a disk unplugged while it is imaged fails every
+// read from then on. Imaging stops at once (not sector by sector to the end of
+// the disk), marks the image failed, and resumes once the disk is back.
+TEST(ImageWriterSafetyTest, ADiskThatIsGoneStopsImagingAtOnceAndItResumesWhenBack) {
+    auto config = std::make_shared<test::FakeDeviceConfig>();
+    config->data = test::makePattern(4 * kMiB);
+    config->geometry = test::diskGeometry(config->data.size());
+    config->failingRanges = {{2 * kMiB, 4 * kMiB}};
+    config->failureCode = 1167;  // ERROR_DEVICE_NOT_CONNECTED
+    auto opener = std::make_shared<test::MockDeviceOpener>(config);
+    storage::PhysicalDiskSource source(4, opener);
+    RECOVERY_ASSERT_OK(source.open());
+
+    const test::TempDir dir;
+    ImagingOptions o;
+    o.blockSize = 256 * kKiB;
+    o.diskResolver = [](const std::filesystem::path&) -> Result<std::vector<std::uint32_t>> {
+        return std::vector<std::uint32_t>{0};
+    };
+    const Result<ImagingSummary> stopped = ImageWriter(source, dir / "disk4.img", o).run();
+    ASSERT_FALSE(stopped.ok());
+    EXPECT_EQ(stopped.error().code, ErrorCode::IoError);
+    EXPECT_NE(stopped.error().message.find("removed or is not ready"), std::string::npos) << stopped.error().message;
+    // Eight good blocks and the one that failed: no retries, no sector-by-sector reads.
+    EXPECT_LE(opener->stats()->reads.load(), 9U);
+    Result<ImageMetadata> m = readImageMetadata(metadataPathFor(dir / "disk4.img"));
+    RECOVERY_ASSERT_OK(m);
+    EXPECT_EQ(m->state, ImageState::Failed);
+    EXPECT_EQ(m->bytesCompleted, 2 * kMiB);
+    EXPECT_TRUE(m->badRegions.empty());
+
+    config->failingRanges.clear();
+    o.resume = true;
+    RECOVERY_ASSERT_OK(ImageWriter(source, dir / "disk4.img", o).run());
+    EXPECT_EQ(test::readFile(dir / "disk4.img"), config->data);
 }
 
 TEST(ImageWriterSafetyTest, RefusesToImageFileOntoItself) {

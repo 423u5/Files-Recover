@@ -69,6 +69,9 @@ void printSource(std::ostream& out, const OpenedSource& opened) {
             << '\n';
         out << "  Unreadable:    " << formatBytes(unreadable) << " in " << formatCount(image.badRegions.size())
             << (image.badRegions.size() == 1 ? " region" : " regions") << " (zeros in the image)\n";
+        if (image.sha256.has_value()) {
+            out << "  SHA-256:       " << image.sha256->hex() << " (recorded when imaged)\n";
+        }
     }
 }
 

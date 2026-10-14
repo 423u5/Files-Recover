@@ -23,6 +23,11 @@ storage::DeviceDescription MemoryDeviceIo::describe() {
     return config_->description;
 }
 
+std::optional<bool> MemoryDeviceIo::mediaPresent() {
+    ++stats_->mediaQueries;
+    return config_->mediaPresent;
+}
+
 storage::DeviceReadResult MemoryDeviceIo::readAt(std::uint64_t offset, std::span<std::byte> buffer) {
     ++stats_->reads;
     storage::DeviceReadResult result;

@@ -204,7 +204,9 @@ bool DirectoryParser::feed(std::span<const std::byte> e, std::uint64_t volumeOff
     entry.attributes = {(attributes & kAttrReadOnly) != 0, (attributes & kAttrHidden) != 0,
                         (attributes & kAttrSystem) != 0, (attributes & kAttrArchive) != 0};
     entry.size = loadLe32(e, 28);
-    entry.firstCluster = ClusterNumber{(static_cast<std::uint64_t>(loadLe16(e, 20)) << 16) | loadLe16(e, 26)};
+    // FAT16 entries hold only the low 16 bits (bytes 20-21 are reserved there).
+    const std::uint64_t high = boot_.type == FatType::Fat16 ? 0 : loadLe16(e, 20);
+    entry.firstCluster = ClusterNumber{(high << 16) | loadLe16(e, 26)};
     entry.metadataOffset = volumeOffset;
 
     // Name bytes. A deleted entry's first byte is gone.
@@ -219,13 +221,22 @@ bool DirectoryParser::feed(std::span<const std::byte> e, std::uint64_t volumeOff
         }
     }
 
+    const bool impossibleCluster =
+        entry.firstCluster.value() != 0 && !boot_.isValidCluster(entry.firstCluster.value());
     if (deleted) {
         // Reject slots that are clearly not a former file entry (garbage).
-        if (!nameValid || (attributes & 0xC0) != 0 ||
-            (entry.firstCluster.value() != 0 && !boot_.isValidCluster(entry.firstCluster.value()))) {
+        if (!nameValid || (attributes & 0xC0) != 0 || impossibleCluster) {
             pending_.clear();
             return true;
         }
+    } else if (!nameValid && ((attributes & 0xC0) != 0 || impossibleCluster ||
+                              (!entry.isDirectory && entry.size > boot_.volumeBytes))) {
+        // Not an entry at all: a cluster that holds other data (P20). An
+        // invalid name alone is kept (and reported), as other software may
+        // write one; with a second impossible field the slot is garbage.
+        ++garbageSlots_;
+        pending_.clear();
+        return true;
     } else {
         if (!nameValid) {
             entry.issues.push_back(EntryIssue::InvalidShortName);

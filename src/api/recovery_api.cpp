@@ -5,6 +5,7 @@
 #include "api_sources.hpp"
 #include "conversions.hpp"
 #include "event_dispatcher.hpp"
+#include "formats/archive_formats.hpp"
 #include "formats/audio_formats.hpp"
 #include "formats/image_formats.hpp"
 #include "formats/video_formats.hpp"
@@ -15,6 +16,7 @@
 #include "recovery/version.hpp"
 #include "report/text_format.hpp"
 #include "storage/destination_guard.hpp"
+#include "validation/deflate_decoder.hpp"
 #include "validation/media_validator.hpp"
 #include "validation/windows_playability.hpp"
 
@@ -229,6 +231,7 @@ Result<std::unique_ptr<RecoveryApi>> createRecoveryApi(ApiOptions options, Platf
     for (Status registered : {formats::registerImageFormats(impl->context.formats),
                               formats::registerAudioFormats(impl->context.formats),
                               formats::registerVideoFormats(impl->context.formats),
+                              formats::registerArchiveFormats(impl->context.formats, validation::deflateDecoder()),
                               validation::registerMediaValidators(impl->context.media)}) {
         if (!registered.ok()) {
             return makeError(ErrorCode::InternalError, "cannot register the formats: " + describe(registered.error()));
@@ -398,6 +401,7 @@ Result<ImagingId> RecoveryApi::createImage(const SourceRef& source, const Imagin
                         out.resumedFrom = summary->resumedFrom;
                         out.unreadableBytes = summary->unreadableBytes;
                         out.unreadableRegions = summary->badRegions.size();
+                        out.sha256 = summary->sha256.has_value() ? summary->sha256->hex() : std::string();
                         out.fraction = summary->totalBytes == 0
                                            ? 1.0
                                            : static_cast<double>(std::min(summary->bytesCompleted,

@@ -17,8 +17,24 @@ FatTable::FatTable(storage::IStorageSource& volume, const BootSector& boot, std:
     : volume_(volume),
       boot_(boot),
       pageEntries_(kDefaultPageEntries),
-      sectorEntries_(boot.bytesPerSector / 4U),
+      sectorEntries_(boot.bytesPerSector / boot.fatEntryBytes()),
       maxPages_(std::max<std::size_t>(2, cacheBytes / (kDefaultPageEntries * sizeof(std::uint32_t)))) {}
+
+namespace {
+
+// A FAT16 entry as the FAT32 value of the same meaning: free, next cluster,
+// bad (0xFFF7) and end of chain (0xFFF8 and above).
+std::uint32_t widenFat16(std::uint16_t raw) noexcept {
+    if (raw >= 0xFFF8) {
+        return kEndOfChainMin;
+    }
+    if (raw == 0xFFF7) {
+        return kBadCluster;
+    }
+    return raw;
+}
+
+}  // namespace
 
 FatEntry FatTable::classify(std::uint32_t raw) const noexcept {
     const std::uint32_t value = raw & kEntryMask;
@@ -43,7 +59,7 @@ FatEntry FatTable::classify(std::uint32_t raw) const noexcept {
 std::uint64_t FatTable::entriesInsideVolume(std::uint32_t copy) const noexcept {
     const std::uint64_t start = boot_.fatOffset + copy * boot_.fatBytes;  // < 2^48, cannot overflow
     const std::uint64_t size = volume_.size();
-    const std::uint64_t inside = start >= size ? 0 : (size - start) / 4;
+    const std::uint64_t inside = start >= size ? 0 : (size - start) / boot_.fatEntryBytes();
     return std::min<std::uint64_t>(inside, static_cast<std::uint64_t>(boot_.lastCluster()) + 1);
 }
 
@@ -57,13 +73,14 @@ bool FatTable::readRaw(std::uint32_t copy, std::uint32_t first, std::span<std::u
     if (end > static_cast<std::uint64_t>(boot_.lastCluster()) + 1) {
         return false;
     }
-    const std::uint64_t offset = boot_.fatOffset + copy * boot_.fatBytes + static_cast<std::uint64_t>(first) * 4;
-    std::vector<std::byte> bytes(out.size() * 4);
+    const std::uint32_t width = boot_.fatEntryBytes();
+    const std::uint64_t offset = boot_.fatOffset + copy * boot_.fatBytes + static_cast<std::uint64_t>(first) * width;
+    std::vector<std::byte> bytes(out.size() * width);
     if (!volume_.readExact(ByteOffset{offset}, bytes).ok()) {
         return false;
     }
     for (std::size_t i = 0; i < out.size(); ++i) {
-        out[i] = loadLe32(bytes, i * 4);
+        out[i] = width == 2 ? widenFat16(loadLe16(bytes, i * 2)) : loadLe32(bytes, i * 4);
     }
     return true;
 }

@@ -1,0 +1,20 @@
+# corpus scenario fat32-deleted: FAT32: deleted files with short and long names, a deleted folder
+# image 8422400 bytes, sha256 17bc47012df26572, 8 originals
+# deep scan: 8 candidates
+#1 filesystem complete image/jpeg "/KEEP.JPG" size=19805/19805 valid=valid:passed/passed sha=dff16b59c92d3739 recovery=recovered "KEEP.JPG" => /KEEP.JPG
+#2 hybrid complete image/jpeg "/_ELETED.JPG" size=11659/11659 deleted valid=valid:passed/passed sha=152071b210407ee8 recovery=recovered "_ELETED.JPG" => /_ELETED.JPG
+#3 hybrid complete video/mp4 "/Deleted video.mp4" size=123654/123654 deleted valid=valid:passed/passed sha=bb4ea9955ecd77ee recovery=recovered "Deleted video.mp4" => /Deleted video.mp4
+#4 hybrid complete audio/mp3 "/_EL_SONG.MP3" size=105151/105151 deleted valid=valid:passed/unsupported sha=edfe154ac9b2b3d1 recovery=recovered "_EL_SONG.MP3" => /_EL_SONG.MP3
+#5 hybrid complete audio/wav "/Old recording.wav" size=120100/120100 deleted valid=valid:passed/not-applicable sha=4ba8c97e99a62d7e recovery=recovered "Old recording.wav" => /Old recording.wav
+#6 filesystem complete image/gif "/AFTER.GIF" size=5964/5964 valid=valid:passed/passed sha=b3fc8c4ef5071eb5 recovery=recovered "AFTER.GIF" => /AFTER.GIF
+#7 hybrid complete image/jpeg "/Old trip/Beach day.jpg" size=8207/8207 deleted valid=valid:passed/passed sha=47443fd881033091 recovery=recovered "Old trip/Beach day.jpg" => /Old trip/Beach day.jpg
+#8 hybrid complete image/png "/Old trip/_EA.PNG" size=37207/37207 deleted valid=valid:passed/passed sha=99127fa574fe98c5 recovery=recovered "Old trip/_EA.PNG" => /Old trip/_EA.PNG
+# quick scan: 8 candidates
+#1 filesystem complete image/jpeg "/KEEP.JPG" size=19805/19805 valid=valid:passed/passed sha=dff16b59c92d3739 recovery=recovered "KEEP.JPG" => /KEEP.JPG
+#2 hybrid complete image/jpeg "/_ELETED.JPG" size=11659/11659 deleted valid=valid:passed/passed sha=152071b210407ee8 recovery=recovered "_ELETED.JPG" => /_ELETED.JPG
+#3 hybrid complete video/mp4 "/Deleted video.mp4" size=123654/123654 deleted valid=valid:passed/passed sha=bb4ea9955ecd77ee recovery=recovered "Deleted video.mp4" => /Deleted video.mp4
+#4 hybrid complete audio/mp3 "/_EL_SONG.MP3" size=105151/105151 deleted valid=valid:passed/unsupported sha=edfe154ac9b2b3d1 recovery=recovered "_EL_SONG.MP3" => /_EL_SONG.MP3
+#5 hybrid complete audio/wav "/Old recording.wav" size=120100/120100 deleted valid=valid:passed/not-applicable sha=4ba8c97e99a62d7e recovery=recovered "Old recording.wav" => /Old recording.wav
+#6 filesystem complete image/gif "/AFTER.GIF" size=5964/5964 valid=valid:passed/passed sha=b3fc8c4ef5071eb5 recovery=recovered "AFTER.GIF" => /AFTER.GIF
+#7 hybrid complete image/jpeg "/Old trip/Beach day.jpg" size=8207/8207 deleted valid=valid:passed/passed sha=47443fd881033091 recovery=recovered "Old trip/Beach day.jpg" => /Old trip/Beach day.jpg
+#8 hybrid complete image/png "/Old trip/_EA.PNG" size=37207/37207 deleted valid=valid:passed/passed sha=99127fa574fe98c5 recovery=recovered "Old trip/_EA.PNG" => /Old trip/_EA.PNG

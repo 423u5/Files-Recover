@@ -31,6 +31,7 @@
 #include "validation/playability.hpp"
 
 #include <chrono>
+#include <functional>
 
 namespace recovery::validation {
 
@@ -40,6 +41,13 @@ struct WindowsPlayabilityOptions {
     // streams they do not support, such as AVC High 4:2:2) makes the result
     // Unsupported: nothing is decided about the file.
     std::chrono::milliseconds sampleTimeout{10'000};
+    // Whether Media Foundation is installed. Windows N editions have no
+    // mfplat.dll unless the Media Feature Pack is installed: audio and video
+    // are then Unsupported (images still go to the Windows Imaging
+    // Component). The executables delay-load Media Foundation, so they start
+    // without it. Empty (the default): mfplat.dll and mfreadwrite.dll are
+    // loaded once, from System32 only, and kept.
+    std::function<bool()> mediaFoundationInstalled;
 };
 
 // InvalidInput when the timeout is not positive.

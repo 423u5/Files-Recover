@@ -12,7 +12,8 @@ failed and where (`include/validation/validation.hpp`):
 
 A level ends in `Passed`, `Truncated`, `Failed`, `NotApplicable` (nothing is coded at this level: uncompressed
 pixels, PCM), `Unsupported` (no checker for this content, a coding feature not decoded, a limit, no platform decoder)
-or `NotRun` (not asked for, or an earlier level failed). The media level also says whether every coded element was
+or `NotRun` (not asked for, or an earlier level failed). A structural validator that ran but could not check the
+content (it says `NotValidated`: an encrypted ZIP member) makes the structural level `Unsupported`. The media level also says whether every coded element was
 checked (`Coverage::Full`) or only part of it (`Partial`: the headers of lossy codecs). Nothing is a score: the
 overall status follows from the levels, first match wins: `Invalid` when a level failed, `Truncated` when one found
 the content cut short, `Valid` when the structure passed, `NotValidated` otherwise.
@@ -38,6 +39,7 @@ it accepts passes.
 | MP3 | not decoded: `Unsupported` (the structural validator already checks side info and the bit reservoir) | — | — |
 | AAC (ADTS) | every frame's raw data block as far as it can be read without the Huffman tables (section data, and whole channel streams of the zero codebook), the CRC of protected frames | partial | libfdk-aac, FFmpeg |
 | M4A, MP4 | every sample of every audio and video track, with its sample description's configuration: AAC samples as raw data blocks; AVC (`avcC`) and HEVC (`hvcC`) parameter sets and every slice header; every NAL unit scanned for the byte sequences it may not hold | partial | FFmpeg 6.1 |
+| ZIP | nothing of its own: `NotApplicable`. The structural level decodes every member (stored by CRC-32, DEFLATE by the inflater of PNG) and checks its CRC-32 ([archives.md](archives.md)) | — | Python's `zipfile` |
 
 ### AAC
 

@@ -1,0 +1,12 @@
+# corpus scenario bad-regions: FAT32 image with unreadable regions recorded by imaging
+# image 8422400 bytes, sha256 236a5ddd842b52de, 4 originals
+# deep scan: 4 candidates
+#1 filesystem corrupted(validation-failed,data-unreadable) image/jpeg "/PHOTO.JPG" size=19297/19297 valid=invalid:passed/failed sha=033a9f51687b1905 unreadable=8192 recovery=recovered(incomplete) "PHOTO.JPG"
+#2 filesystem complete video/mp4 "/CLIP.MP4" size=155918/155918 valid=valid:passed/passed sha=37e0ba2f75ef9389 recovery=recovered "CLIP.MP4" => /CLIP.MP4
+#3 filesystem corrupted(validation-failed,data-unreadable) image/png "/PICTURE.PNG" size=58027/58027 valid=invalid:failed/not-run sha=91728b6bd91f86ae unreadable=4096 recovery=recovered(incomplete) "PICTURE.PNG"
+#4 filesystem complete audio/wav "/RECORD.WAV" size=120100/120100 valid=valid:passed/not-applicable sha=73c5c680e656cf55 recovery=recovered "RECORD.WAV" => /RECORD.WAV
+# quick scan: 4 candidates
+#1 filesystem corrupted(validation-failed,data-unreadable) image/jpeg "/PHOTO.JPG" size=19297/19297 valid=invalid:passed/failed sha=033a9f51687b1905 unreadable=8192 recovery=recovered(incomplete) "PHOTO.JPG"
+#2 filesystem complete video/mp4 "/CLIP.MP4" size=155918/155918 valid=valid:passed/passed sha=37e0ba2f75ef9389 recovery=recovered "CLIP.MP4" => /CLIP.MP4
+#3 filesystem corrupted(validation-failed,data-unreadable) image/png "/PICTURE.PNG" size=58027/58027 valid=invalid:failed/not-run sha=91728b6bd91f86ae unreadable=4096 recovery=recovered(incomplete) "PICTURE.PNG"
+#4 filesystem complete audio/wav "/RECORD.WAV" size=120100/120100 valid=valid:passed/not-applicable sha=73c5c680e656cf55 recovery=recovered "RECORD.WAV" => /RECORD.WAV

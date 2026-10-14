@@ -126,13 +126,15 @@ narrow that down, and every one given must match:
 | Option | Selects |
 | --- | --- |
 | `--ids LIST` | Candidate ids and ranges, as the report shows them: `4`, `1,4-9,12` |
-| `--kind LIST` | `image`, `audio`, `video`, `other` (no format known) |
+| `--kind LIST` | `image`, `audio`, `video`, `archive` (ZIP and the formats built on it), `other` (no format known) |
 | `--condition LIST` | `complete`, `unverified`, `corrupted`, `partial`, `unrecoverable`, `ambiguous` (P17's conditions) |
 | `--skip-duplicates` | Leaves out candidates whose content an earlier candidate has |
 
 The scan must be complete. Files are written by P15's `RecoveryJob` as recovery jobs of the session (P16), with
 P7's naming: original names and folders where the filesystem knows them, `recovered_NNNNNN.ext` for carved files,
-`" (1)"`, `" (2)"`, ... for names taken, and nothing overwritten. An image's known unreadable regions are passed on
+`" (1)"`, `" (2)"`, ... for names taken, and nothing overwritten. P20: when the scan found files on more than one
+volume of the source (a disk with several partitions), each volume's files go below a folder of its own,
+`Volume N (FS, LABEL)`, so that their trees are not merged. An image's known unreadable regions are passed on
 (`ReconstructionOptions::knownBadRegions`): their bytes are written as zeros and reported as unreadable.
 
 For one output folder the command converges:

@@ -10,6 +10,7 @@
 //    StorageAccessAlignmentProperty (optional; older drivers do not report it).
 
 #include "storage/device_io.hpp"
+#include "storage/storage_source.hpp"
 
 #include "recovery/text.hpp"
 #include "win32.hpp"
@@ -109,6 +110,17 @@ public:
         }
         result.success = true;
         return result;
+    }
+
+    std::optional<bool> mediaPresent() override {
+        if (kind_ != DeviceKind::PhysicalDisk) {
+            return std::nullopt;
+        }
+        // A query for whether the media is accessible: nothing is read or written.
+        DWORD returned = 0;
+        const bool checked = ::DeviceIoControl(handle_.get(), IOCTL_STORAGE_CHECK_VERIFY2, nullptr, 0, nullptr, 0,
+                                               &returned, nullptr) != FALSE;
+        return mediaPresenceFromCheck(checked, checked ? 0 : ::GetLastError());
     }
 
 private:

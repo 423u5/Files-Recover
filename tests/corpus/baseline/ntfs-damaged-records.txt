@@ -1,0 +1,12 @@
+# corpus scenario ntfs-damaged-records: NTFS: a torn FILE record, a damaged $MFT record, a run list beyond the volume
+# image 8389120 bytes, sha256 21d2c34406ad3f41, 4 originals
+# deep scan: 5 candidates
+#1 filesystem complete image/jpeg "/good.jpg" size=13545/13545 valid=valid:passed/passed sha=f5f2d306f3db9348 recovery=recovered "good.jpg" => /good.jpg
+#2 filesystem unrecoverable(nothing-located,data-missing,not-validated) other/- "/bad runs.png" size=0/37207 valid=not-validated:unsupported/not-run sha=e3b0c44298fc1c14 recovery=failed
+#3 filesystem complete audio/mp3 "/song.mp3" size=63355/63355 valid=valid:passed/unsupported sha=7841e915377f3959 recovery=recovered "song.mp3" => /song.mp3
+#4 carving complete video/mp4 "recovered_000004.mp4" size=153460/153460 valid=valid:passed/passed sha=9a20c4d4a749e560 recovery=recovered "recovered_000004.mp4" => /torn record.mp4
+#5 carving complete image/png "recovered_000005.png" size=37207/37207 valid=valid:passed/passed sha=688ea4a124e515d8 recovery=recovered "recovered_000005.png" => /bad runs.png
+# quick scan: 3 candidates
+#1 filesystem complete image/jpeg "/good.jpg" size=13545/13545 valid=valid:passed/passed sha=f5f2d306f3db9348 recovery=recovered "good.jpg" => /good.jpg
+#2 filesystem unrecoverable(nothing-located,data-missing,not-validated) other/- "/bad runs.png" size=0/37207 valid=not-validated:unsupported/not-run sha=e3b0c44298fc1c14 recovery=failed
+#3 filesystem complete audio/mp3 "/song.mp3" size=63355/63355 valid=valid:passed/unsupported sha=7841e915377f3959 recovery=recovered "song.mp3" => /song.mp3

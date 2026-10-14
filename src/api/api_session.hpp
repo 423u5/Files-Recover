@@ -2,8 +2,8 @@
 
 // A session open in the API (P19): the engine's RecoverySession (P16), the
 // operation that runs in it on a thread of the API's, and what a user
-// interface asks of it, kept ready: every candidate as a list shows it, and
-// what recovery jobs did with each, both kept up to date by the session's
+// interface asks of it, kept ready: every candidate as a filter selects it,
+// and what recovery jobs did with each, both kept up to date by the session's
 // update hooks as the scan and the jobs record their updates.
 //
 // Locks, in the order they may be taken: opMutex_ (the operation's state),
@@ -37,6 +37,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace recovery::api::detail {
@@ -61,6 +62,16 @@ struct ApiContext {
     std::size_t liveSessions = 0;
     // The API is going: no operation starts any more.
     std::atomic<bool> closing{false};
+};
+
+// What a filter (CandidateFilter) asks of a candidate. The index keeps this
+// much of each: a whole CandidateInfo is made from the session's candidate
+// when one is asked for (L212: memory per file found).
+struct CandidateIndexEntry {
+    MediaKind kind = MediaKind::Other;
+    Condition condition = Condition::Complete;
+    bool deleted = false;
+    bool duplicate = false;
 };
 
 // Which candidates a recovery request names.
@@ -189,6 +200,11 @@ private:
     // ---- Queries ----
     [[nodiscard]] Progress idleProgressLocked() const;
     [[nodiscard]] CandidateInfo withRecovery(CandidateInfo info, const std::vector<RecoveryRecord>& records) const;
+    // The candidates at these indexes (id - 1, ascending) as a list shows
+    // them, each with its recovery records; taken from the session a few at
+    // a time.
+    [[nodiscard]] Result<std::vector<CandidateInfo>> describeIndexed(
+        const std::vector<std::pair<std::size_t, std::vector<RecoveryRecord>>>& chosen) const;
     [[nodiscard]] Result<metadata::MediaMetadata> mediaOf(const evaluation::EvaluatedCandidate& candidate) const;
 
     LiveToken live_;
@@ -200,10 +216,10 @@ private:
     bool playability_ = false;
     std::vector<storage::BadRegion> knownBadRegions_;
 
-    // Every candidate as a list shows it (recovery fields not set), and what
-    // each recovery job did with it, by candidate (id - 1). Under indexMutex_.
+    // Every candidate as a filter selects it, and what each recovery job did
+    // with it, by candidate (id - 1). Under indexMutex_.
     mutable std::mutex indexMutex_;
-    std::vector<CandidateInfo> index_;
+    std::vector<CandidateIndexEntry> index_;
     std::vector<std::vector<RecoveryRecord>> recoveries_;
 
     // The operation. Under opMutex_.

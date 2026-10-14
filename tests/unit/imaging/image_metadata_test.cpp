@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <string>
 
 namespace recovery::imaging {
@@ -110,8 +111,48 @@ INSTANTIATE_TEST_SUITE_P(
         MalformedCase{"BadRegionZeroLength", "bad_region=4096,512,23", "bad_region=4096,0,23"},
         MalformedCase{"BadRegionOverflow", "bad_region=4096,512,23", "bad_region=18446744073709551615,2,23"},
         MalformedCase{"BadRegionOutsideSource", "bad_region=4096,512,23", "bad_region=8388608,512,23"},
-        MalformedCase{"LineTooLong", "engine_version=0.1.0", "engine_version=" + std::string(5000, 'x')}),
+        MalformedCase{"LineTooLong", "engine_version=0.1.0", "engine_version=" + std::string(5000, 'x')},
+        // P20 (fuzzing): what the writer refuses, the reader refuses too.
+        MalformedCase{"NulInValue", "engine_version=0.1.0", std::string("engine_version=0.1" "\0" ".0", 21)},
+        MalformedCase{"CarriageReturnInValue", "engine_version=0.1.0", "engine_version=0.1\r.0"}),
     [](const auto& info) { return std::string(info.param.name); });
+
+// L1 (resolved after P20): a complete image's SHA-256 round-trips; older
+// metadata has none; one that is not 64 hexadecimal digits, or for an image
+// that is not complete, is refused.
+TEST(ImageMetadataTest, TheSha256OfACompleteImageRoundTrips) {
+    ImageMetadata complete = sampleMetadata();
+    complete.state = ImageState::Completed;
+    complete.bytesCompleted = complete.sourceSize;
+    std::array<std::uint8_t, Sha256Digest::kSize> bytes{};
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+        bytes[i] = static_cast<std::uint8_t>(i * 7 + 1);
+    }
+    complete.sha256 = Sha256Digest(bytes);
+    const std::string hex = complete.sha256->hex();
+    const std::string text = serialized(complete);
+    EXPECT_NE(text.find("\nsha256=" + hex + "\n"), std::string::npos) << text;
+    const Result<ImageMetadata> parsed = parseImageMetadata(text);
+    RECOVERY_ASSERT_OK(parsed);
+    EXPECT_EQ(parsed->sha256, complete.sha256);
+
+    const Result<ImageMetadata> older = parseImageMetadata(serialized(sampleMetadata()));
+    RECOVERY_ASSERT_OK(older);
+    EXPECT_FALSE(older->sha256.has_value());
+
+    for (const std::string& bad : {hex.substr(1), hex + "0", "g" + hex.substr(1), "+" + hex.substr(1),
+                                   hex.substr(0, 62) + "-1", std::string()}) {
+        SCOPED_TRACE(bad);
+        std::string broken = text;
+        broken.replace(broken.find(hex), hex.size(), bad);
+        RECOVERY_EXPECT_ERROR(parseImageMetadata(broken), ErrorCode::InvalidFormat);
+    }
+    const std::string completed = "state=" + std::string(toString(ImageState::Completed));
+    std::string incomplete = text;
+    incomplete.replace(incomplete.find(completed), completed.size(),
+                       "state=" + std::string(toString(ImageState::Cancelled)));
+    RECOVERY_EXPECT_ERROR(parseImageMetadata(incomplete), ErrorCode::InvalidFormat);
+}
 
 TEST(ImageMetadataTest, RejectsOversizedInput) {
     const std::string huge(kMaxMetadataBytes + 1, '#');

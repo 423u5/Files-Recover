@@ -1,5 +1,6 @@
 #include "session/recovery_session.hpp"
 
+#include "filesystem/filesystem.hpp"
 #include "recovery/text.hpp"
 #include "recovery/version.hpp"
 
@@ -9,11 +10,14 @@
 #include <condition_variable>
 #include <exception>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <random>
 #include <set>
 #include <span>
+#include <string>
 #include <system_error>
 #include <utility>
 
@@ -999,6 +1003,75 @@ Result<std::uint32_t> RecoverySession::addRecoveryJob(const std::filesystem::pat
     return job;
 }
 
+namespace {
+
+// P20: when the scan's candidates lie on more than one volume, the folder each
+// candidate's file goes to below the destination: "Volume 2 (exFAT, EXVOL)",
+// or "Outside the volumes" for a file found by its content where no volume
+// lies. Unset (no folders) when they all lie on one, as on most cards.
+std::function<std::string(const evaluation::EvaluatedCandidate&)> volumeFolders(
+    const std::vector<scan::VolumeRecord>& volumes, std::span<const evaluation::EvaluatedCandidate> candidates) {
+    struct Place {
+        std::uint64_t begin = 0;
+        std::uint64_t end = 0;
+        std::string folder;
+    };
+    std::vector<Place> places;
+    for (std::size_t i = 0; i < volumes.size(); ++i) {
+        const scan::VolumeRecord& volume = volumes[i];
+        std::string folder = "Volume " + std::to_string(i + 1);
+        if (volume.filesystem.has_value()) {
+            folder += " (" + std::string(filesystem::toString(*volume.filesystem));
+            if (volume.candidates.has_value() && !volume.candidates->filesystemInfo.label.empty()) {
+                folder += ", " + volume.candidates->filesystemInfo.label;
+            }
+            folder += ")";
+        }
+        const std::uint64_t end = volume.size > UINT64_MAX - volume.offset ? UINT64_MAX : volume.offset + volume.size;
+        places.push_back(Place{volume.offset, end, std::move(folder)});
+    }
+    auto folderOf = [places = std::move(places)](const evaluation::EvaluatedCandidate& candidate) -> std::string {
+        // A file the metadata knows lies on its volume, even when nothing of it was located.
+        const std::optional<std::uint64_t> at =
+            candidate.hasFilesystemEvidence()
+                ? std::optional<std::uint64_t>(candidate.data.filesystemEvidence.volumeOffset)
+                : candidate.sourceOffset();
+        if (at.has_value()) {
+            for (const Place& place : places) {
+                if (*at >= place.begin && *at < place.end) {
+                    return place.folder;
+                }
+            }
+        }
+        return "Outside the volumes";
+    };
+    std::set<std::string> used;
+    for (const evaluation::EvaluatedCandidate& candidate : candidates) {
+        used.insert(folderOf(candidate));
+        if (used.size() > 1) {
+            return folderOf;
+        }
+    }
+    return {};
+}
+
+// Whether `path` (UTF-8, as RecoveredFile::path) names something below
+// `folder`, both absolute and normal as the session and the writer make them.
+bool isBelow(const std::string& path, const std::filesystem::path& folder) {
+    Result<std::filesystem::path> file = fromUtf8(path);
+    if (!file.ok()) {
+        return false;
+    }
+    const std::filesystem::path relative = file->lexically_normal().lexically_relative(folder.lexically_normal());
+    if (relative.empty() || relative.is_absolute()) {
+        return false;
+    }
+    const std::filesystem::path first = *relative.begin();
+    return first != ".." && first != ".";
+}
+
+}  // namespace
+
 Result<scan::RecoveryJobSummary> RecoverySession::runRecovery(std::uint32_t job, storage::IStorageSource& source,
                                                               scan::RecoveryJobOptions options) {
     Impl& s = *impl_;
@@ -1058,12 +1131,19 @@ Result<scan::RecoveryJobSummary> RecoverySession::runRecovery(std::uint32_t job,
         return fail(destinationPath.error());
     }
     // Files an interrupted run began and did not finish: removed, so that the
-    // job writes them again under the names they had.
+    // job writes them again under the names they had. Only below the job's
+    // destination (P20 security review): the journal names them, and a damaged
+    // or foreign journal must not make a resume delete a file elsewhere.
     std::map<std::uint64_t, std::uint64_t> expectedSizes;
     for (const evaluation::EvaluatedCandidate& item : todo) {
         expectedSizes[item.id.value()] = item.data.expectedSize;
     }
     for (const auto& [candidate, path] : leftovers) {
+        if (!isBelow(path, *destinationPath)) {
+            s.log(LogLevel::Warning, "left alone: the journal names a file begun outside the job's destination",
+                  {field("path", path), field("destination", destination)});
+            continue;
+        }
         if (Status removed = s.removeLeftover(path, expectedSizes[candidate]); !removed.ok()) {
             return fail(removed.error());
         }
@@ -1079,6 +1159,12 @@ Result<scan::RecoveryJobSummary> RecoverySession::runRecovery(std::uint32_t job,
     options.onFileCreated = [&s, job](evaluation::EvaluatedCandidateId candidate, const std::filesystem::path& path) {
         return s.fileStarted(job, candidate, path);
     };
+    {
+        // The scan's candidates as a whole decide, not the job's: every job
+        // into one folder lays the volumes out the same way.
+        const std::lock_guard lock(s.mutex);
+        options.folderOf = volumeFolders(s.checkpoint.volumes(), s.candidates);
+    }
     Result<scan::RecoveryJobSummary> result = makeError(ErrorCode::InternalError, "session: the job did not run");
     {
         scan::RecoveryJob recovery(source, *destinationPath, std::move(options));

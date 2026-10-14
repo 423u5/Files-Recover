@@ -169,7 +169,9 @@ A crash while a file is written (L140): the session records each file as soon as
 and before any of its data is written (`FileStarted`, flushed; P7's `FileCreatedCallback`, passed through P15's
 `RecoveryJobOptions::onFileCreated`). A file whose candidate no update says is done may be incomplete. Before the
 job resumes, the session removes it if it is still a regular file no larger than the candidate's expected size (it
-cannot be anything else the job wrote). The job then writes it again, under the same name. The window this leaves:
+cannot be anything else the job wrote) and lies below the job's destination (P20 security review: the path comes
+from the journal, and a damaged or foreign journal must not make a resume delete a file elsewhere; such a file is
+left alone with a warning, L201). The job then writes it again, under the same name. The window this leaves:
 a crash between the file's creation and the flush of its record leaves an empty file the session does not know of,
 and the job writes the candidate under the next free name (L148).
 
@@ -217,8 +219,9 @@ scan's sink and progress callback run on the scan's thread and take no lock the 
 
 ## Memory and disk
 
-Memory: a session holds what P15's caller holds: the scan's checkpoint (every stage's results, L139) and every
-evaluated candidate. Opening a session builds them from the journal (L145).
+Memory: a session holds what P15's caller holds: the scan's checkpoint (every stage's results, L139; the volumes'
+candidates are shared with the coordinator's own checkpoint) and every evaluated candidate (about 1 KB each, plus its
+names and regions: L212). Opening a session builds them from the journal (L145).
 
 Disk: the journal holds every update (L144). Its size is about the scan's results: the volumes' candidates, carves,
 MP4 and fragment candidates, the evaluated candidates, and a few hundred bytes per pass update. On the scan tests'

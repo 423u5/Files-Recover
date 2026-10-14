@@ -3,6 +3,7 @@
 #include "recovery/checked_math.hpp"
 #include "storage/destination_file.hpp"
 
+#include <array>
 #include <charconv>
 #include <concepts>
 #include <format>
@@ -34,6 +35,21 @@ Error formatError(std::size_t line, std::string message) {
 
 bool hasLineBreakOrNul(std::string_view value) {
     return value.find_first_of(std::string_view("\r\n\0", 3)) != std::string_view::npos;
+}
+
+// 64 hexadecimal digits, as Sha256Digest::hex() writes them.
+std::optional<Sha256Digest> parseDigest(std::string_view text) {
+    if (text.size() != 2 * Sha256Digest::kSize) {
+        return std::nullopt;
+    }
+    std::array<std::uint8_t, Sha256Digest::kSize> bytes{};
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+        const auto [end, ec] = std::from_chars(text.data() + 2 * i, text.data() + 2 * i + 2, bytes[i], 16);
+        if (ec != std::errc{} || end != text.data() + 2 * i + 2) {
+            return std::nullopt;
+        }
+    }
+    return Sha256Digest(bytes);
 }
 
 Result<storage::BadRegion> parseBadRegion(std::string_view value) {
@@ -114,6 +130,9 @@ Result<std::string> serializeImageMetadata(const ImageMetadata& m) {
     put("bytes_completed", std::to_string(m.bytesCompleted));
     put("started_utc", m.startedUtc);
     put("updated_utc", m.updatedUtc);
+    if (m.sha256.has_value()) {
+        put("sha256", m.sha256->hex());
+    }
     for (const storage::BadRegion& region : m.badRegions) {
         out += std::format("bad_region={},{},{}\n", region.offset, region.length, region.errorCode);
     }
@@ -154,6 +173,11 @@ Result<ImageMetadata> parseImageMetadata(std::string_view text) {
         }
         const std::string_view key = line.substr(0, equals);
         const std::string_view value = line.substr(equals + 1);
+        // What serializeImageMetadata refuses to write is not metadata it
+        // wrote (P20: found by fuzzing, a NUL inside a value).
+        if (hasLineBreakOrNul(value)) {
+            return formatError(lineNumber, "a value holds a line break or a NUL character");
+        }
 
         if (key == "bad_region") {
             if (++regionLines > kMaxMetadataBadRegions) {
@@ -217,6 +241,12 @@ Result<ImageMetadata> parseImageMetadata(std::string_view text) {
             m.startedUtc = value;
         } else if (key == "updated_utc") {
             m.updatedUtc = value;
+        } else if (key == "sha256") {
+            const std::optional<Sha256Digest> digest = parseDigest(value);
+            if (!digest.has_value()) {
+                return formatError(lineNumber, "invalid sha256 (64 hexadecimal digits expected)");
+            }
+            m.sha256 = *digest;
         }
         // Unknown keys are ignored so newer engines can add optional fields.
         if (!parsed.ok()) {
@@ -239,6 +269,9 @@ Result<ImageMetadata> parseImageMetadata(std::string_view text) {
     }
     if (m.sourceSize > storage::kMaxAddressableOffset || m.bytesCompleted > m.sourceSize) {
         return makeError(ErrorCode::InvalidFormat, "image metadata progress exceeds the source size");
+    }
+    if (m.sha256.has_value() && m.state != ImageState::Completed) {
+        return makeError(ErrorCode::InvalidFormat, "image metadata holds a SHA-256 for an image that is not complete");
     }
     m.badRegions = regions.regions();
     for (const storage::BadRegion& region : m.badRegions) {
