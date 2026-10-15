@@ -74,8 +74,10 @@ bool CarveSkipState::skips(const SignatureHit& hit) const noexcept {
 }
 
 void CarveSkipState::record(const SignatureHit& hit, const FileCandidate& candidate) {
-    if (candidate.end.status == EndStatus::Found && candidate.validation.status == ValidationStatus::Valid &&
-        candidate.sourceEnd() > trusted.end) {
+    const bool trusts = hit.format == nullptr ? candidate.end.status == EndStatus::Found &&
+                                                    candidate.validation.status == ValidationStatus::Valid
+                                              : isTrusted(candidate, hit.format->descriptor());
+    if (trusts && candidate.sourceEnd() > trusted.end) {
         trusted = Interval{candidate.sourceOffset, candidate.sourceEnd()};
     }
     if (hit.format != nullptr && hit.format->descriptor().selfSynchronizing) {
@@ -225,7 +227,12 @@ Result<CarveOutcome> FileCarver::carveValidated(const SignatureHit& hit) {
     // Extraction: the only strategy so far is one contiguous piece.
     FileCandidate candidate;
     candidate.formatId = descriptor.id;
-    candidate.extension = descriptor.extension;
+    // The content may say more than the format (a ZIP archive that is a DOCX).
+    if (isValidExtension(end->extension)) {
+        candidate.extension = std::move(end->extension);
+    } else {
+        candidate.extension = descriptor.extension;
+    }
     candidate.sourceOffset = hit.fileOffset;
     candidate.length = end->length;
     candidate.extraction = descriptor.extraction;

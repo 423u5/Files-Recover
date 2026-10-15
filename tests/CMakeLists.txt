@@ -22,6 +22,7 @@ add_library(recovery_test_support STATIC
     support/candidate_helpers.cpp
     support/card_fixtures.cpp
     support/carving_formats.cpp
+    support/document_samples.cpp
     support/exfat_builder.cpp
     support/fake_device.cpp
     support/fat32_builder.cpp
@@ -32,7 +33,9 @@ add_library(recovery_test_support STATIC
     support/mp4_builders.cpp
     support/mp4_samples.cpp
     support/ntfs_builder.cpp
+    support/ole2_builders.cpp
     support/partition_builder.cpp
+    support/pdf_builders.cpp
     support/test_files.cpp
     support/virtual_source.cpp
     support/zip_builders.cpp
@@ -213,13 +216,17 @@ gtest_discover_tests(recovery_carving_tests
 # boxes, false signatures, fragmentation, mutation fuzzing, and carving whole
 # images with every format registered. The MP4 parser (P11) on builder files
 # of every layout and on files from FFmpeg, GPAC and Media Foundation. ZIP on
-# archives Python's zipfile wrote, with the validation library's decoder.
+# archives Python's zipfile wrote, with the validation library's decoder. PDF
+# and OLE2 compound files on builder documents and on documents Edge,
+# Microsoft Print to PDF, Windows' structured storage, Windows Installer and
+# qpdf wrote; DocumentReferenceTest on folders of other documents.
 # ---------------------------------------------------------------------------
 add_executable(recovery_formats_tests
     formats/aac_format_test.cpp
     formats/audio_carving_test.cpp
     formats/audio_reference_test.cpp
     formats/bmp_format_test.cpp
+    formats/document_reference_test.cpp
     formats/format_test_helpers.cpp
     formats/format_test_helpers.hpp
     formats/gif_format_test.cpp
@@ -236,6 +243,8 @@ add_executable(recovery_formats_tests
     formats/mp4_reference_test.cpp
     formats/mp4_test_helpers.cpp
     formats/mp4_test_helpers.hpp
+    formats/ole2_format_test.cpp
+    formats/pdf_format_test.cpp
     formats/png_format_test.cpp
     formats/video_carving_test.cpp
     formats/wav_format_test.cpp

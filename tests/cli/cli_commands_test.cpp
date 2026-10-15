@@ -423,6 +423,35 @@ TEST_F(CliCommandsTest, RecoverFilters) {
     EXPECT_EQ(info.jobs.size(), 6u);
 }
 
+TEST_F(CliCommandsTest, RecoverTellsDocumentsFromArchives) {
+    // Named documents and archives, and an orphan DOCX that only carving
+    // finds: its members name it.
+    const ::recovery::test::DocumentCard documentCard = ::recovery::test::documentCard();
+    const Bytes& orphan = documentCard.orphan;
+    const std::filesystem::path card = test::writeImage(dir.path() / "documents.img", documentCard.image);
+    const std::string id = scan(card);
+
+    const auto recover = [&](std::string_view folder, std::string_view kinds) {
+        const CliResult result = cli.run(
+            {"recover", "--session", id, "--output", arg(dir.path() / folder), "--kind", std::string(kinds)});
+        EXPECT_EQ(result.code, ExitCode::Success) << result;
+        std::set<std::string> names;
+        for (const auto& [name, bytes] : test::filesBelow(dir.path() / folder)) {
+            names.insert(name);
+        }
+        return names;
+    };
+    std::set<std::string> documents = recover("documents", "document");
+    const auto carved = std::find_if(documents.begin(), documents.end(),
+                                     [](const std::string& name) { return name.starts_with("recovered_"); });
+    ASSERT_NE(carved, documents.end());
+    EXPECT_TRUE(carved->ends_with(".docx")) << *carved;
+    EXPECT_TRUE(test::filesBelow(dir.path() / "documents").at(*carved) == orphan);
+    documents.erase(carved);
+    EXPECT_EQ(documents, (std::set<std::string>{"BOOK.DOCX", "LETTER.DOC", "REPORT.PDF"}));
+    EXPECT_EQ(recover("archives", "archive"), (std::set<std::string>{"APP.APK", "NOTES.ZIP"}));
+}
+
 TEST_F(CliCommandsTest, EachFolderGetsItsOwnCopy) {
     const std::string id = scan(image);
     for (const std::string_view folder : {"first", "second"}) {

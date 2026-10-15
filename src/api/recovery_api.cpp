@@ -7,6 +7,7 @@
 #include "event_dispatcher.hpp"
 #include "formats/archive_formats.hpp"
 #include "formats/audio_formats.hpp"
+#include "formats/document_formats.hpp"
 #include "formats/image_formats.hpp"
 #include "formats/video_formats.hpp"
 #include "imaging/image_metadata.hpp"
@@ -232,6 +233,7 @@ Result<std::unique_ptr<RecoveryApi>> createRecoveryApi(ApiOptions options, Platf
                               formats::registerAudioFormats(impl->context.formats),
                               formats::registerVideoFormats(impl->context.formats),
                               formats::registerArchiveFormats(impl->context.formats, validation::deflateDecoder()),
+                              formats::registerDocumentFormats(impl->context.formats, validation::deflateDecoder()),
                               validation::registerMediaValidators(impl->context.media)}) {
         if (!registered.ok()) {
             return makeError(ErrorCode::InternalError, "cannot register the formats: " + describe(registered.error()));
@@ -387,6 +389,9 @@ Result<ImagingId> RecoveryApi::createImage(const SourceRef& source, const Imagin
                     state = OperationState::Failed;
                     error = makeError(ErrorCode::InternalError, std::string("the imaging stopped: ") + e.what());
                 }
+                // The source is closed before the end is told (L241): the
+                // card can be taken out at once.
+                shared->source.reset();
                 Progress final;
                 {
                     const std::lock_guard lock(raw->mutex);

@@ -639,6 +639,13 @@ Result<FragmentSeedExamination> RunState::examineSeed(std::size_t v, std::size_t
             return examination;
         }
     }
+    if (!format->descriptor().trustValidFiles) {
+        // Its structure checks none of its data (OLE2): any layout that keeps
+        // the structure in place validates, so no layout is better evidence
+        // than the one the filesystem gives.
+        examination.skipped = true;
+        return examination;
+    }
     if (candidate.filesystemEvidence.allocation.hasIssue(filesystem::AllocationIssue::SizeExceedsVolume)) {
         examination.unrecoverable = "its recorded size is larger than the volume";
     }
@@ -823,6 +830,9 @@ void RunState::applyCarve(const carving::SignatureHit& hit, const HitPlace& plac
     }
     const bool valid =
         carve.end.status == carving::EndStatus::Found && carve.validation.status == ValidationStatus::Valid;
+    // A Valid file of a format that does not trust its files (OLE2: no
+    // checksums) claims its clusters only softly, as an unchecked one does.
+    const bool trusted = carving::isTrusted(carve, hit.format->descriptor());
     const auto seeded = seedStarts_.find(std::make_pair(place.volume, index));
     OwnerId owner = 0;
     if (seeded != seedStarts_.end()) {
@@ -840,6 +850,8 @@ void RunState::applyCarve(const carving::SignatureHit& hit, const HitPlace& plac
     };
     if (valid) {
         ++report_.carvesValid;
+    }
+    if (trusted) {
         if (const auto clusters = clustersOf(carve.length)) {
             volume.strong().add(clusters->first, clusters->second, owner);
         }
@@ -861,7 +873,9 @@ void RunState::applyCarve(const carving::SignatureHit& hit, const HitPlace& plac
                         (carve.end.status == carving::EndStatus::Found &&
                          carve.validation.status == ValidationStatus::Invalid &&
                          !hit.format->descriptor().foundEndMeansContiguous);
-    if (!valid && broken && options_.carve) {
+    // A format whose structure checks none of its data is no seed: its
+    // layouts cannot be told apart (see examineSeed).
+    if (!valid && broken && options_.carve && hit.format->descriptor().trustValidFiles) {
         Seed seed;
         seed.origin = SeedOrigin::Carving;
         seed.volume = place.volume;
@@ -1005,7 +1019,8 @@ Result<ReconstructionHypothesis> RunState::deliver(Search& search, Hypothesis& h
         data = *seed.metadata;
     } else {
         data.method = RecoveryMethod::Carving;
-        data.extension = seed.format->descriptor().extension;
+        // The extension the carve's content gave (a ZIP that is a DOCX), or the format's.
+        data.extension = seed.carve.has_value() ? seed.carve->extension : seed.format->descriptor().extension;
     }
     data.id = candidate.id;
     data.expectedSize = length;
@@ -1103,7 +1118,8 @@ Result<FragmentCandidate> RunState::reconstruct(Seed& seed) {
         candidate.name = seed.metadata->filename;
         candidate.path = seed.metadata->filesystemEvidence.path;
     } else {
-        candidate.name = carvedName(candidate.id, seed.format->descriptor().extension);
+        candidate.name = carvedName(candidate.id, seed.carve.has_value() ? seed.carve->extension
+                                                                          : seed.format->descriptor().extension);
     }
     candidate.carve = seed.carve;
     candidate.filesystem = volume.recovery().filesystem().info().type;

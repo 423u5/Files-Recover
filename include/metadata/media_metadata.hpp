@@ -52,16 +52,22 @@ enum class MediaKind : std::uint8_t {
     Image,
     Audio,
     Video,
-    // An archive of other files: ZIP, and the formats built on it (DOCX,
-    // XLSX, JAR, APK), whose kind is not told apart yet. No media metadata.
+    // An archive of other files: ZIP and the archives built on it (JAR,
+    // APK), and installer packages in OLE2 compound files (MSI). No media
+    // metadata.
     Archive,
+    // A document: PDF, the Office and OpenDocument formats built on ZIP
+    // (DOCX, XLSX, PPTX, ODT, EPUB), and the Office formats in OLE2 compound
+    // files (DOC, XLS, PPT, Outlook messages). No media metadata.
+    Document,
 };
 
 [[nodiscard]] std::string_view toString(MediaKind kind) noexcept;
 
 // The kind of a carving format's files: "jpeg", "png", "gif", "bmp" and
 // "webp" are images, "mp3", "wav", "aac" and "m4a" audio, "mp4" video, "zip"
-// an archive. Unknown for any other id (and the empty one).
+// an archive, "pdf" and "ole2" documents. Unknown for any other id (and the
+// empty one). kindOfFile tells the documents built on ZIP apart.
 [[nodiscard]] MediaKind kindOfFormat(std::string_view formatId) noexcept;
 
 // The media type (MIME) of a carving format's files ("image/jpeg",
@@ -69,6 +75,18 @@ enum class MediaKind : std::uint8_t {
 // more precise one from their brands once their content is read
 // (MediaMetadata::mediaType: "video/quicktime", "video/3gpp").
 [[nodiscard]] std::string_view mediaTypeOfFormat(std::string_view formatId) noexcept;
+
+// The kind of a file of the format `formatId` whose extension is
+// `extension` (a candidate's: its name's, or what its content gave when it
+// was carved, lower case): a ZIP archive that is a DOCX, an OpenDocument
+// file or an EPUB is a document, an OLE2 compound file that is an MSI
+// package an archive. kindOfFormat(formatId) for any other extension.
+[[nodiscard]] MediaKind kindOfFile(std::string_view formatId, std::string_view extension) noexcept;
+
+// The media type of such a file ("application/vnd.openxmlformats-
+// officedocument.wordprocessingml.document" for a DOCX, "application/msword"
+// for a DOC); mediaTypeOfFormat(formatId) for any other extension.
+[[nodiscard]] std::string_view mediaTypeOfFile(std::string_view formatId, std::string_view extension) noexcept;
 
 using MediaDuration = std::chrono::microseconds;
 

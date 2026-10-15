@@ -5,7 +5,7 @@
 #2 filesystem complete archive/zip "/My App.apk" size=2201/2201 deleted valid=valid:passed/not-applicable sha=31b2b6a954fb526a recovery=recovered "My App.apk" => /My App.apk
 #3 hybrid complete archive/zip "/Stream backup.zip" size=11987/11987 deleted valid=valid:passed/not-applicable sha=ade9e275c817cbd6 recovery=recovered "Stream backup.zip" => /Stream backup.zip
 #4 filesystem complete archive/zip "/Backup/Projects.zip" size=11891/11891 valid=valid:passed/not-applicable sha=fe4d2ba29608206e recovery=recovered "Backup/Projects.zip" => /Backup/Projects.zip
-#5 filesystem complete archive/zip "/Backup/Report.docx" size=1330/1330 valid=valid:passed/not-applicable sha=ef0a8d6f4c1bf37d recovery=recovered "Backup/Report.docx" => /Backup/Report.docx
+#5 filesystem complete document/zip "/Backup/Report.docx" size=1330/1330 valid=valid:passed/not-applicable sha=ef0a8d6f4c1bf37d recovery=recovered "Backup/Report.docx" => /Backup/Report.docx
 #6 carving partial(content-truncated) image/jpeg "recovered_000006.jpg" size=6070/6070 valid=truncated:truncated/truncated sha=8777a902f3d119e9 recovery=recovered "recovered_000006.jpg"
 #7 carving complete archive/zip "recovered_000007.zip" size=34510/34510 valid=valid:passed/not-applicable sha=748345c6d3d5fdf9 recovery=recovered "recovered_000007.zip" => (unnamed original 6)
 #8 carving corrupted(validation-failed) archive/zip "recovered_000008.zip" size=35923/35923 valid=invalid:failed/not-run sha=49caf91eb8dc290f recovery=recovered "recovered_000008.zip" => (unnamed original 7)
@@ -17,4 +17,4 @@
 #2 filesystem complete archive/zip "/My App.apk" size=2201/2201 deleted valid=valid:passed/not-applicable sha=31b2b6a954fb526a recovery=recovered "My App.apk" => /My App.apk
 #3 hybrid complete archive/zip "/Stream backup.zip" size=11987/11987 deleted valid=valid:passed/not-applicable sha=ade9e275c817cbd6 recovery=recovered "Stream backup.zip" => /Stream backup.zip
 #4 filesystem complete archive/zip "/Backup/Projects.zip" size=11891/11891 valid=valid:passed/not-applicable sha=fe4d2ba29608206e recovery=recovered "Backup/Projects.zip" => /Backup/Projects.zip
-#5 filesystem complete archive/zip "/Backup/Report.docx" size=1330/1330 valid=valid:passed/not-applicable sha=ef0a8d6f4c1bf37d recovery=recovered "Backup/Report.docx" => /Backup/Report.docx
+#5 filesystem complete document/zip "/Backup/Report.docx" size=1330/1330 valid=valid:passed/not-applicable sha=ef0a8d6f4c1bf37d recovery=recovered "Backup/Report.docx" => /Backup/Report.docx

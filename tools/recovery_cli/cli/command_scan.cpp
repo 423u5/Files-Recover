@@ -9,6 +9,7 @@
 #include "cli/sources.hpp"
 #include "formats/archive_formats.hpp"
 #include "formats/audio_formats.hpp"
+#include "formats/document_formats.hpp"
 #include "formats/image_formats.hpp"
 #include "formats/video_formats.hpp"
 #include "metadata/candidate_metadata.hpp"
@@ -143,6 +144,7 @@ Result<Registries> makeRegistries() {
                               formats::registerAudioFormats(registries.formats),
                               formats::registerVideoFormats(registries.formats),
                               formats::registerArchiveFormats(registries.formats, validation::deflateDecoder()),
+                              formats::registerDocumentFormats(registries.formats, validation::deflateDecoder()),
                               validation::registerMediaValidators(registries.media)}) {
         if (!registered.ok()) {
             return registered.error();

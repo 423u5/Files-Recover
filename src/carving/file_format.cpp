@@ -17,6 +17,11 @@ bool isExtensionCharacter(char c) noexcept {
 
 }  // namespace
 
+bool isValidExtension(std::string_view extension) noexcept {
+    return !extension.empty() && extension.size() <= FormatDescriptor::kMaxExtensionLength &&
+           std::all_of(extension.begin(), extension.end(), isExtensionCharacter);
+}
+
 std::string_view toString(EndDetectionMethod method) noexcept {
     switch (method) {
     case EndDetectionMethod::SizeField:
@@ -65,8 +70,7 @@ Status validateDescriptor(const FormatDescriptor& descriptor) {
     if (descriptor.name.empty()) {
         return invalid("no name");
     }
-    if (descriptor.extension.empty() || descriptor.extension.size() > FormatDescriptor::kMaxExtensionLength ||
-        !std::all_of(descriptor.extension.begin(), descriptor.extension.end(), isExtensionCharacter)) {
+    if (!isValidExtension(descriptor.extension)) {
         return invalid("the extension must have 1 to " + std::to_string(FormatDescriptor::kMaxExtensionLength) +
                        " characters from a-z and 0-9");
     }

@@ -12,6 +12,7 @@
 #include "support/fake_device.hpp"
 #include "support/test_files.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -48,6 +49,14 @@ using namespace std::chrono_literals;
 // a second in a debug build).
 inline constexpr std::chrono::milliseconds kWait = 120s;
 
+// The handles a rack has given out, shared with them (a handle may be closed
+// after the rack is gone).
+struct RackHandles {
+    std::atomic<std::size_t> open{0};
+    // How long closing a handle takes, in milliseconds.
+    std::atomic<std::int64_t> closeDelay{0};
+};
+
 // Simulated physical disks, by number; any other number does not exist.
 class DiskRack final : public storage::IDeviceOpener {
 public:
@@ -58,6 +67,11 @@ public:
                                                                 failing = {});
     // Opening disk `number` fails with `error` from now on.
     void failOpen(std::uint32_t number, Error error);
+    // Closing a handle takes `delay` from now on, as a busy computer can make
+    // it; the handle counts as open until it is closed.
+    void closeSlowly(std::chrono::milliseconds delay) { handles_->closeDelay = delay.count(); }
+    // The handles of the rack's disks open now.
+    [[nodiscard]] std::size_t openHandles() const { return handles_->open; }
 
     Result<std::unique_ptr<storage::IDeviceIo>> openReadOnly(const std::filesystem::path& path,
                                                              storage::DeviceKind kind) override;
@@ -66,6 +80,7 @@ private:
     std::mutex mutex_;
     std::map<std::uint32_t, std::shared_ptr<::recovery::test::FakeDeviceConfig>> disks_;
     std::map<std::uint32_t, Error> failures_;
+    std::shared_ptr<RackHandles> handles_ = std::make_shared<RackHandles>();
 };
 
 // Every event the API delivers, in order.

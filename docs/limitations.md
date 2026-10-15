@@ -1759,7 +1759,11 @@ disk yet.
 ## Test on a real USB stick (after P20)
 
 ### L213. Archives, documents and text files are found only by name
-**Status:** Partly resolved (after P20, the user's decision of 2026-10-12): ZIP and the formats built on it are carved and validated (`docs/formats/archives.md`); PDFs, text and other documents are still found only by name  
+**Status:** Partly resolved (after P20): ZIP and the formats built on it are carved and validated since the user's
+decision of 2026-10-12 (`docs/formats/archives.md`), PDF documents and OLE2 compound files (`.doc`, `.xls`, `.ppt`,
+`.msg`, `.msi`) since the user's request of 2026-10-14 (`docs/formats/documents.md`, L230–L240). Text and source
+files (`.txt`, `.java`, `.xml`, `.csv`, `.rtf`, also when named `.doc` or `.xls`) and the formats no module knows are
+still found only by name  
 Carving knows images, audio and MP4 only (P9–P12). A file of any other type (ZIP archives and the formats built on
 them: `.docx`, `.xlsx`, `.pptx`, `.jar`, `.apk`; PDFs; text and source files such as `.java`, `.xml`, `.txt`) is
 recovered only while a filesystem entry still names it, and then without validation (L128). On the test stick (NTFS,
@@ -1770,7 +1774,14 @@ by; ZIP has one (`PK\x03\x04`), a recorded end (the end of central directory rec
 so it could be carved and validated as the media formats are.
 
 ### L214. Carved archives are named .zip whatever they hold
-**Status:** Open (after P20)  
+**Status:** Resolved (after P20, the user's request of 2026-10-14): end detection says what an archive's members make
+it (`EndDetection::extension`), and a carved archive is named `.docx`, `.xlsx`, `.pptx` (`.docm`, `.xlsm`, `.pptm`),
+`.vsdx`, `.xps`, `.odt`, `.ods`, `.odp`, `.odg`, `.epub`, `.apk` or `.jar` by it, also when reconstructed; the Office,
+OpenDocument, EPUB and XPS files are of the new kind `document`. Carved compound files are named by their streams
+(`.doc`, `.xls`, `.ppt`, `.msg`, `.msi`, ...). What the rules guess: L239. Tests:
+`ZipFormatTest.TheFormatsBuiltOnZipAreNamedByTheirMembers`, `ZipFormatTest.ACarvedArchiveIsNamedByWhatItIs`,
+`FragmentRecoveryTest.AReconstructedArchiveIsNamedByWhatItsMembersSay`, `CliCommandsTest.RecoverTellsDocumentsFromArchives`,
+`ApiScanTest.DocumentsAndArchivesAreToldApart`  
 A carved archive is written as `recovered_NNNNNN.zip`, also when it is a DOCX, XLSX, PPTX, ODT, JAR, APK or EPUB
 file: the formats built on ZIP are not told apart, although their first members and folders would tell them
 (`[Content_Types].xml` and `word/`, `META-INF/MANIFEST.MF`, `AndroidManifest.xml`, `mimetype`). Renaming the file is
@@ -1872,6 +1883,95 @@ the same pass. The scan still ends as complete. Only the log says so (a warning:
 `outcome=HitLimitReached`); the CLI's summary, the report and the API do not show where carving stopped. Files that a
 filesystem still names are found all the same.
 
+## Documents (after P20)
+
+PDF and OLE2 compound files are carved and validated since the user's request of 2026-10-14
+([formats/documents.md](formats/documents.md)).
+
+### L230. PDF streams the engine cannot check leave the document unverified
+**Status:** Open (2026-10-15)  
+Only Flate, DCT (JPEG), ASCIIHex and ASCII85 data and unfiltered text are checked. A document with a stream in
+another filter (JPX: JPEG 2000 images; JBIG2 and CCITT fax: scanned pages; LZW and run-length: old writers), with
+binary data and no filter, or encrypted (`/Encrypt`: every stream but the cross-reference streams is ciphertext) is
+`UNVERIFIED` (its structural level `Unsupported`) and never trusted, even when its structure is consistent: a damaged
+copy and an intact one look alike. Scanned and password-protected documents are often such. They are recovered all
+the same, and the images in them are carved too.
+
+### L231. A PDF with bytes before its header is called damaged
+**Status:** Open (2026-10-15)  
+Readers accept a file whose `%PDF-` header is not at its first byte (up to 1,024 bytes in). The walk needs the header
+first: a named file with bytes before it is `CORRUPTED` (its bytes are recovered all the same), and a carve starts at
+the header, without them.
+
+### L232. Damage that readers repair makes a PDF CORRUPTED
+**Status:** Open (2026-10-15)  
+Readers repair what writers often get wrong: cross-reference offsets that point elsewhere, a `/Length` a few bytes
+off, a missing `endobj`, a `startxref` that points nowhere, more than 1 MiB of padding after the last `%%EOF`. The
+engine checks all of it and calls such a document `CORRUPTED`, though it opens; only offsets that point into the
+whitespace before their object (Microsoft Print to PDF records every offset one byte early) are taken. Its bytes are
+recovered all the same, but it is never trusted, and its condition overstates the damage.
+
+### L233. A PDF stream whose /Length is far off ends the carve there
+**Status:** Open (2026-10-15)  
+When `endstream` is not within 16 bytes of where a numeric `/Length` says the data ends, the walk breaks at that
+object (`Broken`): the carve ends before it and the rest of the document is not part of it (`PARTIAL`). When
+`/Length` is a reference, `endstream` is searched for within 1 GiB only.
+
+### L234. A PDF update is taken only when the newest cross-reference chain reaches it
+**Status:** Open (2026-10-15)  
+What follows a `%%EOF` is an incremental update of the document only when the newest `startxref`'s chain (`/Prev`,
+`/XRefStm`) then reaches every section walked: else the document ends at the `%%EOF` before it, so that another
+file's leftovers are not glued to it. An update whose chain is damaged is therefore left out: the carve is the
+earlier revision, `COMPLETE`. Data that ends inside what may be an update makes the document `Truncated`
+(`PARTIAL`), though its earlier revisions are whole.
+
+### L235. Limits on what one document may hold
+**Status:** Open (2026-10-15)  
+PDF: objects, table entries or streams beyond 1,048,576, and streams beyond 4 GiB unpacked in all (cross-reference
+streams included), are not checked (`NotValidated`), nor a cross-reference stream that unpacks to more than 64 MiB;
+more than 4,096 revisions or cross-reference sections break the walk (`Broken`: each revision's end follows the
+chain of sections); at most 1 MiB of whitespace after a named file's last `%%EOF` is its padding (L232). OLE2: a FAT of more than 16,777,216 entries is not read (`Broken`), a
+directory of more than 1,048,576 entries not checked beyond (`NotValidated`). The largest carve is 16 GiB for both.
+They bound the memory and the time one hit can cost.
+
+### L236. Compound files are never trusted: the pictures in them are carved too
+**Status:** Open (2026-10-15; a design decision to review)  
+Nothing in an OLE2 compound file checks its streams' data, so one that validates may still hold another file's
+sectors, and the format does not trust its files (`FormatDescriptor::trustValidFiles`). The images in a Word
+document's `Data` stream and the thumbnails in `Thumbs.db` are carved as files of their own as well, unlike the images
+in a verified PDF or archive (L221): when the document is intact they are copies of what it holds.
+
+### L237. Compound files in pieces are not reconstructed
+**Status:** Open (2026-10-15; a design decision to review)  
+Fragment reconstruction (P13) leaves compound files as it found them: any layout that keeps the header, the FAT and
+the directory in place validates, whatever data it places. Of a test document deleted in two pieces, four wrong
+layouts validated, and none was the original. A deleted fragmented `.doc` on FAT comes back as its clusters from the
+first one on (`CORRUPTED`), as before documents were carved. Checking the streams' own structures (a Word document's
+FIB and piece table, a workbook's records) could tell layouts apart.
+
+### L238. A carved compound file ends at its last sector in use
+**Status:** Open (2026-10-15)  
+Writers leave free sectors after the last one in use (Windows' own implementation drops them). They are part of a
+named file, but a carve ends before them: readers do not need them, yet the carved file is shorter than the original
+and its SHA-256 differs.
+
+### L239. Naming by content guesses for some files
+**Status:** Open (2026-10-15)  
+Templates and slide shows are named as the documents they are made like (`.dotx` as `docx`, `.xltx` as `xlsx`,
+`.potx` and `.ppsx` as `pptx`; `.dot`, `.xlt`, `.pps` and `.pot` as `doc`, `xls` and `ppt`), OpenXPS (`.oxps`) as
+`xps`. An encrypted Office 2007 or later document (an OLE2 file holding `EncryptedPackage`) is named `.ole`. A JAR
+without a manifest whose first member is neither in `META-INF/` nor a class file (the resource archives of IntelliJ
+and Android Studio) is named `.zip`, and any archive whose first member is either, `.jar`. A thumbnail cache's kind is
+`other`. Renaming the file is enough to open it with its program.
+
+### L240. Signed APKs whose signing block apksigner aligned were carved short
+**Status:** Resolved (2026-10-15): the walk takes zeros from the last member to the next multiple of 4,096 bytes when
+an APK signing block starts there; test `ZipFormatTest.AnApkWhoseSigningBlockApksignerAlignedIsIntact`  
+`apksigner` pads an APK's members with zeros so that its signing block starts at a multiple of 4,096 bytes. The ZIP
+walk expected the block right after the last member and broke there: such an APK was carved without its signing
+block and central directory (`PARTIAL`), and a named one was `CORRUPTED`. Found by `DocumentReferenceTest` on an APK
+that Android Studio ships (2,054 bytes of zeros).
+
 ## Continuous integration
 
 ### L143. CI does not decode WebP or HEVC
@@ -1892,3 +1992,23 @@ the pattern also matches `docs/testing/`: `docs/testing/testing.md` has never be
 and the other documents link to it. Anchoring the pattern to the root (`/Testing/`) would fix it.
 
 P18: `.gitignore` anchors the pattern; `docs/testing/` is no longer ignored.
+
+### L241. An API test failed under load: an operation's end was told before its source was closed
+**Status:** Resolved (2026-10-15): the API tells an operation's end only after it closed the operation's source; test `ApiSourcesTest.AnOperationThatEndedHoldsItsSourceNoMore`  
+`ApiRecoveryTest.RequestsThatCannotBeDoneAreRefusedBeforeAnythingIsRecorded` failed once, after 1 second, in a full
+debug run (`ctest -j 8` on four cores) of the tree with the document formats, and passed in every repeat. The cause:
+a scan's and a recovery's thread recorded the operation's end (waking `waitForOperation`, posting
+`OperationFinished`) and only then let go of the source it had opened; an imaging's thread did the same. An image
+file is opened sharing reads only, so that it cannot change under a scan. The test rewrites the card image as soon
+as the scan's end is told: when the scan's thread had not yet run on to close the image, as on a busy computer, the
+write failed ("cannot create test file"). Holding that thread for 200 ms right after it told the end made the test
+fail with that message. For a user it meant a card or an image that the API still held for a moment after it said the
+scan, the recovery or the imaging had ended.
+
+Now an operation's thread returns how it ended, and the end is told after everything the operation held is gone;
+an imaging closes its source before its end is told. The new test makes closing a simulated disk take 300 ms and
+checks, after each of a scan, a recovery and an imaging, that no handle is open when `waitForOperation` or
+`waitForImaging` returns, nor when `OperationFinished` is delivered. It fails on the old code (every operation
+still held its disk), also with only the imaging left unchanged. With the fix, the same 200 ms hold (now after the
+source is closed) leaves both tests passing, six runs of each.
+Whether it was also what failed in CI's debug run of 4497e28 (L197) is still not known: that log was not read.

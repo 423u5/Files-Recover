@@ -89,6 +89,12 @@ struct FileCandidate {
     [[nodiscard]] std::uint64_t sourceEnd() const noexcept { return sourceOffset + length; }
 };
 
+// Whether a candidate of the format `descriptor` describes is trusted: its
+// end was Found, it validated as Valid, and its format trusts such files
+// (FormatDescriptor::trustValidFiles). The hits strictly inside a trusted
+// candidate are its own content.
+[[nodiscard]] bool isTrusted(const FileCandidate& candidate, const FormatDescriptor& descriptor) noexcept;
+
 // Checks the structural invariants of a candidate: a length of at least 1,
 // extents contiguous from 0 to length, none empty, no offset overflow, and
 // for contiguous extraction exactly one extent at sourceOffset. Candidates

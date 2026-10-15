@@ -16,7 +16,7 @@ struct FormatInfo {
     std::string_view mediaType;
 };
 
-constexpr std::array<FormatInfo, 11> kFormats = {{
+constexpr std::array<FormatInfo, 13> kFormats = {{
     {"jpeg", MediaKind::Image, "image/jpeg"},
     {"png", MediaKind::Image, "image/png"},
     {"gif", MediaKind::Image, "image/gif"},
@@ -28,11 +28,66 @@ constexpr std::array<FormatInfo, 11> kFormats = {{
     {"m4a", MediaKind::Audio, "audio/mp4"},
     {"mp4", MediaKind::Video, "video/mp4"},
     {"zip", MediaKind::Archive, "application/zip"},
+    {"pdf", MediaKind::Document, "application/pdf"},
+    {"ole2", MediaKind::Document, "application/x-ole-storage"},
+}};
+
+// The files of a container format that its extension tells apart.
+struct FileInfo {
+    std::string_view formatId;
+    std::string_view extension;
+    MediaKind kind;
+    std::string_view mediaType;
+};
+
+constexpr std::array<FileInfo, 32> kFiles = {{
+    {"zip", "docx", MediaKind::Document, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+    {"zip", "docm", MediaKind::Document, "application/vnd.ms-word.document.macroEnabled.12"},
+    {"zip", "dotx", MediaKind::Document, "application/vnd.openxmlformats-officedocument.wordprocessingml.template"},
+    {"zip", "xlsx", MediaKind::Document, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+    {"zip", "xlsm", MediaKind::Document, "application/vnd.ms-excel.sheet.macroEnabled.12"},
+    {"zip", "pptx", MediaKind::Document,
+     "application/vnd.openxmlformats-officedocument.presentationml.presentation"},
+    {"zip", "pptm", MediaKind::Document, "application/vnd.ms-powerpoint.presentation.macroEnabled.12"},
+    {"zip", "ppsx", MediaKind::Document, "application/vnd.openxmlformats-officedocument.presentationml.slideshow"},
+    {"zip", "vsdx", MediaKind::Document, "application/vnd.ms-visio.drawing"},
+    {"zip", "xps", MediaKind::Document, "application/vnd.ms-xpsdocument"},
+    {"zip", "oxps", MediaKind::Document, "application/oxps"},
+    {"zip", "odt", MediaKind::Document, "application/vnd.oasis.opendocument.text"},
+    {"zip", "ods", MediaKind::Document, "application/vnd.oasis.opendocument.spreadsheet"},
+    {"zip", "odp", MediaKind::Document, "application/vnd.oasis.opendocument.presentation"},
+    {"zip", "odg", MediaKind::Document, "application/vnd.oasis.opendocument.graphics"},
+    {"zip", "epub", MediaKind::Document, "application/epub+zip"},
+    {"zip", "jar", MediaKind::Archive, "application/java-archive"},
+    {"zip", "apk", MediaKind::Archive, "application/vnd.android.package-archive"},
+    {"ole2", "doc", MediaKind::Document, "application/msword"},
+    {"ole2", "dot", MediaKind::Document, "application/msword"},
+    {"ole2", "xls", MediaKind::Document, "application/vnd.ms-excel"},
+    {"ole2", "xlt", MediaKind::Document, "application/vnd.ms-excel"},
+    {"ole2", "ppt", MediaKind::Document, "application/vnd.ms-powerpoint"},
+    {"ole2", "pps", MediaKind::Document, "application/vnd.ms-powerpoint"},
+    {"ole2", "pot", MediaKind::Document, "application/vnd.ms-powerpoint"},
+    {"ole2", "msg", MediaKind::Document, "application/vnd.ms-outlook"},
+    {"ole2", "vsd", MediaKind::Document, "application/vnd.visio"},
+    {"ole2", "pub", MediaKind::Document, "application/vnd.ms-publisher"},
+    {"ole2", "msi", MediaKind::Archive, "application/x-msi"},
+    {"ole2", "msp", MediaKind::Archive, "application/x-ms-patch"},
+    {"ole2", "mst", MediaKind::Archive, "application/x-ms-transform"},
+    {"ole2", "db", MediaKind::Unknown, "application/x-ole-storage"},
 }};
 
 const FormatInfo* formatInfo(std::string_view formatId) noexcept {
     for (const FormatInfo& info : kFormats) {
         if (info.id == formatId) {
+            return &info;
+        }
+    }
+    return nullptr;
+}
+
+const FileInfo* fileInfo(std::string_view formatId, std::string_view extension) noexcept {
+    for (const FileInfo& info : kFiles) {
+        if (info.formatId == formatId && info.extension == extension) {
             return &info;
         }
     }
@@ -59,6 +114,8 @@ std::string_view toString(MediaKind kind) noexcept {
             return "video";
         case MediaKind::Archive:
             return "archive";
+        case MediaKind::Document:
+            return "document";
     }
     return "unknown";
 }
@@ -71,6 +128,16 @@ MediaKind kindOfFormat(std::string_view formatId) noexcept {
 std::string_view mediaTypeOfFormat(std::string_view formatId) noexcept {
     const FormatInfo* info = formatInfo(formatId);
     return info != nullptr ? info->mediaType : std::string_view{};
+}
+
+MediaKind kindOfFile(std::string_view formatId, std::string_view extension) noexcept {
+    const FileInfo* info = fileInfo(formatId, extension);
+    return info != nullptr ? info->kind : kindOfFormat(formatId);
+}
+
+std::string_view mediaTypeOfFile(std::string_view formatId, std::string_view extension) noexcept {
+    const FileInfo* info = fileInfo(formatId, extension);
+    return info != nullptr ? info->mediaType : mediaTypeOfFormat(formatId);
 }
 
 std::string MediaDateTime::iso8601() const {

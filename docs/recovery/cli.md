@@ -126,7 +126,7 @@ narrow that down, and every one given must match:
 | Option | Selects |
 | --- | --- |
 | `--ids LIST` | Candidate ids and ranges, as the report shows them: `4`, `1,4-9,12` |
-| `--kind LIST` | `image`, `audio`, `video`, `archive` (ZIP and the formats built on it), `other` (no format known) |
+| `--kind LIST` | `image`, `audio`, `video`, `archive` (ZIP, JAR, APK, MSI), `document` (PDF, DOCX, XLSX, PPTX, ODT, EPUB, XPS, DOC, XLS, PPT, MSG), `other` (no format known) |
 | `--condition LIST` | `complete`, `unverified`, `corrupted`, `partial`, `unrecoverable`, `ambiguous` (P17's conditions) |
 | `--skip-duplicates` | Leaves out candidates whose content an earlier candidate has |
 

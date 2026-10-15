@@ -6,6 +6,7 @@
 #include "structure_walk.hpp"
 
 #include <algorithm>
+#include <array>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -166,6 +167,99 @@ private:
     std::size_t at_ = 0;
 };
 
+// What an archive's members say it is (L214): the formats built on ZIP name
+// members of their own. An OpenDocument or EPUB file's first member is
+// "mimetype", stored, holding its media type; an Office Open XML file has a
+// "[Content_Types].xml" and a folder of its application's; an APK an
+// AndroidManifest.xml (binary XML) with classes.dex or resources.arsc, or an
+// APK signing block; a JAR a META-INF/MANIFEST.MF, or a first member in
+// META-INF/ or a class file (the JARs of tools other than `jar`, such as
+// IntelliJ's, often have no manifest; an archive of a project's folder starts
+// with the folder).
+class ZipContents {
+public:
+    // The member's name, as its local header holds it; `first` for the
+    // archive's first member.
+    void noteName(std::span<const std::byte> name, bool first) {
+        const std::string_view text(reinterpret_cast<const char*>(name.data()), name.size());
+        javaFirst_ = javaFirst_ || (first && (text.starts_with("META-INF/") || text.ends_with(".class")));
+        contentTypes_ = contentTypes_ || text == "[Content_Types].xml";
+        word_ = word_ || text.starts_with("word/");
+        excel_ = excel_ || text.starts_with("xl/");
+        powerPoint_ = powerPoint_ || text.starts_with("ppt/");
+        visio_ = visio_ || text.starts_with("visio/");
+        macros_ = macros_ || text == "word/vbaProject.bin" || text == "xl/vbaProject.bin" ||
+                  text == "ppt/vbaProject.bin";
+        xps_ = xps_ || text == "FixedDocumentSequence.fdseq" || text == "FixedDocSeq.fdseq";
+        androidManifest_ = androidManifest_ || text == "AndroidManifest.xml";
+        androidCode_ = androidCode_ || text == "classes.dex" || text == "resources.arsc";
+        javaManifest_ = javaManifest_ || text == "META-INF/MANIFEST.MF";
+    }
+    // The data of a first member named "mimetype".
+    void noteMediaType(std::span<const std::byte> data) {
+        mediaType_.assign(reinterpret_cast<const char*>(data.data()), data.size());
+    }
+    void noteSigningBlock() noexcept { signingBlock_ = true; }
+
+    // The extension the members give, or empty for a plain ZIP archive.
+    [[nodiscard]] std::string extension() const {
+        static constexpr std::array<std::pair<std::string_view, std::string_view>, 5> kMediaTypes = {{
+            {"application/vnd.oasis.opendocument.text", "odt"},
+            {"application/vnd.oasis.opendocument.spreadsheet", "ods"},
+            {"application/vnd.oasis.opendocument.presentation", "odp"},
+            {"application/vnd.oasis.opendocument.graphics", "odg"},
+            {"application/epub+zip", "epub"},
+        }};
+        for (const auto& [type, extension] : kMediaTypes) {
+            if (mediaType_ == type) {
+                return std::string(extension);
+            }
+        }
+        if (contentTypes_) {
+            if (word_) {
+                return macros_ ? "docm" : "docx";
+            }
+            if (excel_) {
+                return macros_ ? "xlsm" : "xlsx";
+            }
+            if (powerPoint_) {
+                return macros_ ? "pptm" : "pptx";
+            }
+            if (visio_) {
+                return "vsdx";
+            }
+            if (xps_) {
+                return "xps";
+            }
+        }
+        if ((androidManifest_ && androidCode_) || signingBlock_) {
+            return "apk";
+        }
+        if (javaManifest_ || javaFirst_) {
+            return "jar";
+        }
+        return {};
+    }
+
+private:
+    std::string mediaType_;
+    bool contentTypes_ = false;
+    bool word_ = false;
+    bool excel_ = false;
+    bool powerPoint_ = false;
+    bool visio_ = false;
+    bool macros_ = false;
+    bool xps_ = false;
+    bool androidManifest_ = false;
+    bool androidCode_ = false;
+    bool javaManifest_ = false;
+    bool javaFirst_ = false;
+    bool signingBlock_ = false;
+};
+
+// The longest "mimetype" member read for ZipContents.
+constexpr std::uint64_t kMaxMediaType = 128;
+
 struct Member {
     // Offset of the local header.
     std::uint64_t offset = 0;
@@ -199,6 +293,8 @@ public:
     // Depth::Full: the members whose data was not checked, and why the first was not.
     [[nodiscard]] std::uint64_t unchecked() const noexcept { return unchecked_; }
     [[nodiscard]] const std::string& uncheckedReason() const noexcept { return uncheckedReason_; }
+    // What the members walked say the archive is (ZipContents).
+    [[nodiscard]] std::string extension() const { return contents_.extension(); }
 
 private:
     using Next = Result<std::optional<std::uint64_t>>;
@@ -214,6 +310,9 @@ private:
     Next findDescriptor(std::uint64_t dataOffset, bool zip64);
     // The end of the APK signing block at `at`, or nothing when there is none.
     Next apkSigningBlock(std::uint64_t at);
+    // The same after zeros from `at` to the next multiple of 4096 bytes:
+    // apksigner pads the members so that the block starts on a page.
+    Next alignedSigningBlock(std::uint64_t at);
     Result<Walk> centralDirectory(std::uint64_t start);
     Status matchEntries(std::uint64_t start, std::uint64_t end);
 
@@ -238,8 +337,11 @@ private:
     std::uint64_t unpacked_ = 0;
     std::uint64_t unchecked_ = 0;
     std::string uncheckedReason_;
+    ZipContents contents_;
     bool zip64_ = false;
     bool signingBlock_ = false;
+    // The zeros before the signing block (alignedSigningBlock).
+    std::uint64_t signingPadding_ = 0;
 };
 
 Result<Walk> ZipWalker::run() {
@@ -277,11 +379,15 @@ Result<Walk> ZipWalker::run() {
         }
         if (!signingBlock_) {
             Next block = apkSigningBlock(position);
+            if (block.ok() && !block->has_value()) {
+                block = alignedSigningBlock(position);
+            }
             if (!block.ok()) {
                 return block.error();
             }
             if (block->has_value()) {
                 signingBlock_ = true;
+                contents_.noteSigningBlock();
                 position = **block;
                 continue;
             }
@@ -333,6 +439,12 @@ ZipWalker::Next ZipWalker::member(std::uint64_t at) {
     if (entry.nameLength == 0) {
         walk_.noteProblem(at, which + " has no name");
     }
+    contents_.noteName((**fields).first(entry.nameLength), members_.empty());
+    constexpr std::string_view kMimetype = "mimetype";
+    const bool mediaTypeMember =
+        members_.empty() && entry.nameLength == kMimetype.size() &&
+        std::equal(kMimetype.begin(), kMimetype.end(), (**fields).begin(),
+                   [](char c, std::byte b) { return static_cast<std::byte>(c) == b; });
     const std::optional<std::span<const std::byte>> zip64 = zip64Field((**fields).subspan(entry.nameLength));
     zip64_ = zip64_ || zip64.has_value();
     entry.compressed = compressed32;
@@ -352,6 +464,17 @@ ZipWalker::Next ZipWalker::member(std::uint64_t at) {
     const std::uint64_t dataOffset = at + kLocalHeaderSize + variable;
     const bool encrypted =
         (entry.flags & (kEncrypted | kStrongEncryption)) != 0 || entry.method == kAesEncrypted;
+    if (mediaTypeMember && entry.method == kStored && !encrypted && !described && entry.compressed <= kMaxMediaType) {
+        // An OpenDocument or EPUB file's media type, stored first (ZipContents).
+        Result<std::optional<std::span<const std::byte>>> type =
+            detail::readIfAvailable(content_, dataOffset, static_cast<std::size_t>(entry.compressed));
+        if (!type.ok()) {
+            return type.error();
+        }
+        if (type->has_value()) {
+            contents_.noteMediaType(**type);
+        }
+    }
 
     std::uint64_t next = 0;
     if (described) {
@@ -541,6 +664,31 @@ ZipWalker::Next ZipWalker::apkSigningBlock(std::uint64_t at) {
         return std::optional<std::uint64_t>{};
     }
     return std::optional<std::uint64_t>(end);
+}
+
+ZipWalker::Next ZipWalker::alignedSigningBlock(std::uint64_t at) {
+    // apksigner pads the members with zeros so that the signing block starts
+    // at a multiple of 4096 bytes from the archive's start (as in the APKs
+    // that Android Studio ships).
+    constexpr std::uint64_t kPage = 4096;
+    if (members_.empty() || at % kPage == 0) {
+        return std::optional<std::uint64_t>{};
+    }
+    const std::uint64_t aligned = (at / kPage + 1) * kPage;
+    Result<std::optional<std::span<const std::byte>>> zeros =
+        detail::readIfAvailable(content_, at, static_cast<std::size_t>(aligned - at));
+    if (!zeros.ok()) {
+        return zeros.error();
+    }
+    if (!zeros->has_value() ||
+        !std::all_of((**zeros).begin(), (**zeros).end(), [](std::byte b) { return b == std::byte{0}; })) {
+        return std::optional<std::uint64_t>{};
+    }
+    Next block = apkSigningBlock(aligned);
+    if (block.ok() && block->has_value()) {
+        signingPadding_ = aligned - at;
+    }
+    return block;
 }
 
 Result<Walk> ZipWalker::centralDirectory(std::uint64_t start) {
@@ -749,6 +897,9 @@ Result<Walk> ZipWalker::centralDirectory(std::uint64_t start) {
     }
     if (signingBlock_) {
         summary += ", an APK signing block";
+        if (signingPadding_ > 0) {
+            summary += " after " + count(signingPadding_, "byte", "bytes") + " of padding";
+        }
     }
     return walk_.finish(WalkStatus::Complete, fileEnd, summary);
 }
@@ -986,7 +1137,11 @@ Result<EndDetection> ZipFormat::findEnd(IContentReader& content) const {
     if (!walk.ok()) {
         return walk.error();
     }
-    return detail::endOf(*walk, content.size());
+    EndDetection end = detail::endOf(*walk, content.size());
+    // The formats built on ZIP by what their members say (also of the
+    // members before a break: a DOCX names itself in its first ones).
+    end.extension = walker.extension();
+    return end;
 }
 
 Result<ValidationResult> ZipFormat::validate(IContentReader& content) const {

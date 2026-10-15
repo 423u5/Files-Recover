@@ -35,7 +35,8 @@ constexpr OptionSpec kOutputOption{"--output", "", "FOLDER", "Where to write the
 constexpr OptionSpec kSessionsDirOption{kSessionsDirName, "", "FOLDER",
                                         "Where sessions are kept (default %LOCALAPPDATA%\\RecoveryEngine\\Sessions)"};
 constexpr OptionSpec kIdsOption{"--ids", "", "LIST", "Only these candidates: 4 or 1,4-9,12 (ids as the report shows)"};
-constexpr OptionSpec kKindOption{"--kind", "", "LIST", "Only these kinds: image, audio, video, archive, other"};
+constexpr OptionSpec kKindOption{"--kind", "", "LIST",
+                                 "Only these kinds: image, audio, video, archive, document, other"};
 constexpr OptionSpec kConditionOption{"--condition", "", "LIST",
                                       "Only files in these conditions: complete, unverified, corrupted, partial,"
                                       " unrecoverable, ambiguous"};
@@ -50,7 +51,7 @@ constexpr std::array kOptions = {kSessionOption,        kOutputOption,      kSes
                                  kRetryFailedOption,    kWorkersOption,     kLogOption,
                                  kQuietOption,          kHelpOption};
 
-constexpr std::array<std::string_view, 5> kKinds = {"image", "audio", "video", "archive", "other"};
+constexpr std::array<std::string_view, 6> kKinds = {"image", "audio", "video", "archive", "document", "other"};
 constexpr std::array<std::string_view, 6> kConditions = {"complete", "unverified", "corrupted",
                                                           "partial",  "unrecoverable", "ambiguous"};
 
@@ -67,6 +68,8 @@ std::string_view kindName(metadata::MediaKind kind) {
         return "video";
     case metadata::MediaKind::Archive:
         return "archive";
+    case metadata::MediaKind::Document:
+        return "document";
     case metadata::MediaKind::Unknown:
         break;
     }

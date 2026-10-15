@@ -1,7 +1,8 @@
 // Sources and imaging through the API (P19): the disks listed with their
 // drive letters and roles, what a source holds, sources that cannot be read
-// (with what to do), and images: bad sectors zero-filled and listed,
-// cancelled and resumed, never overwriting, never on the source.
+// (with what to do), a source closed before its operation's end is told, and
+// images: bad sectors zero-filled and listed, cancelled and resumed, never
+// overwriting, never on the source.
 
 #include "api_test_support.hpp"
 
@@ -10,7 +11,9 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
+#include <mutex>
 
 namespace recovery::api::test {
 namespace {
@@ -132,6 +135,61 @@ TEST(ApiSourcesTest, SourcesThatCannotBeReadSayWhy) {
     ASSERT_FALSE(denied.ok());
     EXPECT_NE(denied.error().message.find("administrator"), std::string::npos) << describe(denied.error());
     RECOVERY_EXPECT_ERROR(world.api().startScan(SourceRef::physicalDisk(disk)), ErrorCode::IoError);
+}
+
+// L241: once the API tells that an operation ended (the wait functions, the
+// OperationFinished event), it holds the operation's source no more: the card
+// can be taken out, and an image file, which the engine opens sharing reads
+// only, can be written. Closing a handle is slow here, as a busy computer can
+// make it.
+TEST(ApiSourcesTest, AnOperationThatEndedHoldsItsSourceNoMore) {
+    std::mutex mutex;
+    std::vector<std::size_t> openAtFinish;
+    ApiWorld world;
+    world.log().setHook([&mutex, &openAtFinish, &rack = world.rack()](const Event& event) {
+        if (event.kind == EventKind::OperationFinished) {
+            const std::lock_guard lock(mutex);
+            openAtFinish.push_back(rack.openHandles());
+        }
+    });
+    world.rack().closeSlowly(300ms);
+    const std::uint32_t disk = world.addDisk(::recovery::test::readFile(world.cardImage()));
+
+    // Each operation's OperationFinished event is waited for before the next
+    // operation opens the disk again.
+    const auto finishedEvents = [&world](std::size_t count) {
+        return world.log().waitFor([count](const std::vector<Event>& events) {
+            return static_cast<std::size_t>(std::count_if(events.begin(), events.end(), [](const Event& event) {
+                       return event.kind == EventKind::OperationFinished;
+                   })) == count;
+        });
+    };
+
+    const Result<std::string> id = world.api().startScan(SourceRef::physicalDisk(disk));
+    RECOVERY_ASSERT_OK(id);
+    ASSERT_EQ(world.waitIdle(*id).state, OperationState::Completed);
+    EXPECT_EQ(world.rack().openHandles(), 0u) << "the scan ended";
+    ASSERT_TRUE(finishedEvents(1));
+
+    RecoveryOptions options;
+    options.destination = world.folder() / "out";
+    RECOVERY_ASSERT_OK(world.api().recoverAll(*id, options));
+    ASSERT_EQ(world.waitIdle(*id).state, OperationState::Completed);
+    EXPECT_EQ(world.rack().openHandles(), 0u) << "the recovery ended";
+    ASSERT_TRUE(finishedEvents(2));
+
+    ImagingOptions imaging;
+    imaging.image = world.folder() / "disk.img";
+    const Result<ImagingId> image = world.api().createImage(SourceRef::physicalDisk(disk), imaging);
+    RECOVERY_ASSERT_OK(image);
+    const Result<Progress> imaged = world.api().waitForImaging(*image, kWait);
+    RECOVERY_ASSERT_OK(imaged);
+    EXPECT_EQ(imaged->state, OperationState::Completed);
+    EXPECT_EQ(world.rack().openHandles(), 0u) << "the imaging ended";
+    ASSERT_TRUE(finishedEvents(3));
+
+    const std::lock_guard lock(mutex);
+    EXPECT_EQ(openAtFinish, (std::vector<std::size_t>{0, 0, 0})) << "handles open when each end was told";
 }
 
 TEST(ApiImagingTest, ADiskWithBadSectorsIsImagedWithZerosAndTheirList) {

@@ -40,4 +40,13 @@ struct SimulatedDisk {
 // A disk with an MBR and three partitions: FAT32, exFAT and NTFS, one file each.
 [[nodiscard]] Bytes threeVolumeDisk();
 
+// A FAT32 card of documents and archives: REPORT.PDF, LETTER.DOC (Word
+// 97-2003), BOOK.DOCX, APP.APK and NOTES.ZIP, and in free clusters a DOCX
+// whose entry is gone (`orphan`), which only carving finds.
+struct DocumentCard {
+    Bytes image;
+    Bytes orphan;
+};
+[[nodiscard]] DocumentCard documentCard();
+
 }  // namespace recovery::test

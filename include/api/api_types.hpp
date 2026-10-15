@@ -397,13 +397,17 @@ struct CandidateId {
 };
 
 enum class MediaKind : std::uint8_t {
-    // No format is known, or it is not image, audio, video or archive.
+    // No format is known, or it is not image, audio, video, archive or document.
     Other,
     Image,
     Audio,
     Video,
-    // ZIP, and the formats built on it (DOCX, XLSX, JAR, APK).
+    // ZIP and the archives built on it (JAR, APK); MSI installer packages.
     Archive,
+    // PDF; the Office and OpenDocument formats built on ZIP (DOCX, XLSX,
+    // PPTX, ODT, EPUB); the Office formats in OLE2 compound files (DOC, XLS,
+    // PPT) and Outlook messages.
+    Document,
 };
 
 // How the engine found a file.

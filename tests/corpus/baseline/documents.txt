@@ -1,0 +1,48 @@
+# corpus scenario documents: FAT32: named, deleted and unnamed PDF, OLE2 (DOC, XLS, PPT, MSG, MSI) and ZIP-based documents, files real writers made, text named .doc, images in documents
+# image 12328960 bytes, sha256 5ec94fcd6a5c8178, 31 originals
+# deep scan: 29 candidates
+#1 filesystem complete archive/ole2 "/Tool.msi" size=20480/20480 valid=valid:passed/not-applicable sha=c64a2cd684dfdabb recovery=recovered "Tool.msi" => /Tool.msi
+#2 filesystem complete document/pdf "/Draft.pdf" size=651/651 deleted valid=valid:passed/not-applicable sha=db6cf308c150eb55 recovery=recovered "Draft.pdf" => /Draft.pdf
+#3 hybrid complete document/ole2 "/Memo.doc" size=16896/16896 deleted valid=valid:passed/not-applicable sha=92e31a7dcc3af1ab recovery=recovered "Memo.doc" => /Memo.doc
+#4 filesystem corrupted(validation-failed) document/ole2 "/Thesis.doc" size=49152/49152 deleted valid=invalid:failed/not-run sha=8355445c388e03f6 recovery=recovered "Thesis.doc"
+#5 filesystem complete document/pdf "/Documents/Report.pdf" size=6537/6537 valid=valid:passed/not-applicable sha=80985b64791872f5 recovery=recovered "Documents/Report.pdf" => /Documents/Report.pdf
+#6 filesystem complete document/ole2 "/Documents/Letter.doc" size=20992/20992 valid=valid:passed/not-applicable sha=9927d57226608fc8 recovery=recovered "Documents/Letter.doc" => /Documents/Letter.doc
+#7 filesystem complete document/ole2 "/Documents/Budget.xls" size=12288/12288 valid=valid:passed/not-applicable sha=ca694e1b5b24f8ed recovery=recovered "Documents/Budget.xls" => /Documents/Budget.xls
+#8 filesystem complete document/ole2 "/Documents/Slides.ppt" size=19456/19456 valid=valid:passed/not-applicable sha=616d821ce4d28824 recovery=recovered "Documents/Slides.ppt" => /Documents/Slides.ppt
+#9 filesystem complete document/pdf "/Documents/Web page.pdf" size=15474/15474 valid=valid:passed/not-applicable sha=174385a42c7a4c75 recovery=recovered "Documents/Web page.pdf" => /Documents/Web page.pdf
+#10 filesystem complete document/pdf "/Documents/Printed.pdf" size=2013/2013 valid=valid:passed/not-applicable sha=796b1068b5ee8d3e recovery=recovered "Documents/Printed.pdf" => /Documents/Printed.pdf
+#11 filesystem unverified(not-validated) document/pdf "/Documents/Locked.pdf" size=3132/3132 valid=not-validated:unsupported/not-applicable sha=f622d772b7297e88 recovery=recovered "Documents/Locked.pdf" => /Documents/Locked.pdf
+#12 filesystem complete document/zip "/Documents/Page.oxps" size=8461/8461 valid=valid:passed/not-applicable sha=0d768f85d5217d30 recovery=recovered "Documents/Page.oxps" => /Documents/Page.oxps
+#13 filesystem unverified(not-validated) other/- "/Documents/Notes.doc" size=65/65 valid=not-validated:unsupported/not-run sha=92dcb11e3f28acd5 recovery=recovered "Documents/Notes.doc" => /Documents/Notes.doc
+#14 filesystem unverified(not-validated) other/- "/Documents/Table.xls" size=34/34 valid=not-validated:unsupported/not-run sha=314f98f52c5ef392 recovery=recovered "Documents/Table.xls" => /Documents/Table.xls
+#15 filesystem complete document/ole2 "/Mail/Offer.msg" size=8192/8192 valid=valid:passed/not-applicable sha=bfd9f2cf1cdcbd46 recovery=recovered "Mail/Offer.msg" => /Mail/Offer.msg
+#16 carving complete document/pdf "recovered_000016.pdf" size=2781/2781 valid=valid:passed/not-applicable sha=bd5980bd4477ee3a recovery=recovered "recovered_000016.pdf" => (unnamed original 17)
+#17 carving complete document/pdf "recovered_000017.pdf" size=761/761 valid=valid:passed/not-applicable sha=15efbda9bd819300 recovery=recovered "recovered_000017.pdf" => (unnamed original 18)
+#18 carving complete document/ole2 "recovered_000018.xls" size=9216/9216 valid=valid:passed/not-applicable sha=3d36f1738721ffc8 recovery=recovered "recovered_000018.xls" => (unnamed original 19)
+#19 carving complete document/ole2 "recovered_000019.doc" size=10240/10240 valid=valid:passed/not-applicable sha=e6c5a471305a5cd3 recovery=recovered "recovered_000019.doc" => (unnamed original 20)
+#20 carving complete document/zip "recovered_000020.docx" size=4256/4256 valid=valid:passed/not-applicable sha=65c45abc89baff46 recovery=recovered "recovered_000020.docx" => (unnamed original 21)
+#21 carving complete document/zip "recovered_000021.xlsx" size=5266/5266 valid=valid:passed/not-applicable sha=2c3d1903902418ac recovery=recovered "recovered_000021.xlsx" => (unnamed original 22)
+#22 carving complete document/zip "recovered_000022.odt" size=3969/3969 valid=valid:passed/not-applicable sha=1bdcc5785b841208 recovery=recovered "recovered_000022.odt" => (unnamed original 23)
+#23 carving complete document/ole2 "recovered_000023.doc" size=31232/31232 valid=valid:passed/not-applicable sha=19c62a8e41255111 recovery=recovered "recovered_000023.doc" => (unnamed original 24)
+#24 carving complete image/png "recovered_000024.png" size=21007/21007 valid=valid:passed/passed sha=a1ddafad43c9979f recovery=recovered "recovered_000024.png" => (unnamed original 25)
+#25 carving corrupted(validation-failed) document/pdf "recovered_000025.pdf" size=4708/4708 valid=invalid:failed/not-run sha=c87767f2e454af19 recovery=recovered "recovered_000025.pdf" => (unnamed original 26)
+#26 carving complete image/jpeg "recovered_000026.jpg" size=3546/3546 valid=valid:passed/passed sha=5dc4c91113eb08b7 recovery=recovered "recovered_000026.jpg" => (unnamed original 27)
+#27 carving complete document/pdf "recovered_000027.pdf" size=8986/8986 valid=valid:passed/not-applicable sha=3e75e6656da98ff6 recovery=recovered "recovered_000027.pdf" => (unnamed original 28)
+#28 carving complete other/ole2 "recovered_000028.db" size=5120/5120 valid=valid:passed/not-applicable sha=a8b6dc2847e5b2fd recovery=recovered "recovered_000028.db" => (unnamed original 30)
+#29 carving complete image/jpeg "recovered_000029.jpg" size=2269/2269 valid=valid:passed/passed sha=2eef5382396318fa recovery=recovered "recovered_000029.jpg" => (unnamed original 31)
+# quick scan: 15 candidates
+#1 filesystem complete archive/ole2 "/Tool.msi" size=20480/20480 valid=valid:passed/not-applicable sha=c64a2cd684dfdabb recovery=recovered "Tool.msi" => /Tool.msi
+#2 filesystem complete document/pdf "/Draft.pdf" size=651/651 deleted valid=valid:passed/not-applicable sha=db6cf308c150eb55 recovery=recovered "Draft.pdf" => /Draft.pdf
+#3 hybrid complete document/ole2 "/Memo.doc" size=16896/16896 deleted valid=valid:passed/not-applicable sha=92e31a7dcc3af1ab recovery=recovered "Memo.doc" => /Memo.doc
+#4 filesystem corrupted(validation-failed) document/ole2 "/Thesis.doc" size=49152/49152 deleted valid=invalid:failed/not-run sha=8355445c388e03f6 recovery=recovered "Thesis.doc"
+#5 filesystem complete document/pdf "/Documents/Report.pdf" size=6537/6537 valid=valid:passed/not-applicable sha=80985b64791872f5 recovery=recovered "Documents/Report.pdf" => /Documents/Report.pdf
+#6 filesystem complete document/ole2 "/Documents/Letter.doc" size=20992/20992 valid=valid:passed/not-applicable sha=9927d57226608fc8 recovery=recovered "Documents/Letter.doc" => /Documents/Letter.doc
+#7 filesystem complete document/ole2 "/Documents/Budget.xls" size=12288/12288 valid=valid:passed/not-applicable sha=ca694e1b5b24f8ed recovery=recovered "Documents/Budget.xls" => /Documents/Budget.xls
+#8 filesystem complete document/ole2 "/Documents/Slides.ppt" size=19456/19456 valid=valid:passed/not-applicable sha=616d821ce4d28824 recovery=recovered "Documents/Slides.ppt" => /Documents/Slides.ppt
+#9 filesystem complete document/pdf "/Documents/Web page.pdf" size=15474/15474 valid=valid:passed/not-applicable sha=174385a42c7a4c75 recovery=recovered "Documents/Web page.pdf" => /Documents/Web page.pdf
+#10 filesystem complete document/pdf "/Documents/Printed.pdf" size=2013/2013 valid=valid:passed/not-applicable sha=796b1068b5ee8d3e recovery=recovered "Documents/Printed.pdf" => /Documents/Printed.pdf
+#11 filesystem unverified(not-validated) document/pdf "/Documents/Locked.pdf" size=3132/3132 valid=not-validated:unsupported/not-applicable sha=f622d772b7297e88 recovery=recovered "Documents/Locked.pdf" => /Documents/Locked.pdf
+#12 filesystem complete document/zip "/Documents/Page.oxps" size=8461/8461 valid=valid:passed/not-applicable sha=0d768f85d5217d30 recovery=recovered "Documents/Page.oxps" => /Documents/Page.oxps
+#13 filesystem unverified(not-validated) other/- "/Documents/Notes.doc" size=65/65 valid=not-validated:unsupported/not-run sha=92dcb11e3f28acd5 recovery=recovered "Documents/Notes.doc" => /Documents/Notes.doc
+#14 filesystem unverified(not-validated) other/- "/Documents/Table.xls" size=34/34 valid=not-validated:unsupported/not-run sha=314f98f52c5ef392 recovery=recovered "Documents/Table.xls" => /Documents/Table.xls
+#15 filesystem complete document/ole2 "/Mail/Offer.msg" size=8192/8192 valid=valid:passed/not-applicable sha=bfd9f2cf1cdcbd46 recovery=recovered "Mail/Offer.msg" => /Mail/Offer.msg

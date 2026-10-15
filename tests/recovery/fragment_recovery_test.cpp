@@ -12,6 +12,7 @@
 #include "diagnostics/logger.hpp"
 #include "formats/archive_formats.hpp"
 #include "formats/audio_formats.hpp"
+#include "formats/document_formats.hpp"
 #include "formats/image_formats.hpp"
 #include "formats/video_formats.hpp"
 #include "partition/partition_source.hpp"
@@ -26,6 +27,7 @@
 #include "support/image_builders.hpp"
 #include "support/memory_source.hpp"
 #include "support/mp4_builders.hpp"
+#include "support/ole2_builders.hpp"
 #include "support/partition_builder.hpp"
 #include "support/test_files.hpp"
 #include "support/test_macros.hpp"
@@ -152,6 +154,12 @@ carving::FormatRegistry allFormats() {
 carving::FormatRegistry withArchives() {
     carving::FormatRegistry registry = allFormats();
     EXPECT_TRUE(formats::registerArchiveFormats(registry, validation::deflateDecoder()).ok());
+    return registry;
+}
+
+carving::FormatRegistry withDocuments() {
+    carving::FormatRegistry registry = withArchives();
+    EXPECT_TRUE(formats::registerDocumentFormats(registry, validation::deflateDecoder()).ok());
     return registry;
 }
 
@@ -722,6 +730,79 @@ TEST(FragmentRecoveryTest, AFragmentedArchiveIsReconstructed) {
     EXPECT_EQ(carve->formatId, "zip");
     EXPECT_EQ(carve->carve->end.status, carving::EndStatus::Broken);
     expectReconstructed(source, carve, archive, 2);
+}
+
+TEST(FragmentRecoveryTest, AReconstructedArchiveIsNamedByWhatItsMembersSay) {
+    // A DOCX in two pieces: its first members, before the gap, name it.
+    const carving::FormatRegistry registry = withArchives();
+    Card card;
+    const Bytes document = test::storedArchive({{"[Content_Types].xml", test::makePattern(300, 101)},
+                                                {"word/document.xml", test::makePattern(2500, 102)},
+                                                {"docProps/app.xml", test::makePattern(2500, 103)}});
+    const std::uint32_t n = clustersFor(document.size());
+    card.plant(pieces(n, {{7600, 4}, {7620, n}}), document);
+    test::MemoryStorageSource source(card.image());
+    RECOVERY_ASSERT_OK(source.open());
+    Volume volume = openVolume(source);
+    ASSERT_NE(volume.recovery, nullptr);
+    const Recovered recovered = reconstructAll(source, registry, {&volume});
+    const FragmentCandidate* carve = recovered.carvedAt(card.offsetOf(7600));
+    ASSERT_NE(carve, nullptr);
+    EXPECT_EQ(carve->formatId, "zip");
+    EXPECT_EQ(carve->carve->extension, "docx");
+    EXPECT_TRUE(carve->name.ends_with(".docx")) << carve->name;
+    expectReconstructed(source, carve, document, 2);
+    ASSERT_NE(carve->reconstruction(), nullptr);
+    EXPECT_EQ(carve->reconstruction()->data.extension, "docx");
+}
+
+TEST(FragmentRecoveryTest, ACompoundFileThatValidatesKeepsNoOtherFileFromItsClusters) {
+    // A deleted document's sectors, some of them taken since by a photo's
+    // second piece. Nothing in a compound file checks its streams' data, so
+    // the document still validates, and it must not keep the photo from
+    // those clusters (an archive or a PDF that validates would: their data
+    // is checked).
+    const carving::FormatRegistry registry = withDocuments();
+    Card card;
+    const Bytes document = test::wordDocument(30000, 7);
+    card.plant(run(7000, clustersFor(document.size())), document);
+    const Bytes picture = photo(203, 4);  // restart markers: a misaligned layout does not validate
+    const std::uint32_t n = clustersFor(picture.size());
+    ASSERT_LE(n, 55u);  // the second piece stays inside the WordDocument stream (clusters 7001 to 7059)
+    card.plant(pieces(n, {{6990, 4}, {7001, n}}), picture);
+    test::MemoryStorageSource source(card.image());
+    RECOVERY_ASSERT_OK(source.open());
+    Volume volume = openVolume(source);
+    ASSERT_NE(volume.recovery, nullptr);
+    const Recovered recovered = reconstructAll(source, registry, {&volume});
+    // The document validated: no seed.
+    EXPECT_EQ(recovered.carvedAt(card.offsetOf(7000)), nullptr);
+    EXPECT_GE(recovered.report.carvesValid, 1u);
+    expectReconstructed(source, recovered.carvedAt(card.offsetOf(6990)), picture, 2);
+}
+
+TEST(FragmentRecoveryTest, CompoundFilesInPiecesAreLeftAsTheyWereFound) {
+    // Nothing in a compound file checks its streams' data: any layout that
+    // puts its FAT and directory in place validates, so a reconstruction
+    // would only choose among guesses. A deleted one stays what the
+    // filesystem gives, an unnamed one what carving gives.
+    const carving::FormatRegistry registry = withDocuments();
+    Card card;
+    const Bytes deleted = test::wordDocument(20000, 11);
+    const std::uint32_t n = clustersFor(deleted.size());
+    card.addDeleted("Thesis.doc", deleted, pieces(n, {{6000, n / 2}, {6000 + n / 2 + 8, n}}));
+    const Bytes unnamed = test::wordDocument(20000, 12);
+    const std::uint32_t m = clustersFor(unnamed.size());
+    card.plant(pieces(m, {{6500, m / 2}, {6500 + m / 2 + 8, m}}), unnamed);
+    test::MemoryStorageSource source(card.image());
+    RECOVERY_ASSERT_OK(source.open());
+    Volume volume = openVolume(source);
+    ASSERT_NE(volume.recovery, nullptr);
+    const Recovered recovered = reconstructAll(source, registry, {&volume});
+    EXPECT_TRUE(recovered.candidates.empty());
+    EXPECT_EQ(recovered.report.filesystemSkipped, 1u);
+    EXPECT_EQ(recovered.report.filesystemSeeds, 0u);
+    EXPECT_EQ(recovered.report.carvingSeeds, 0u);
 }
 
 TEST(FragmentRecoveryTest, FilesOfNoKnownFormatAreLeftAlone) {

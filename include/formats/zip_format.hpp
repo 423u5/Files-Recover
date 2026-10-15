@@ -2,10 +2,12 @@
 
 // ZIP archives (PKWARE APPNOTE 6.3.10) carving and structural validation:
 // .zip files and the formats built on ZIP (.docx, .xlsx, .pptx, .odt, .jar,
-// .apk, .epub), which are carved as ZIP archives.
+// .apk, .epub), which are carved as ZIP archives and named by what their
+// members say they are (EndDetection::extension: "docx", "apk", ...).
 //
 // An archive is walked from its first local header: every member's header
-// and data (and data descriptor), an APK signing block, the central
+// and data (and data descriptor), an APK signing block (also after the zeros
+// that align it to 4096 bytes), the central
 // directory, the ZIP64 end of central directory record and locator when
 // there are any, and the end of central directory record, whose comment ends
 // the file. End detection follows the recorded sizes, and decodes the
@@ -30,6 +32,7 @@
 #include "carving/content_reader.hpp"
 #include "carving/file_format.hpp"
 #include "carving/format_validator.hpp"
+#include "formats/deflate_decoder.hpp"
 #include "recovery/config.hpp"
 #include "recovery/result.hpp"
 
@@ -39,56 +42,6 @@
 #include <string>
 
 namespace recovery::formats {
-
-// Decodes raw DEFLATE data (RFC 1951) for the ZIP format. The engine's
-// decoder is the validation library's (validation::deflateDecoder()); that
-// library depends on this one, so the format is handed a decoder when it is
-// made.
-//
-// Thread safety: decode() is const and must be safe to call concurrently.
-class IDeflateDecoder {
-public:
-    struct Outcome {
-        enum class Kind : std::uint8_t {
-            // The stream ended (its last block) within the bytes given.
-            Done,
-            // The bytes given end inside the stream.
-            Truncated,
-            // The stream is malformed (see detail and offset).
-            Invalid,
-            // The stream unpacks to more than the bytes allowed.
-            TooLarge,
-        };
-
-        Kind kind = Kind::Invalid;
-        // Done: the bytes of the stream, from its first byte to the byte
-        // that holds the end of its last block.
-        std::uint64_t length = 0;
-        // Bytes the data unpacked to (as far as it went), and their CRC-32.
-        std::uint64_t output = 0;
-        std::uint32_t crc32 = 0;
-        // Truncated and Invalid: the content offset of the problem.
-        std::uint64_t offset = 0;
-        // Invalid: what is wrong (never file content).
-        std::string detail;
-    };
-
-    virtual ~IDeflateDecoder() = default;
-
-    // Decodes the stream that starts at content offset `begin`, reading no
-    // byte at or after `end`, and stops (TooLarge) once it unpacks to more
-    // than `maxOutput` bytes. Problems of the data are outcomes; fails only
-    // with the reader's errors (Cancelled, source failures).
-    [[nodiscard]] virtual Result<Outcome> decode(carving::IContentReader& content, std::uint64_t begin,
-                                                 std::uint64_t end, std::uint64_t maxOutput) const = 0;
-
-protected:
-    IDeflateDecoder() = default;
-    IDeflateDecoder(const IDeflateDecoder&) = default;
-    IDeflateDecoder& operator=(const IDeflateDecoder&) = default;
-    IDeflateDecoder(IDeflateDecoder&&) = default;
-    IDeflateDecoder& operator=(IDeflateDecoder&&) = default;
-};
 
 // Bounds on what one archive may cost (ZipFormat::Limits). At namespace
 // scope: a default argument inside ZipFormat could not use the member
@@ -122,7 +75,12 @@ public:
     // The signature, then a version, compression method, flags and name
     // that a ZIP writer could have written.
     [[nodiscard]] carving::HeaderCheck checkHeader(std::span<const std::byte> header) const override;
-    // StructureWalk: the end of the end of central directory record's comment.
+    // StructureWalk: the end of the end of central directory record's
+    // comment. The extension is what the members walked say the archive is:
+    // odt, ods, odp, odg and epub (a first member "mimetype"), docx, docm,
+    // xlsx, xlsm, pptx, pptm, vsdx and xps ("[Content_Types].xml" and the
+    // application's folder), apk, jar (a manifest, or a first member in
+    // META-INF/ or a class file); empty for a plain archive.
     [[nodiscard]] Result<carving::EndDetection> findEnd(carving::IContentReader& content) const override;
     [[nodiscard]] const carving::FormatValidator& validator() const noexcept override { return *this; }
     [[nodiscard]] Result<carving::ValidationResult> validate(carving::IContentReader& content) const override;

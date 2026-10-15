@@ -182,16 +182,24 @@ private:
     [[nodiscard]] Status reserve(OperationKind kind);
     // Gives the reservation back (the request failed before it started).
     void release();
+    // How an operation ended.
+    struct Ending {
+        OperationState state = OperationState::Completed;
+        std::optional<Error> error;
+    };
     // Starts the operation's thread; on failure gives the reservation back.
-    [[nodiscard]] Status launch(OperationKind kind, std::function<void()> body);
-    void runScan(OpenedSource source, std::uint32_t workers);
-    void runRecovery(OpenedSource source, std::vector<std::uint32_t> jobs, std::uint32_t workers);
+    // The thread tells the operation's end once `body` has returned and is
+    // gone with all it held, its source above all (L241).
+    [[nodiscard]] Status launch(OperationKind kind, std::function<Ending()> body);
+    [[nodiscard]] Ending runScan(OpenedSource source, std::uint32_t workers);
+    [[nodiscard]] Ending runRecovery(OpenedSource source, std::vector<std::uint32_t> jobs, std::uint32_t workers);
     void onScanProgress(const scan::ScanProgress& progress);
     void onRecoveryProgress(std::size_t index, const scan::RecoveryJobProgress& progress);
     // Applies a pause or a cancellation asked before the engine's operation
     // could take it. Under opMutex_.
     void applyRequestsLocked();
     // The operation ended: records how, wakes waiters, tells the user interface.
+    // Only launch()'s thread calls it, once the operation holds nothing.
     void finish(OperationKind kind, OperationState state, std::optional<Error> error);
     // Opens the session's source and checks it is unchanged.
     [[nodiscard]] Result<OpenedSource> openOwnSource() const;

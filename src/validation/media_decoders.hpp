@@ -24,6 +24,8 @@ namespace recovery::validation::detail {
 [[nodiscard]] std::shared_ptr<const IMediaValidator> makeAacMediaValidator();
 [[nodiscard]] std::shared_ptr<const IMediaValidator> makeMp4MediaValidator();
 [[nodiscard]] std::shared_ptr<const IMediaValidator> makeZipMediaValidator();
+[[nodiscard]] std::shared_ptr<const IMediaValidator> makePdfMediaValidator();
+[[nodiscard]] std::shared_ptr<const IMediaValidator> makeOle2MediaValidator();
 
 // Results of one decoder (`checker` names it).
 class MediaVerdict {

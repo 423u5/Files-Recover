@@ -1,12 +1,14 @@
 #pragma once
 
-// The engine's DEFLATE decoder for the ZIP format (formats::IDeflateDecoder):
-// the inflater that checks the image data of PNG files (inflate.hpp), on
-// raw DEFLATE data. Register the archive formats with it:
+// The engine's DEFLATE decoder for the ZIP and PDF formats
+// (formats::IDeflateDecoder): the inflater that checks the image data of PNG
+// files (inflate.hpp), on raw DEFLATE data and on zlib streams. Register the
+// archive and document formats with it:
 //
 //   formats::registerArchiveFormats(registry, validation::deflateDecoder());
+//   formats::registerDocumentFormats(registry, validation::deflateDecoder());
 
-#include "formats/zip_format.hpp"
+#include "formats/deflate_decoder.hpp"
 
 #include <memory>
 

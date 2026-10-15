@@ -4,7 +4,8 @@ folders, data descriptors from a stream that cannot seek, LZMA and bzip2
 members, an archive comment), and archives reworked here into what other
 writers make: ZIP64 end records, an APK signing block before the central
 directory, a DOCX's first members. Every archive is valid; the tests break
-them byte by byte.
+them byte by byte. Samples are only ever appended: the corpus baselines
+hold the hashes of the earlier ones (Windows' Python 3.14 reproduces them).
 
 Usage: python3 make_zip_samples.py <output .cpp>
 """
@@ -118,6 +119,18 @@ VECTORS = [
                                          ("res/icon.png", noise(400, 12), S)]))),
     ("docx", archive([("[Content_Types].xml", text(900, 13), D), ("_rels/.rels", text(400, 14), D),
                       ("word/document.xml", text(5000, 15), D)])),
+    # The other formats built on ZIP, told apart by their members' names
+    # (and an OpenDocument or EPUB file's first member, "mimetype", stored).
+    ("xlsx", archive([("[Content_Types].xml", text(700, 16), D), ("_rels/.rels", text(300, 17), D),
+                      ("xl/workbook.xml", text(1200, 18), D), ("xl/worksheets/sheet1.xml", text(3000, 19), D)])),
+    ("pptm", archive([("[Content_Types].xml", text(700, 20), D), ("ppt/presentation.xml", text(1500, 21), D),
+                      ("ppt/vbaProject.bin", noise(600, 22), D)])),
+    ("odt", archive([("mimetype", b"application/vnd.oasis.opendocument.text", S),
+                     ("content.xml", text(2500, 23), D), ("META-INF/manifest.xml", text(400, 24), D)])),
+    ("epub", archive([("mimetype", b"application/epub+zip", S), ("META-INF/container.xml", text(300, 25), D),
+                      ("OEBPS/chapter1.xhtml", text(4000, 26), D)])),
+    ("jar", archive([("META-INF/MANIFEST.MF", b"Manifest-Version: 1.0\r\nCreated-By: tests\r\n\r\n", D),
+                     ("org/example/App.class", noise(900, 27), D)])),
 ]
 
 

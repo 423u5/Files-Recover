@@ -45,6 +45,10 @@ enum class Outcome : std::uint8_t {
     // for byte, as a stored member (the user's decision of 2026-10-14).
     // Always deep only.
     InsideArchive,
+    // An image stored as a stream of a PDF the scan recovers: no candidate
+    // holds its bytes on their own, and a recovered Complete PDF holds them,
+    // byte for byte, as a stream's data. Always deep only.
+    InsideDocument,
 };
 
 // The condition the candidate holding the bytes (Named, Carved,

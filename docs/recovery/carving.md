@@ -100,8 +100,9 @@ defines a format inside the test file and carves it next to the other test forma
 
 Formats are added explicitly. Each format module provides a function that adds its formats to a registry
 (`formats::registerImageFormats` for the images of P9, `formats::registerAudioFormats` for the audio of P10,
-`formats::registerVideoFormats` for MP4 in P12, `formats::registerArchiveFormats` for ZIP after P20, which takes the
-validation library's DEFLATE decoder). There is deliberately no registration through static
+`formats::registerVideoFormats` for MP4 in P12, `formats::registerArchiveFormats` for ZIP and
+`formats::registerDocumentFormats` for PDF and OLE2 after P20, which take the validation library's DEFLATE decoder).
+There is deliberately no registration through static
 initialisers: the engine is built
 from static libraries, and the linker drops object files that nothing references, so such formats would silently
 go missing.
@@ -184,7 +185,14 @@ errors and stop the carve.
 at once, so memory does not grow with the number of candidates. Hits strictly inside a candidate whose end was
 `Found` and that validated as `Valid` are skipped (`skipHitsInsideValidCandidates`): an embedded thumbnail or
 resource is part of that file. Hits inside any other candidate (truncated, broken, invalid, unknown end, not
-validated) are carved, and so are hits of other formats at the same start. `options.scan.reads` (cancellation,
+validated) are carved, and so are hits of other formats at the same start. A format whose structure leaves its
+files' data unchecked says so with `FormatDescriptor::trustValidFiles = false` (OLE2 compound files, after P20): a
+valid file of it is not trusted (`isTrusted`), and the hits inside it are carved as if it were not there
+([../formats/documents.md](../formats/documents.md)).
+
+A format may say what a file is beyond its own extension: `EndDetection::extension` (after P20; "docx" for a ZIP
+archive whose members make it a DOCX, "doc" for a compound file holding a Word document), and the carver names the
+candidate by it (`FileCandidate::extension`). `options.scan.reads` (cancellation,
 known bad regions, retries) and `options.scan.logger` apply to the carver's own reads and log records too.
 
 **Self-synchronizing formats** (`FormatDescriptor::selfSynchronizing`, added in P10) are streams of frames that
@@ -200,7 +208,7 @@ furthest. `skipHitsInsideValidCandidates = false` turns both rules off. The flag
 with the format's signature, so the members of an archive are its own hits
 ([../formats/archives.md](../formats/archives.md)).
 
-`FormatDescriptor::foundEndMeansContiguous` (ZIP, after P20) says that a file whose end was `Found` lies in one
+`FormatDescriptor::foundEndMeansContiguous` (ZIP and PDF, after P20) says that a file whose end was `Found` lies in one
 piece: a carve that is `Found` but `Invalid` is then damaged where it lies, and fragment reconstruction does not take
 it as a seed ([fragment_recovery.md](fragment_recovery.md)). The carver itself does not use the flag.
 

@@ -66,8 +66,9 @@ struct CarveOptions {
     // candidate is trusted (see skipHitsInsideValidCandidates).
     bool validate = true;
     // run() skips hits that lie strictly inside a candidate whose end was
-    // Found and that validated as Valid: an embedded thumbnail or resource
-    // is part of that file. Hits inside any other candidate are carved,
+    // Found and that validated as Valid, when its format trusts such files
+    // (isTrusted, FormatDescriptor::trustValidFiles): an embedded thumbnail
+    // or resource is part of that file. Hits inside any other candidate are carved,
     // except the hits of a self-synchronizing format inside an earlier
     // candidate of the same format (FormatDescriptor::selfSynchronizing),
     // which are skipped whatever that candidate's end and verdict. False
@@ -98,8 +99,7 @@ struct CarveSkipState {
         friend bool operator==(const Interval&, const Interval&) = default;
     };
 
-    // The candidate whose end was Found and that validated as Valid that
-    // reaches furthest so far.
+    // The trusted candidate (isTrusted) that reaches furthest so far.
     Interval trusted;
     // Per format (by registry position): the candidate of a self-synchronizing
     // format that reaches furthest so far, whatever its verdict.

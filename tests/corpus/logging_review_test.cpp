@@ -8,6 +8,7 @@
 #include "diagnostics/logger.hpp"
 #include "formats/archive_formats.hpp"
 #include "formats/audio_formats.hpp"
+#include "formats/document_formats.hpp"
 #include "formats/image_formats.hpp"
 #include "formats/video_formats.hpp"
 #include "scan/recovery_job.hpp"
@@ -97,6 +98,7 @@ TEST(LoggingReviewTest, ScansAndRecoveriesLogWhatThePlanAsksAndNoContent) {
     RECOVERY_ASSERT_OK(formats::registerAudioFormats(formats));
     RECOVERY_ASSERT_OK(formats::registerVideoFormats(formats));
     RECOVERY_ASSERT_OK(formats::registerArchiveFormats(formats, validation::deflateDecoder()));
+    RECOVERY_ASSERT_OK(formats::registerDocumentFormats(formats, validation::deflateDecoder()));
     RECOVERY_ASSERT_OK(validation::registerMediaValidators(media));
     scan::ScanRunOptions options;
     options.workerThreads = 2;

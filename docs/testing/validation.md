@@ -108,6 +108,35 @@ added to the seeds: `fuzz_formats` 182,398 inputs in 10 minutes, `fuzz_media` 15
 `fuzz_carving` 8,539 and `fuzz_scan` 3,779 in 10 each; nothing found. AddressSanitizer runs the whole suite with
 ZIP: 1,639 tests, all pass.
 
+After PDF and OLE2 carving (2026-10-15), the same five targets ran again from that corpus with 20 document seeds
+added (the 11 samples real writers made, PDFs of every cross-reference layout, one with a JPEG, and compound files
+of both versions; the carving and scan seed card holds 9 PDFs and 3 compound files): `fuzz_formats` 144,229 inputs,
+`fuzz_media` 286,236, `fuzz_metadata` 346,914, `fuzz_carving` 8,739 and `fuzz_scan` 3,922, 10 minutes each; nothing
+found. A review of the two parsers for what inputs no fuzzer is likely to build found two defects, fixed with tests:
+a cross-reference stream's `/Index` counts could add up past 64 bits and pass for the few entries the stream holds,
+which were then read past its data (`PdfFormatTest.IndexCountsThatAddUpPastSixtyFourBitsListTooManyEntries`); and a
+compound file's chain was followed as far as its stream's size asked, which a version 4 file records in 64 bits, so a
+chain that loops could grow without end (`Ole2FormatTest.AChainThatRunsInALoopIsDamage`). The same review bounded
+the work a crafted document can cause: at most 4,096 PDF revisions and cross-reference sections (each revision's end
+followed the chain of sections, found by a linear search: cubic time in their number), cross-reference streams
+inflated within the document's 4 GiB budget, and a compound file's checks stop at the first chain that shares a
+sector. With all of it, every CI preset ran again (2026-10-15): debug, release and AddressSanitizer 1,714 tests each,
+all pass; the fuzz preset 11/11; `/analyze` clean; no warning in any build. The targets that reach the changed code
+ran 10 minutes more each on it: `fuzz_formats` 149,113 inputs, `fuzz_carving` 10,736, `fuzz_scan` 4,823; nothing
+found. clang-tidy (both passes) on the 18 engine and CLI sources the work changed: 21 and 6 findings, 3 of them in
+new code and fixed (a `std::move` that moved nothing, a dead store, an `int` multiplication in a constant); the rest
+are the code P20 triaged. All presets ran once more after those fixes: release and AddressSanitizer 1,714 of 1,714,
+the fuzz preset 11/11, `/analyze` clean, no warning; debug 1,713 of 1,714: an API test that the work did not touch
+failed once under load and passed in the full debug run after it and in every repeat (L241).
+
+L241 was then found (2026-10-15): the API told an operation's end before it closed the operation's source, and the
+test rewrites the card image, which a scan opens sharing reads only, as soon as the scan's end is told. Holding the
+scan's thread for 200 ms after it told the end made the test fail with the same message. The API now tells an
+operation's end once the source is closed. `ApiSourcesTest.AnOperationThatEndedHoldsItsSourceNoMore` makes closing a
+simulated disk slow and fails on the old code. Every CI preset ran again: debug, release and AddressSanitizer 1,715
+tests each, all pass; the fuzz preset 11/11; `/analyze` clean; no warning; clang-tidy (both passes) finds nothing
+new in the two API sources changed.
+
 ## Audits
 
 ### RAII
@@ -331,6 +360,20 @@ build output, 1 GIF, 40 damaged or partial images; L221); 2 are new (the carved 
 (the archives found by name); nothing else changed. The scan took 15:31 minutes with another build running on the
 computer; scanning the largest archive alone (158 MB, 2,289 members, 210 MB unpacked) takes 7 seconds, most of it
 decoding.
+
+**With PDF and OLE2 carving** (release builds, 2026-10-15, the same image, read only): the build of the last commit
+(60c16e8, before) and the build with the document formats (after) scanned it one after the other. All 529
+candidates are identical field for field (`tools/regression/compare_reports.py`: none lost, none worse, none new),
+as are the 5,495,720 signature hits: the stick holds no `%PDF-` and no compound file signature anywhere. 12:49 and
+13:15 minutes. Since the stick has no documents, a 10 MB raw image of 23 real files was scanned the same way (no
+filesystem, seeded noise between the files: the Edge, Microsoft Print to PDF and qpdf PDFs, the structured-storage
+DOC and XLS files and the Windows Installer package of the samples, three packages from `C:\Windows\Installer`, five
+JARs and the APK of Android Studio, a JPEG). Before: 8 of the 23 byte for byte (the JPEG and the ZIP-based files),
+the APK cut short where `apksigner` aligned its signing block (L240), no PDF, DOC, XLS or MSI; 312 candidates, 299 of
+them images stored in the APK, carved loose because the APK was not verified. After: all 23 byte for byte, named
+`.pdf`, `.doc`, `.xls`, `.msi`, `.xps`, `.jar`, `.zip` and `.apk` (L239: two JARs without a manifest as `.zip`), the
+AES-256 PDF `UNVERIFIED`, the others `COMPLETE`; 23 candidates. Each of the 299 images is inside the recovered APK,
+byte for byte, as the user decided for archives (L221).
 
 ## Acceptance
 

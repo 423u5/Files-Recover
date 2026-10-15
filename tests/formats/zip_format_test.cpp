@@ -14,6 +14,7 @@
 #include "formats/image_formats.hpp"
 #include "recovery/byte_order.hpp"
 #include "support/image_builders.hpp"
+#include "support/test_files.hpp"
 #include "support/test_macros.hpp"
 #include "support/virtual_source.hpp"
 #include "support/zip_builders.hpp"
@@ -82,9 +83,12 @@ bool contains(const std::string& text, std::string_view part) {
     return text.find(part) != std::string::npos;
 }
 
+testing::Carved carveWithArchives(storage::IStorageSource& source);
+
 // The archives every check of the format can read in full.
-constexpr std::array<std::string_view, 8> kCheckable = {"mixed",   "stored",  "streamed", "zip64_members",
-                                                        "zip64_end", "comment", "apk",      "docx"};
+constexpr std::array<std::string_view, 13> kCheckable = {"mixed", "stored", "streamed", "zip64_members", "zip64_end",
+                                                         "comment", "apk",  "docx",     "xlsx",          "pptm",
+                                                         "odt",     "epub", "jar"};
 
 TEST(ZipFormatTest, Descriptor) {
     const carving::FormatDescriptor& d = format().descriptor();
@@ -132,6 +136,82 @@ TEST(ZipFormatTest, TheDetailSaysWhatWasChecked) {
     EXPECT_TRUE(contains(verdictOf(format(), vector("zip64_end")).detail, "ZIP64"));
     EXPECT_TRUE(contains(verdictOf(format(), vector("apk")).detail, "an APK signing block"));
     EXPECT_EQ(endOf(format(), vector("mixed")).detail, "6 members");
+}
+
+// `archive` with `padding` bytes of `fill` inserted before its central
+// directory, or before the APK signing block in front of it, up to a
+// multiple of 4096 bytes; the end record's directory offset moves with it.
+Bytes paddedBefore(Bytes archive, bool signingBlock, std::byte fill = std::byte{0}) {
+    const std::size_t end = offsetsOf(archive, kEnd).back();
+    const std::uint32_t directory = loadLe32(archive, end + 16);
+    std::size_t at = directory;
+    if (signingBlock) {
+        // The block ends with its size, then "APK Sig Block 42".
+        at = directory - 8 - static_cast<std::size_t>(loadLe64(archive, directory - 16 - 8));
+    }
+    const std::size_t padding = (at / 4096 + 1) * 4096 - at;
+    archive.insert(archive.begin() + static_cast<std::ptrdiff_t>(at), padding, fill);
+    storeLe32(archive, end + padding + 16, static_cast<std::uint32_t>(directory + padding));
+    return archive;
+}
+
+TEST(ZipFormatTest, AnApkWhoseSigningBlockApksignerAlignedIsIntact) {
+    // apksigner pads the members with zeros so that the signing block starts
+    // at a multiple of 4096 bytes (2,054 bytes of them in an APK that Android
+    // Studio ships, which the walk broke at before).
+    const Bytes apk = paddedBefore(vector("apk"), true);
+    EXPECT_TRUE(isIntact(format(), apk));
+    const carving::EndDetection end = endOf(format(), concat({apk, testing::quietNoise(4096, 7)}));
+    EXPECT_EQ(end.status, EndStatus::Found) << testing::describe(end);
+    EXPECT_EQ(end.length, apk.size());
+    EXPECT_EQ(end.extension, "apk");
+    const carving::ValidationResult verdict = verdictOf(format(), apk);
+    EXPECT_TRUE(contains(verdict.detail, "an APK signing block after")) << verdict.detail;
+    // Only zeros are padding, and only before a signing block.
+    EXPECT_EQ(endOf(format(), paddedBefore(vector("apk"), true, std::byte{0x20})).status, EndStatus::Broken);
+    EXPECT_EQ(endOf(format(), paddedBefore(vector("mixed"), false)).status, EndStatus::Broken);
+}
+
+TEST(ZipFormatTest, TheFormatsBuiltOnZipAreNamedByTheirMembers) {
+    const std::vector<std::pair<std::string_view, std::string_view>> named = {
+        {"docx", "docx"}, {"xlsx", "xlsx"}, {"pptm", "pptm"}, {"odt", "odt"},   {"epub", "epub"},
+        {"jar", "jar"},   {"apk", "apk"},   {"mixed", ""},    {"stored", ""}, {"lzma", ""}};
+    for (const auto& [sample, extension] : named) {
+        SCOPED_TRACE(std::string(sample));
+        EXPECT_EQ(endOf(format(), vector(sample)).extension, extension);
+    }
+    // A DOCX cut short names itself by its first members, which say what it is.
+    const Bytes docx = vector("docx");
+    const std::size_t third = offsetsOf(docx, kLocal)[2];
+    const std::size_t named3 = third + 30 + std::string_view("word/document.xml").size();
+    const carving::EndDetection cut = endOf(format(), std::span(docx.data(), named3 + 10));
+    EXPECT_NE(cut.status, EndStatus::Found);
+    EXPECT_EQ(cut.extension, "docx");
+    // An OpenDocument file cut inside its media type says nothing of itself.
+    const Bytes odt = vector("odt");
+    EXPECT_EQ(endOf(format(), std::span(odt.data(), 30 + 8 + 10)).extension, "");
+    // Most JARs that tools other than `jar` make (IntelliJ's, Android
+    // Studio's) have no manifest: a first member in META-INF/ or a class file
+    // names them. An archive of a project's folder, classes in it, stays one.
+    const Bytes klass = test::makePattern(300, 5);
+    EXPECT_EQ(endOf(format(), test::storedArchive({{"META-INF/plugin.xml", klass}, {"a/B.class", klass}})).extension,
+              "jar");
+    EXPECT_EQ(endOf(format(), test::storedArchive({{"org/example/A.class", klass}})).extension, "jar");
+    EXPECT_EQ(endOf(format(), test::storedArchive({{"MyApp/", {}}, {"MyApp/build/A.class", klass}})).extension, "");
+}
+
+TEST(ZipFormatTest, ACarvedArchiveIsNamedByWhatItIs) {
+    test::VirtualSource source(64 * 1024);
+    source.plant(4096, vector("docx"));
+    source.plant(4096 * 4, vector("apk"));
+    source.plant(4096 * 8, vector("mixed"));
+    RECOVERY_ASSERT_OK(source.open());
+    const testing::Carved carved = carveWithArchives(source);
+    ASSERT_EQ(carved.candidates.size(), 3u);
+    EXPECT_EQ(carved.candidates[0].formatId, "zip");
+    EXPECT_EQ(carved.candidates[0].extension, "docx");
+    EXPECT_EQ(carved.candidates[1].extension, "apk");
+    EXPECT_EQ(carved.candidates[2].extension, "zip");
 }
 
 TEST(ZipFormatTest, DataDescriptorsAreFollowedForEveryMethod) {

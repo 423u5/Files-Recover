@@ -26,7 +26,7 @@ recovered file and never touches a session's journal: the engine does all of tha
 | startScan() | `startScan(SourceRef, ScanSettings)`: a new session, its scan started; returns the session's id |
 | pauseScan(), resumeScan(), cancelScan() | By session id. `resumeScan` also runs again a scan that did not complete (cancelled, failed, interrupted by a crash, paused when the program ended) from its last update |
 | getProgress() | `getProgress(session)` from any thread at any time: the operation, its state, its stage and figures, live from the engine, or how the last operation ended |
-| getCandidates() | `getCandidates(session, CandidateQuery)`: a page of the candidates delivered so far, filtered by kind (`MediaKind`: other, image, audio, video, and archive since ZIP is carved), condition, recovery state, deleted or not, duplicates |
+| getCandidates() | `getCandidates(session, CandidateQuery)`: a page of the candidates delivered so far, filtered by kind (`MediaKind`: other, image, audio, video, archive since ZIP is carved, and document since PDF and OLE2 files are: PDF, DOCX, XLSX, PPTX, ODT, EPUB, XPS, DOC, XLS, PPT, MSG; ZIP, JAR, APK and MSI are archives), condition, recovery state, deleted or not, duplicates |
 | recoverCandidate(), recoverCandidates(), recoverAll() | Recovery jobs of the session to a destination folder (`RecoveryOptions`), converging on it; `recoverAll` takes a `CandidateFilter`. `pauseRecovery`, `resumeRecovery`, `cancelRecovery` |
 | getSession() | `getSession(session)`: everything the session holds but its candidates: source, settings, scan state and history, volumes, recovery jobs, errors, unreadable regions, repairs. `listSessions`, `openSession`, `closeSession` |
 | exportReport() | `exportReport(session, file, ReportOptions)`: the session report as JSON (`recovery-session-report`, the CLI's document) or text, to a new file |
@@ -144,7 +144,12 @@ and a progress bar never goes back. A recovery's fraction counts every job's fil
 | `Paused`, `Resumed` | The user paused or resumed (a pause asked before `OperationStarted` is in its state) | `progress` |
 | `CandidatesFound` | The scan delivered candidates (now in `getCandidates`) | `firstCandidate`, `candidateCount` |
 | `FilesRecovered` | A recovery job is done with files (each update of the job) | `files`: candidate, job, the file written with its size and missing and unreadable bytes, or why not |
-| `OperationFinished` | The operation ended | `progress.state`, `progress.error` |
+| `OperationFinished` | The operation ended, its source closed | `progress.state`, `progress.error` |
+
+An operation's end is told, by `OperationFinished` and by the `wait` functions, only once the API has closed the
+operation's source: the card can then be taken out, and an image file, which the API opens sharing reads only so
+that it cannot change under a scan, can be written at once (L241). The source that details and previews read is
+the session's own and stays open until the session closes (see below).
 
 Every event names its session (`session`) or its imaging (`imaging`). Events are delivered one at a time, in the
 order they were posted, with no lock of the API held, so the callback may call any member function (not the
@@ -246,7 +251,7 @@ resolver that puts chosen folders on chosen disks and every other path on disk 0
 | `api_recovery_test.cpp` | Every file written and told once, byte for byte; nothing twice in the same folder (also spelt otherwise), `again`, another folder; one candidate, filters; requests refused before anything is recorded (unknown candidates, a file in the way, a changed source, a folder on the source disk); the list's recovery states against the engine's index |
 | `api_session_test.cpp` | A session restored after the program closes; a scan interrupted by a crash (the session folder copied at the source pass) resumed to the same candidates; one program at a time; ids checked; JSON and text reports, never overwriting, never on the source; a session never kept on the disk it scans |
 | `api_details_test.cpp` | A photo's metadata and its content preview, whole and in pieces; audio and video details; requests out of range; no media read; the source gone and back; what recovery jobs did |
-| `api_sources_test.cpp` | The disk list (by number, letters, system and sessions disks, descriptions); inspecting the card and a disk of three volumes; sources that cannot be read and the hints; imaging a disk with bad sectors (zeros, their list, a scan of the image), cancelled and resumed, never overwriting, never on the source |
+| `api_sources_test.cpp` | The disk list (by number, letters, system and sessions disks, descriptions); inspecting the card and a disk of three volumes; sources that cannot be read and the hints; a scan, a recovery and an imaging that ended hold their disk no more, though closing it is slow (L241); imaging a disk with bad sectors (zeros, their list, a scan of the image), cancelled and resumed, never overwriting, never on the source |
 
 Also: `RecoverySessionTest.TheUpdateHooksAreToldEachUpdateOnceItIsRecorded` (label `session`) and
 `DiskListTest` (label `integration`: the real disk list of the computer, read-only, no administrator rights).

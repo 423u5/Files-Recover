@@ -7,8 +7,11 @@
 #include "support/image_builders.hpp"
 #include "support/mp4_builders.hpp"
 #include "support/ntfs_builder.hpp"
+#include "support/ole2_builders.hpp"
 #include "support/partition_builder.hpp"
+#include "support/pdf_builders.hpp"
 #include "support/test_files.hpp"
+#include "support/zip_builders.hpp"
 
 #include <algorithm>
 #include <system_error>
@@ -62,6 +65,27 @@ SimulatedDisk simulatedDisk(Bytes bytes, std::vector<std::pair<std::uint64_t, st
     disk.config = config;
     disk.opener = std::make_shared<MockDeviceOpener>(config);
     return disk;
+}
+
+DocumentCard documentCard() {
+    Fat32BuilderOptions options;
+    options.clusterCount = 4096;
+    Fat32ImageBuilder builder(options);
+    const auto archive = [](std::string_view first, std::string_view second, std::uint64_t seed) {
+        return storedArchive(
+            {{std::string(first), makePattern(300, seed)}, {std::string(second), makePattern(900, seed + 1)}});
+    };
+    (void)builder.addFile(Fat32ImageBuilder::root(), "REPORT.PDF", simplePdf("report"));
+    (void)builder.addFile(Fat32ImageBuilder::root(), "LETTER.DOC", wordDocument());
+    (void)builder.addFile(Fat32ImageBuilder::root(), "BOOK.DOCX", archive("[Content_Types].xml", "word/document.xml", 1));
+    (void)builder.addFile(Fat32ImageBuilder::root(), "APP.APK", archive("AndroidManifest.xml", "classes.dex", 3));
+    (void)builder.addFile(Fat32ImageBuilder::root(), "NOTES.ZIP", archive("notes.txt", "todo.txt", 5));
+    DocumentCard card;
+    card.orphan = archive("[Content_Types].xml", "word/document.xml", 7);
+    std::copy(card.orphan.begin(), card.orphan.end(),
+              builder.raw().begin() + static_cast<std::ptrdiff_t>(builder.clusterOffset(3000)));
+    card.image = builder.build();
+    return card;
 }
 
 Bytes threeVolumeDisk() {

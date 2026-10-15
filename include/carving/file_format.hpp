@@ -95,7 +95,22 @@ struct FormatDescriptor {
     // does not take it as a seed. Files whose end was not found are seeds as
     // for any format.
     bool foundEndMeansContiguous = false;
+    // A file whose end was Found and that validated as Valid is trusted: the
+    // hits strictly inside it are its own content and are not carved
+    // (CarveOptions::skipHitsInsideValidCandidates), and fragment
+    // reconstruction (P13) claims its clusters. False for a format whose
+    // structure leaves the data of its files unchecked, so that another
+    // file written over part of one still validates: OLE2 compound files
+    // (no checksums). The hits inside such a file are carved as if it were
+    // not there, and fragment reconstruction leaves its files as they were
+    // found: any layout that keeps the structure in place validates,
+    // whatever data it places, so none is better evidence than another.
+    bool trustValidFiles = true;
 };
+
+// True for an extension FormatDescriptor::extension allows: 1 to
+// kMaxExtensionLength lower-case ASCII letters and digits.
+[[nodiscard]] bool isValidExtension(std::string_view extension) noexcept;
 
 // Checks every rule stated in FormatDescriptor.
 [[nodiscard]] Status validateDescriptor(const FormatDescriptor& descriptor);
@@ -135,6 +150,12 @@ struct EndDetection {
     std::uint64_t length = 0;
     // What decided the end (for evidence; never file content).
     std::string detail;
+    // The extension of this file when its content says more than its
+    // format's (a ZIP archive that is a DOCX document: "docx"; a compound
+    // file that is a Word document: "doc"), as isValidExtension() allows;
+    // empty for the format's own (FormatDescriptor::extension). The carver
+    // names the file by it.
+    std::string extension;
 };
 
 // A carvable file format.

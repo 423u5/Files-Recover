@@ -13,6 +13,7 @@
 #include "carving/format_registry.hpp"
 #include "formats/archive_formats.hpp"
 #include "formats/audio_formats.hpp"
+#include "formats/document_formats.hpp"
 #include "formats/image_formats.hpp"
 #include "formats/video_formats.hpp"
 #include "partition/guid.hpp"
@@ -60,7 +61,8 @@ const carving::FormatRegistry& formatsOnce() {
         const bool audio = formats::registerAudioFormats(formats).ok();
         const bool video = formats::registerVideoFormats(formats).ok();
         const bool archives = formats::registerArchiveFormats(formats, validation::deflateDecoder()).ok();
-        EXPECT_TRUE(images && audio && video && archives);
+        const bool documents = formats::registerDocumentFormats(formats, validation::deflateDecoder()).ok();
+        EXPECT_TRUE(images && audio && video && archives && documents);
         return formats;
     }();
     return registry;

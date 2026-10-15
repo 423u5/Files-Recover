@@ -432,6 +432,38 @@ bool heldByRecoveredArchive(const ScanRun& run, const Bytes& bytes) {
     return false;
 }
 
+// A recovered Complete PDF candidate holds `bytes` as a stream's data: the
+// "stream" keyword and its end of line right before them, an end of line and
+// "endstream" right after.
+bool heldByRecoveredDocument(const ScanRun& run, const Bytes& bytes) {
+    const auto text = [](Bytes::const_iterator from, Bytes::const_iterator to) {
+        return from == to ? std::string()
+                          : std::string(reinterpret_cast<const char*>(&*from), static_cast<std::size_t>(to - from));
+    };
+    for (const CandidateInfo& c : run.candidates) {
+        if (c.format != "pdf" || c.condition != Condition::Complete) {
+            continue;
+        }
+        const auto file = run.recovered.find(c.id.value);
+        if (file == run.recovered.end()) {
+            continue;
+        }
+        const Bytes& pdf = file->second;
+        for (auto at = std::search(pdf.begin(), pdf.end(), bytes.begin(), bytes.end()); at != pdf.end();
+             at = std::search(at + 1, pdf.end(), bytes.begin(), bytes.end())) {
+            const std::string before = text(at - std::min<std::ptrdiff_t>(8, at - pdf.begin()), at);
+            const auto end = at + static_cast<std::ptrdiff_t>(bytes.size());
+            const std::string after = text(end, end + std::min<std::ptrdiff_t>(11, pdf.end() - end));
+            if ((before.ends_with("stream\n") || before.ends_with("stream\r\n")) &&
+                (after.starts_with("\nendstream") || after.starts_with("\r\nendstream") ||
+                 after.starts_with("endstream"))) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 void checkOriginals(const ScanRun& run, const std::vector<Original>& originals, bool deep) {
     for (const Original& original : originals) {
         SCOPED_TRACE(std::string(deep ? "deep" : "quick") + " scan, original " +
@@ -475,6 +507,16 @@ void checkOriginals(const ScanRun& run, const std::vector<Original>& originals, 
                         << "a candidate of its own: a needless copy of what an archive holds";
                     EXPECT_TRUE(heldByRecoveredArchive(run, original.bytes))
                         << "no recovered Complete archive holds it as a stored member";
+                }
+                break;
+            case Outcome::InsideDocument:
+                if (deep) {
+                    const std::string digest = shaOf(original.bytes);
+                    EXPECT_FALSE(std::any_of(run.candidates.begin(), run.candidates.end(),
+                                             [&](const CandidateInfo& c) { return c.sha256 == digest; }))
+                        << "a candidate of its own: a needless copy of what a document holds";
+                    EXPECT_TRUE(heldByRecoveredDocument(run, original.bytes))
+                        << "no recovered Complete PDF holds it as a stream's data";
                 }
                 break;
             case Outcome::Lost: {

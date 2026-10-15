@@ -153,6 +153,8 @@ std::string_view toString(MediaKind kind) noexcept {
         return "video";
     case MediaKind::Archive:
         return "archive";
+    case MediaKind::Document:
+        return "document";
     }
     return "unknown";
 }

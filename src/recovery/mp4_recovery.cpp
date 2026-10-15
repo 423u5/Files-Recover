@@ -805,8 +805,7 @@ Status Mp4RecoverySteps::Impl::apply(Mp4HitWork::Impl& work) {
     ++counts.carved;
     std::optional<Analysis>& analysis = work.analysis;
     std::vector<DamagedRange>& unreadable = work.unreadable;
-    if (carve.end.status == carving::EndStatus::Found && carve.validation.status == ValidationStatus::Valid &&
-        carve.sourceEnd() > trustedEnd) {
+    if (carving::isTrusted(carve, format.descriptor()) && carve.sourceEnd() > trustedEnd) {
         trustedStart = carve.sourceOffset;
         trustedEnd = carve.sourceEnd();
     }

@@ -75,6 +75,8 @@ MediaKind toApi(metadata::MediaKind kind) noexcept {
         return MediaKind::Video;
     case metadata::MediaKind::Archive:
         return MediaKind::Archive;
+    case metadata::MediaKind::Document:
+        return MediaKind::Document;
     case metadata::MediaKind::Unknown:
         break;
     }

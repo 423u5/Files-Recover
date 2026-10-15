@@ -81,6 +81,34 @@ TEST(MetadataTypesTest, FormatsHaveKindsAndMediaTypes) {
     EXPECT_EQ(mediaTypeOfFormat("zip"), "application/zip");
     EXPECT_EQ(mediaTypeOfFormat("unknown"), "");
     EXPECT_EQ(toString(MediaKind::Archive), "archive");
+    EXPECT_EQ(kindOfFormat("pdf"), MediaKind::Document);
+    EXPECT_EQ(kindOfFormat("ole2"), MediaKind::Document);
+    EXPECT_EQ(mediaTypeOfFormat("pdf"), "application/pdf");
+    EXPECT_EQ(toString(MediaKind::Document), "document");
+}
+
+TEST(MetadataTypesTest, TheFilesOfAContainerFormatAreToldApartByTheirExtension) {
+    EXPECT_EQ(kindOfFile("zip", "docx"), MediaKind::Document);
+    EXPECT_EQ(mediaTypeOfFile("zip", "docx"),
+              "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    EXPECT_EQ(kindOfFile("zip", "odt"), MediaKind::Document);
+    EXPECT_EQ(kindOfFile("zip", "epub"), MediaKind::Document);
+    EXPECT_EQ(kindOfFile("zip", "apk"), MediaKind::Archive);
+    EXPECT_EQ(mediaTypeOfFile("zip", "apk"), "application/vnd.android.package-archive");
+    EXPECT_EQ(kindOfFile("zip", "zip"), MediaKind::Archive);
+    EXPECT_EQ(kindOfFile("zip", "jpg"), MediaKind::Archive);  // a renamed archive
+    EXPECT_EQ(mediaTypeOfFile("zip", "jpg"), "application/zip");
+    EXPECT_EQ(kindOfFile("ole2", "doc"), MediaKind::Document);
+    EXPECT_EQ(mediaTypeOfFile("ole2", "doc"), "application/msword");
+    EXPECT_EQ(mediaTypeOfFile("ole2", "xls"), "application/vnd.ms-excel");
+    EXPECT_EQ(kindOfFile("ole2", "msi"), MediaKind::Archive);
+    EXPECT_EQ(kindOfFile("ole2", "db"), MediaKind::Unknown);
+    EXPECT_EQ(kindOfFile("ole2", "ole"), MediaKind::Document);
+    EXPECT_EQ(mediaTypeOfFile("ole2", "ole"), "application/x-ole-storage");
+    EXPECT_EQ(kindOfFile("pdf", "pdf"), MediaKind::Document);
+    // Another format's extension tells nothing.
+    EXPECT_EQ(kindOfFile("jpeg", "docx"), MediaKind::Image);
+    EXPECT_EQ(kindOfFile("", "docx"), MediaKind::Unknown);
 }
 
 TEST(MetadataTypesTest, AnArchiveHasNoMediaMetadataAndNoPreview) {

@@ -45,7 +45,7 @@ Run the same suite under AddressSanitizer with `msvc-asan`. Run static analysis 
 | `metadata` | `tests/metadata` | P17: media metadata of builder files and of files of independent writers checked against exiftool and ffprobe, previews and their bytes, invalid media (garbage, truncation at every position, mutation fuzzing, damaged Exif and ID3), missing metadata; conditions, duplicates under different names, and recovery status, on the scan tests' card and a session written below `%TEMP%\recovery-tests\<random>` |
 | `cli` | `tests/cli`, `tests/CMakeLists.txt` | P18: the command line run in-process on the scan tests' card written as an image file, a disk with three volumes and simulated physical disks: every command, usage errors, invalid paths, errors, Ctrl+C at every stage, journals cut as crashes leave them; files and sessions below `%TEMP%\recovery-tests\<random>`. `recovery.exe` run as a process: exit codes, Unicode paths, a real Ctrl+Break |
 | `api` | `tests/api`, `tests/CMakeLists.txt` | P19: the GUI-facing API on the scan tests' card as an image file and as simulated physical disks, a disk of three volumes, a simulated disk list: a user interface's workflow compiled against the API's public headers alone, scans, events, concurrent queries, cancellation in every stage, pause and resume, recovery, sessions restored after a close and after a crash, reports, details and previews, imaging around bad sectors; files and sessions below `%TEMP%\recovery-tests\<random>` |
-| `corpus` | `tests/corpus`, `tests/support/corpus.cpp` | P20: the corruption corpus (29 generated disks: P20's 26, a FAT16 card, ZIP archives and a FAT12 floppy disk since, covering the plan's 16 categories, each scanned Deep and Quick through the API, recovered, checked against its original files and its recorded baseline), drives of up to 16 TiB as virtual sources, an opt-in sparse image of tens of GiB, and the logging review; images and sessions in memory or below `%TEMP%\recovery-tests\<random>` |
+| `corpus` | `tests/corpus`, `tests/support/corpus.cpp` | P20: the corruption corpus (30 generated disks: P20's 26, a FAT16 card, ZIP archives, a FAT12 floppy disk and documents since, covering the plan's 16 categories, each scanned Deep and Quick through the API, recovered, checked against its original files and its recorded baseline), drives of up to 16 TiB as virtual sources, an opt-in sparse image of tens of GiB, and the logging review; images and sessions in memory or below `%TEMP%\recovery-tests\<random>` |
 
 ## Test images
 
@@ -482,7 +482,56 @@ python3 tests/reference/make_zip_samples.py tests/support/zip_samples.cpp   # Wi
 ```
 
 which checks every archive with `zipfile.testzip()` first; `tests/support/zip_builders.cpp` builds archives of stored
-members in C++.
+members in C++. A real APK that Android Studio ships (its signing block aligned by `apksigner`, L240) is checked by
+`ZipFormatTest.AnApkWhoseSigningBlockApksignerAlignedIsIntact` in its reworked form.
+
+## Document format tests (after P20)
+
+`tests/formats/pdf_format_test.cpp` and `tests/formats/ole2_format_test.cpp` check PDF and OLE2 compound files
+([../formats/documents.md](../formats/documents.md)) on documents the test builders write
+(`tests/support/pdf_builders.cpp`: `PdfWriter`, one-page documents with a JPEG, updates, object and
+cross-reference streams, hybrid-reference and linearized layouts; `tests/support/ole2_builders.cpp`: compound files of
+versions 3 and 4, Word, Excel, PowerPoint and Outlook files, free sectors) and on 11 that real writers made
+(`tests/support/document_samples.cpp`): every layout intact, damaged streams, tables, trailers, FATs, directories and
+chains, truncation, header checks, the limits, carving with the image formats, and naming by content.
+`tests/formats/document_reference_test.cpp` holds three tests:
+
+- `DocumentSamplesTest` (always): every sample is recognised by its format only, validated (`Valid`; the AES-256 PDF
+  `NotValidated`), named by its content, and carved back byte for byte with the images, documents and archives
+  registered, one candidate each.
+- `DocumentReferenceTest` reads folders of documents made elsewhere, recursively: `RECOVERY_DOCUMENT_REFERENCE_DIR`,
+  folders separated by `;`. Every `.pdf`, OLE2 file (`.doc`, `.xls`, `.ppt`, `.msg`, `.msi`, `.msp`, `.mst`, ...) and
+  file built on ZIP (`.docx`, `.xlsx`, `.pptx`, `.odt`, `.epub`, `.jar`, `.apk`, ...) that its format's header check
+  takes must be carved to its end from among other data (or short of it only by a PDF's padding or an OLE2 file's free
+  sectors), never be called damaged (`Valid` or `NotValidated`), validate the same as carved and as named, and be
+  named by its content as its extension says (a `.jar` without a manifest that starts with neither `META-INF/` nor a
+  class file: as a plain archive). It prints the verdicts, why documents were not checked, and how files were named.
+  Files that the header check rejects (text named `.msg`) are counted, not checked.
+- `DocumentBuilderExport` writes the builders' files to `RECOVERY_DOCUMENT_EXPORT_DIR` for independent readers.
+
+```powershell
+$env:RECOVERY_DOCUMENT_REFERENCE_DIR = "C:\Windows\Installer;D:\VS\Packages;C:\Program Files\Android"
+ctest --preset msvc-debug -R DocumentReferenceTest --output-on-failure -V
+$env:RECOVERY_DOCUMENT_EXPORT_DIR = "$env:TEMP\docexport"
+ctest --preset msvc-debug -R DocumentBuilderExport
+```
+
+The samples are written by `tests/reference/make_document_samples.ps1` (Windows: Microsoft Edge headless, the
+"Microsoft Print to PDF" and "Microsoft XPS Document Writer" printers through `System.Drawing.Printing`, ole32's
+`StgCreateStorageEx`, the `WindowsInstaller.Installer` COM object), then `make_document_samples.sh` (qpdf's
+linearized, object-stream and AES-256 variants, each passing `qpdf --check`), and embedded by
+`embed_document_samples.py` (runs of 64 or more zeros are left out: compound files are mostly empty sectors):
+
+```bash
+powershell -File tests/reference/make_document_samples.ps1 <folder>
+wsl sh tests/reference/make_document_samples.sh /mnt/<folder>        # qpdf 11.9.0 made the embedded ones
+py -3 -I tests/reference/embed_document_samples.py tests/support/document_samples.cpp <folder>
+wsl sh tests/reference/check_document_builder_files.sh /mnt/<export folder>   # qpdf --check and olefile
+```
+
+qpdf 11.9.0 and python3-olefile 0.46 were unpacked without root into WSL (`apt-get download`, `dpkg -x`):
+`PATH`, `LD_LIBRARY_PATH` and `PYTHONPATH` point into that folder. The corpus scenario `documents` checks all of it
+through the API (below).
 
 ## Fragment reconstruction tests
 
@@ -663,10 +712,11 @@ closed it) and the card's originals, byte for byte. A crash is the session folde
 
 ## Corruption corpus (P20)
 
-`tests/support/corpus.cpp` holds 28 scenarios (P20's 26; since then `fat16-card` and `zip-archives`): disk images built the same, byte for byte, every time, each with the
+`tests/support/corpus.cpp` holds 30 scenarios (P20's 26; since then `fat16-card`, `zip-archives`, `fat12-floppy` and `documents`): disk images built the same, byte for byte, every time, each with the
 original files it holds and what recovery must give back of each (found by the filesystem with its name, found by
 carving only, found but damaged, lost, or stored inside an archive that is recovered: then no file of its own, and
-byte for byte a stored member of a recovered Complete archive, also of an archive stored in one; expected Complete,
+byte for byte a stored member of a recovered Complete archive, also of an archive stored in one; or an image inside a
+document that is recovered: no file of its own, and byte for byte a stream's data in a recovered Complete PDF; expected Complete,
 Unverified or either; some only in a deep scan).
 Together they cover the plan's 16 categories (normal, deleted, large, small, fragmented and partially overwritten
 files, corrupt filesystem metadata, corrupt media, duplicates, Unicode and long names, cluster sizes, nearly full
@@ -762,7 +812,8 @@ instrumentation without libFuzzer's runtime).
 
 Seeds come from the test builders and samples: `test_image_generator fuzz-seeds --output <seeds>` writes small
 volumes, partition tables, every builder file and embedded sample (the ZIP samples and an archive with a PNG stored
-in it too), and real session journals below
+in it too, the document samples, PDFs of every cross-reference layout and compound files of both versions), and real
+session journals below
 `<seeds>\<target>`. From a developer prompt (the targets need AddressSanitizer's runtime DLL):
 
 ```powershell

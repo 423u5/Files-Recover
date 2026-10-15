@@ -118,6 +118,25 @@ The same candidates and the same peaks; the speeds differ by less than single ro
 holds an archive: what ZIP costs where there are archives is decoding them (the stick of L213, below in
 [validation.md](validation.md)).
 
+## Cost of PDF and OLE2 carving (after P20)
+
+The document formats add two signatures (`%PDF-` and the compound file signature) and formats whose validation
+inflates every stream of a PDF and follows every chain of a compound file. An A/B on 2026-10-15 alternated the
+benchmark without the document formats (before) and with them (after), built the same way as for ZIP
+(`build/p20-scratch/release-nohard`, `tools/benchmark/main.cpp` with and without `registerDocumentFormats`), four
+rounds each on the kept inputs after one warm-up run, nothing else running. Medians (ranges in brackets):
+
+| Build | deep-noise (2 GiB) | deep-media (1 GiB card) | quick-files (20,000) | candidates | peak memory |
+| --- | --- | --- | --- | --- | --- |
+| Without documents | 167.8 MB/s (167.1–168.1) | 80.5 MB/s (79.2–80.6) | 36,492 files/s | 10 / 1,374 / 20,000 | 73–74 / 87–88 / 127–128 MiB |
+| With documents | 162.9 MB/s (162.0–163.6) | 80.1 MB/s (79.4–80.8) | 36,330 files/s | 10 / 1,374 / 20,000 | 73–74 / 87–88 / 127–128 MiB |
+
+The same candidates and the same peaks. Random data costs about 3% more, every round: two more first bytes of
+signatures to check, each a 1-in-256 chance per byte (neither signature ever matched). On the card of media files and
+in the quick scan the difference is inside the rounds' spread. Neither input holds a document; on the test stick,
+which holds none either, the deep scan took 12:49 and 13:15 minutes, with the same 529 candidates
+([validation.md](validation.md)).
+
 ## Notes
 
 - The write benchmarks (`recover`, `imaging`) measure the SSD as much as the engine: imaging flushes its data before

@@ -154,7 +154,8 @@ target_link_libraries(recovery_carving
 # raw AAC (ADTS). The ISO base media file format (MP4) parser (P11). Video
 # (P12): MP4, and the MP4 analysis that MP4 recovery builds on. Archives:
 # ZIP, which decodes DEFLATE through a decoder it is handed (the validation
-# library's, which depends on this one).
+# library's, which depends on this one). Documents: PDF (handed the same
+# decoder) and OLE2 compound files.
 # ---------------------------------------------------------------------------
 add_library(recovery_formats STATIC
     formats/aac_format.cpp
@@ -165,6 +166,7 @@ add_library(recovery_formats STATIC
     formats/bmp_format.cpp
     formats/crc16.cpp
     formats/crc16.hpp
+    formats/document_formats.cpp
     formats/gif_format.cpp
     formats/image_formats.cpp
     formats/iso_walk.cpp
@@ -176,6 +178,8 @@ add_library(recovery_formats STATIC
     formats/mp4_box.cpp
     formats/mp4_format.cpp
     formats/mp4_parser.cpp
+    formats/ole2_format.cpp
+    formats/pdf_format.cpp
     formats/png_format.cpp
     formats/structure_walk.cpp
     formats/structure_walk.hpp
@@ -244,6 +248,7 @@ add_library(recovery_validation STATIC
     validation/content_bytes.cpp
     validation/content_bytes.hpp
     validation/deflate_decoder.cpp
+    validation/document_media.cpp
     validation/gif_media.cpp
     validation/hevc_syntax.cpp
     validation/hevc_syntax.hpp

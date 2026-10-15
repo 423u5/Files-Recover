@@ -29,6 +29,7 @@ formats::registerImageFormats(formats);
 formats::registerAudioFormats(formats);
 formats::registerVideoFormats(formats);
 formats::registerArchiveFormats(formats, validation::deflateDecoder());   // ZIP (after P20)
+formats::registerDocumentFormats(formats, validation::deflateDecoder());  // PDF, OLE2 (after P20)
 
 FragmentRecovery recovery(disk, formats);              // the source: a disk, an image or a partition, open
 if (Status added = recovery.addVolume(*volume, scan); !added.ok()) { ... }   // each volume: P7's recovery and scan
@@ -56,16 +57,21 @@ the source ──► carving pass ──► seeds: carves that break in free spa
 2. **Filesystem seeds** (`useFilesystem`): every candidate whose layout P7 could only guess (`LayoutEvidence::Guessed`).
    Its format is the one whose signature and header check accept the first bytes (the one its extension names
    first, when several do); if none does, the extension's format, and the file cannot be recovered. A file that no
-   format knows is skipped (`filesystemSkipped`).
+   format knows is skipped (`filesystemSkipped`), and so is a file of a format that does not trust its files
+   (`FormatDescriptor::trustValidFiles = false`: OLE2 compound files, after P20): any layout that keeps its structure
+   in place validates, whatever data it places, so no layout is better evidence than the filesystem's guess.
 3. **Carving pass.** The source is scanned once with every registered format and a probe for moov boxes. Only hits
    at the start of a free cluster of an added volume are carved (a file starts at a cluster; clusters in use hold
-   other data). A carve that validates claims its clusters; any carve claims its first cluster; a carve that breaks
+   other data). A carve that validates claims its clusters (only softly when its format does not trust its files);
+   any carve claims its first cluster; a carve that breaks
    (its structure `Broken`, or `Found` but `Invalid`: an end that may be another file's) claims its consistent bytes
    softly and becomes a **carve seed** (`carve`), unless it starts where a filesystem seed starts: then it is that
    seed's `carve`, as evidence. A format whose found end proves the file is in one piece
-   (`FormatDescriptor::foundEndMeansContiguous`: ZIP, whose central directory places every member) gives no seed
-   when it is `Found` but `Invalid`: it is damaged, not fragmented. moov boxes in free clusters are kept as anchors
-   for MP4.
+   (`FormatDescriptor::foundEndMeansContiguous`: ZIP, whose central directory places every member, and PDF, whose
+   elements follow one another) gives no seed when it is `Found` but `Invalid`: it is damaged, not fragmented. A
+   format that does not trust its files gives no carve seed either. moov boxes in free clusters are kept as anchors
+   for MP4. A reconstruction from a carve is named by the extension its content gave (a DOCX's first members name
+   it, L214).
 4. **Reconstruction**, filesystem seeds first (volume by volume, in scan order), then carve seeds (in source
    order). A carve seed whose first cluster an earlier reconstruction has taken is part of that file and is
    dropped. Every reconstruction that places data claims its clusters for the rest of the run.

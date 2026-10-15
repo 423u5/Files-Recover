@@ -8,13 +8,16 @@
 #include "recovery/text.hpp"
 #include "storage/destination_file.hpp"
 #include "support/audio_builders.hpp"
+#include "support/document_samples.hpp"
 #include "support/exfat_builder.hpp"
 #include "support/fat32_builder.hpp"
 #include "support/image_builders.hpp"
 #include "support/mp4_builders.hpp"
 #include "support/mp4_samples.hpp"
 #include "support/ntfs_builder.hpp"
+#include "support/ole2_builders.hpp"
 #include "support/partition_builder.hpp"
+#include "support/pdf_builders.hpp"
 #include "support/test_files.hpp"
 #include "support/zip_builders.hpp"
 #include "support/zip_samples.hpp"
@@ -324,7 +327,7 @@ Original with(std::string path, Bytes bytes, Outcome outcome, std::string note, 
     original.bytes = std::move(bytes);
     original.outcome = outcome;
     original.deepOnly = deepOnly || outcome == Outcome::Carved || outcome == Outcome::NamedDamagedCarved ||
-                        outcome == Outcome::InsideArchive;
+                        outcome == Outcome::InsideArchive || outcome == Outcome::InsideDocument;
     original.note = std::move(note);
     return original;
 }
@@ -2052,6 +2055,146 @@ Image zipArchives() {
     return image;
 }
 
+// After P20 (the user's request of 2026-10-14 to recover documents): PDF and
+// OLE2 documents and the documents built on ZIP, on a FAT32 stick. Named,
+// deleted and unnamed ones; files real writers made (Edge, Microsoft Print
+// to PDF with its offsets one byte early, the XPS Document Writer, Windows
+// Installer, Windows' structured storage, qpdf); text named .doc and .xls
+// (no format: unverified, never called damaged); an encrypted PDF nothing
+// can check. Images in documents: part of a verified PDF, carved from a
+// compound file (nothing checks its data) and from a damaged PDF.
+Image documents() {
+    FatVolume v(fatGeometry(8, 3000, "DOCUMENTS"), 0x1D01);  // 4 KiB clusters, about 12 MiB
+    Fat32ImageBuilder& b = v.builder;
+    const std::uint32_t root = Fat32ImageBuilder::root();
+    std::vector<Original> files;
+    const auto sample = [](std::string_view name) { return document_samples::named(name).data(); };
+
+    const std::uint32_t docs = v.folder(root, "Documents");
+    const Bytes reportPhoto = jpeg(3001, 160, 120);
+    const Bytes report = simplePdf("Quarterly report", reportPhoto);
+    (void)b.addFile(docs, "Report.pdf", report);
+    files.push_back(named("/Documents/Report.pdf", report, Expected::Complete, "a JPEG image in it"));
+    files.push_back(with("", reportPhoto, Outcome::InsideDocument, "the image of Report.pdf: part of it"));
+    const Bytes letter = wordDocument(12000, 3002);
+    (void)b.addFile(docs, "Letter.doc", letter);
+    files.push_back(named("/Documents/Letter.doc", letter, Expected::Complete, "Word 97-2003"));
+    const Bytes budget = excelWorkbook(9000, 3003);
+    (void)b.addFile(docs, "Budget.xls", budget);
+    files.push_back(named("/Documents/Budget.xls", budget, Expected::Complete, "Excel 97-2003"));
+    Ole2Options padded;
+    padded.trailingFreeSectors = 3;
+    const Bytes slides = compoundFile(
+        {{"", "PowerPoint Document", makePattern(15000, 3004)}, {"", "Current User", makePattern(60, 3005)}}, padded);
+    (void)b.addFile(docs, "Slides.ppt", slides);
+    files.push_back(named("/Documents/Slides.ppt", slides, Expected::Complete, "free sectors after its last one in use"));
+    const Bytes web = sample("edge_print.pdf");
+    (void)b.addFile(docs, "Web page.pdf", web);
+    files.push_back(named("/Documents/Web page.pdf", web, Expected::Complete, "Microsoft Edge (Skia/PDF)"));
+    const Bytes printed = sample("mspdf_shapes.pdf");
+    (void)b.addFile(docs, "Printed.pdf", printed);
+    files.push_back(named("/Documents/Printed.pdf", printed, Expected::Complete,
+                          "Microsoft Print to PDF: every offset one byte early"));
+    const Bytes locked = sample("qpdf_aes256.pdf");
+    (void)b.addFile(docs, "Locked.pdf", locked);
+    files.push_back(named("/Documents/Locked.pdf", locked, Expected::Unverified, "AES-256: nothing checks its streams"));
+    const Bytes page = sample("xps_shapes.oxps");
+    (void)b.addFile(docs, "Page.oxps", page);
+    files.push_back(named("/Documents/Page.oxps", page, Expected::Complete, "the XPS Document Writer: a ZIP"));
+    // Text under the names of document formats: no format takes it, so
+    // nothing calls it damaged.
+    const Bytes rtf = textBytes("{\\rtf1\\ansi\\deff0 {\\fonttbl {\\f0 Arial;}} Recovered letter\\par}\r\n");
+    (void)b.addFile(docs, "Notes.doc", rtf);
+    files.push_back(named("/Documents/Notes.doc", rtf, Expected::Unverified, "RTF named .doc"));
+    const Bytes csv = textBytes("item,amount\r\nrent,1200\r\npower,85\r\n");
+    (void)b.addFile(docs, "Table.xls", csv);
+    files.push_back(named("/Documents/Table.xls", csv, Expected::Unverified, "CSV named .xls"));
+    const std::uint32_t mail = v.folder(root, "Mail");
+    const Bytes offer = outlookMessage(3006);
+    (void)b.addFile(mail, "Offer.msg", offer);
+    files.push_back(named("/Mail/Offer.msg", offer, Expected::Complete, "an Outlook message"));
+    const Bytes tool = sample("wi_created.msi");
+    (void)b.addFile(root, "Tool.msi", tool);
+    files.push_back(named("/Tool.msi", tool, Expected::Complete, "Windows Installer"));
+
+    const Bytes draft = updatedPdf();
+    const auto e1 = b.addFile(root, "Draft.pdf", draft);
+    const Bytes memo = wordDocument(8000, 3007);
+    const auto e2 = b.addFile(root, "Memo.doc", memo);
+    b.deleteEntry(e1);
+    b.deleteEntry(e2);
+    files.push_back(named("/Draft.pdf", draft, Expected::Complete, "deleted: three revisions"));
+    files.push_back(named("/Memo.doc", memo, Expected::Complete, "deleted"));
+    const Bytes thesis = wordDocument(40000, 3008);
+    {
+        const std::uint32_t n = v.clustersFor(thesis.size());
+        const auto e = b.addFileInClusters(root, "Thesis.doc", thesis,
+                                           join(run<std::uint32_t>(2000, n / 2),
+                                                run<std::uint32_t>(2000 + n / 2 + 8, n - n / 2)));
+        b.deleteEntry(e);
+        files.push_back(with("/Thesis.doc", thesis, Outcome::NamedDamaged,
+                             "deleted in two pieces, 8 clusters apart: nothing in its structure leads across the gap"));
+    }
+
+    // No entry names these.
+    const auto add = [&](std::uint32_t cluster, const Bytes& bytes, std::string note) {
+        v.place(cluster, bytes);
+        files.push_back(with("", bytes, Outcome::Carved, std::move(note)));
+    };
+    add(1200, sample("qpdf_linearized_objstm.pdf"), "no entry: linearized, object streams (qpdf)");
+    add(1210, hybridPdf(), "no entry: a hybrid-reference file");
+    add(1220, excelWorkbook(6000, 3009), "no entry: named .xls by its streams");
+    add(1240, sample("stg_word.doc"), "no entry: Windows' structured storage, named .doc");
+    add(1260,
+        storedArchive({{"[Content_Types].xml", text(3010, 400)},
+                       {"word/document.xml", text(3011, 3000)},
+                       {"docProps/core.xml", text(3012, 500)}}),
+        "no entry: named .docx by its members");
+    add(1270,
+        storedArchive({{"[Content_Types].xml", text(3013, 400)},
+                       {"xl/workbook.xml", text(3014, 2000)},
+                       {"xl/worksheets/sheet1.xml", text(3015, 2500)}}),
+        "no entry: named .xlsx by its members");
+    add(1280,
+        storedArchive({{"mimetype", textBytes("application/vnd.oasis.opendocument.text")},
+                       {"content.xml", text(3016, 3000)},
+                       {"META-INF/manifest.xml", text(3017, 600)}}),
+        "no entry: named .odt by its first member");
+    // A picture in a document's stream: nothing checks a compound file's
+    // data, so the picture is carved as if the document were not there.
+    const Bytes picture = png(3018, 96, 72);
+    Bytes stream(picture.size() + 2048, std::byte{0x20});
+    std::copy(picture.begin(), picture.end(), stream.begin() + 512);
+    add(1300, compoundFile({{"", "WordDocument", makePattern(6000, 3019)}, {"", "Data", stream}}),
+        "no entry: a PNG in its Data stream");
+    files.push_back(with("", picture, Outcome::Carved, "the PNG in the document's Data stream: carved as before"));
+    // A damaged PDF is never trusted: its image is carved as before.
+    const Bytes damagedPhoto = jpeg(3020, 128, 96);
+    Bytes damaged = simplePdf("Damaged", damagedPhoto);
+    const Bytes content = textBytes("BT /F1");
+    const auto at = std::search(damaged.begin(), damaged.end(), content.begin(), content.end());
+    at[3] ^= std::byte{0x01};  // the content stream's Flate data: its Adler-32 fails
+    v.place(1400, damaged);
+    Original broken = with("", damaged, Outcome::Carved, "no entry, a stream damaged: never trusted");
+    broken.condition = Expected::Any;
+    files.push_back(std::move(broken));
+    files.push_back(with("", damagedPhoto, Outcome::Carved, "the JPEG in the damaged PDF: carved as before"));
+    // A verified PDF: its image is part of it.
+    const Bytes brochurePhoto = jpeg(3021, 200, 150);
+    add(1500, simplePdf("Brochure", brochurePhoto), "no entry: a JPEG image in it");
+    files.push_back(with("", brochurePhoto, Outcome::InsideDocument, "the image of the brochure: part of it"));
+    // A thumbnail cache: its JPEG is carved.
+    const Bytes thumbnail = jpeg(3022, 96, 72);
+    add(1600, compoundFile({{"", "Catalog", makePattern(300, 3023)}, {"", "256_1", thumbnail}}),
+        "no entry: Thumbs.db, named .db by its Catalog");
+    files.push_back(with("", thumbnail, Outcome::Carved, "the JPEG in Thumbs.db: carved as before"));
+
+    Image image;
+    image.bytes = b.build();
+    image.originals = std::move(files);
+    return image;
+}
+
 struct Entry {
     Scenario scenario;
     std::function<Image()> make;
@@ -2120,6 +2263,9 @@ const std::vector<Entry>& entries() {
         add("fat12-floppy", "a 1.44 MB FAT12 floppy disk: the fixed root, a chain through FAT entries across two "
             "sectors, fragmented and deleted files, a deleted folder",
             {"normal files", "deleted files", "fragmented files"}, fat12Floppy);
+        add("documents", "FAT32: named, deleted and unnamed PDF, OLE2 (DOC, XLS, PPT, MSG, MSI) and ZIP-based "
+            "documents, files real writers made, text named .doc, images in documents",
+            {"normal files", "deleted files", "fragmented files", "corrupt media"}, documents);
         return list;
     }();
     return all;
@@ -2145,6 +2291,8 @@ std::string_view toString(Outcome outcome) noexcept {
             return "lost";
         case Outcome::InsideArchive:
             return "inside-archive";
+        case Outcome::InsideDocument:
+            return "inside-document";
     }
     return "?";
 }

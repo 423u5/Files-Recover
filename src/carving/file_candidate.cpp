@@ -27,6 +27,11 @@ bool FileCandidate::hasWarning(CarveWarning warning) const noexcept {
     return std::find(warnings.begin(), warnings.end(), warning) != warnings.end();
 }
 
+bool isTrusted(const FileCandidate& candidate, const FormatDescriptor& descriptor) noexcept {
+    return candidate.end.status == EndStatus::Found && candidate.validation.status == ValidationStatus::Valid &&
+           descriptor.trustValidFiles;
+}
+
 Status validateFileCandidate(const FileCandidate& candidate) {
     const auto invalid = [&](const std::string& what) {
         return makeError(ErrorCode::InvalidInput,

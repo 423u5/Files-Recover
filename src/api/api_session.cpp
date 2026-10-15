@@ -420,7 +420,7 @@ void OpenSession::release() {
     idle_.notify_all();
 }
 
-Status OpenSession::launch(OperationKind kind, std::function<void()> body) {
+Status OpenSession::launch(OperationKind kind, std::function<Ending()> body) {
     Progress started;
     started.operation = kind;
     started.state = OperationState::Running;
@@ -436,16 +436,23 @@ Status OpenSession::launch(OperationKind kind, std::function<void()> body) {
         last_ = started;
         try {
             // The thread keeps the session alive until it returns.
-            thread_ = std::thread([this, self = shared_from_this(), kind, run = std::move(body)] {
+            thread_ = std::thread([this, self = shared_from_this(), kind, run = std::move(body)]() mutable {
+                Ending ending;
                 try {
-                    run();
+                    ending = run();
                 } catch (const std::exception& e) {
-                    finish(kind, OperationState::Failed,
-                           makeError(ErrorCode::InternalError, std::string("the operation stopped: ") + e.what()));
+                    ending.state = OperationState::Failed;
+                    ending.error =
+                        makeError(ErrorCode::InternalError, std::string("the operation stopped: ") + e.what());
                 } catch (...) {
-                    finish(kind, OperationState::Failed,
-                           makeError(ErrorCode::InternalError, "the operation stopped on an unknown exception"));
+                    ending.state = OperationState::Failed;
+                    ending.error = makeError(ErrorCode::InternalError, "the operation stopped on an unknown exception");
                 }
+                // What the operation held is gone before its end is told:
+                // whoever waits for it may at once take the card out, or
+                // write the image file it read (opened sharing reads only).
+                run = nullptr;
+                finish(kind, ending.state, std::move(ending.error));
             });
         } catch (const std::system_error& e) {
             last_ = before_;
@@ -466,7 +473,7 @@ Status OpenSession::startScan(OpenedSource source, std::uint32_t workers) {
         return reserved;
     }
     auto shared = std::make_shared<OpenedSource>(std::move(source));
-    return launch(OperationKind::Scan, [this, shared, workers] { runScan(std::move(*shared), workers); });
+    return launch(OperationKind::Scan, [this, shared, workers] { return runScan(std::move(*shared), workers); });
 }
 
 Status OpenSession::resumeScan(std::uint32_t workers) {
@@ -516,7 +523,7 @@ Status OpenSession::resumeScan(std::uint32_t workers) {
         return source.error();
     }
     auto shared = std::make_shared<OpenedSource>(std::move(source).value());
-    return launch(OperationKind::Scan, [this, shared, workers] { runScan(std::move(*shared), workers); });
+    return launch(OperationKind::Scan, [this, shared, workers] { return runScan(std::move(*shared), workers); });
 }
 
 Status OpenSession::pause(OperationKind kind) {
@@ -592,7 +599,7 @@ void OpenSession::post(EventKind kind, const Progress& progress) const {
     context_.events->post(std::move(event));
 }
 
-void OpenSession::runScan(OpenedSource source, std::uint32_t workers) {
+OpenSession::Ending OpenSession::runScan(OpenedSource source, std::uint32_t workers) {
     std::unique_ptr<validation::IPlayabilityChecker> checker;
     if (playability_) {
         checker = context_.platform.playability ? context_.platform.playability()
@@ -634,7 +641,7 @@ void OpenSession::runScan(OpenedSource source, std::uint32_t workers) {
             last_->scan = final;
         }
     }
-    finish(OperationKind::Scan, state, std::move(error));
+    return {state, std::move(error)};
 }
 
 void OpenSession::onScanProgress(const scan::ScanProgress& progress) {
@@ -793,8 +800,9 @@ Result<RecoveryStart> OpenSession::recover(const RecoverySelection& selection, c
     auto shared = std::make_shared<OpenedSource>(std::move(source).value());
     const std::vector<std::uint32_t> jobs = start.jobs;
     const std::uint32_t workers = options.workerThreads;
-    if (Status launched = launch(OperationKind::Recovery,
-                                 [this, shared, jobs, workers] { runRecovery(std::move(*shared), jobs, workers); });
+    if (Status launched = launch(
+            OperationKind::Recovery,
+            [this, shared, jobs, workers] { return runRecovery(std::move(*shared), jobs, workers); });
         !launched.ok()) {
         return launched.error();
     }
@@ -869,16 +877,17 @@ Status OpenSession::resumeRecovery(std::uint32_t workers) {
         jobFiles_ = files;
     }
     auto shared = std::make_shared<OpenedSource>(std::move(source).value());
-    return launch(OperationKind::Recovery,
-                  [this, shared, unfinished, workers] { runRecovery(std::move(*shared), unfinished, workers); });
+    return launch(OperationKind::Recovery, [this, shared, unfinished, workers] {
+        return runRecovery(std::move(*shared), unfinished, workers);
+    });
 }
 
-void OpenSession::runRecovery(OpenedSource source, std::vector<std::uint32_t> jobs, std::uint32_t workers) {
+OpenSession::Ending OpenSession::runRecovery(OpenedSource source, std::vector<std::uint32_t> jobs,
+                                             std::uint32_t workers) {
     storage::BadRegionMap knownBad;
     for (const storage::BadRegion& region : knownBadRegions_) {
         if (Status added = knownBad.add(region); !added.ok()) {
-            finish(OperationKind::Recovery, OperationState::Failed, added.error());
-            return;
+            return {OperationState::Failed, added.error()};
         }
     }
     OperationState state = OperationState::Completed;
@@ -930,7 +939,7 @@ void OpenSession::runRecovery(OpenedSource source, std::vector<std::uint32_t> jo
             }
         }
     }
-    finish(OperationKind::Recovery, state, std::move(error));
+    return {state, std::move(error)};
 }
 
 void OpenSession::onRecoveryProgress(std::size_t index, const scan::RecoveryJobProgress& progress) {

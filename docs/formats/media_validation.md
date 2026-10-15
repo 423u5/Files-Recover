@@ -40,6 +40,8 @@ it accepts passes.
 | AAC (ADTS) | every frame's raw data block as far as it can be read without the Huffman tables (section data, and whole channel streams of the zero codebook), the CRC of protected frames | partial | libfdk-aac, FFmpeg |
 | M4A, MP4 | every sample of every audio and video track, with its sample description's configuration: AAC samples as raw data blocks; AVC (`avcC`) and HEVC (`hvcC`) parameter sets and every slice header; every NAL unit scanned for the byte sequences it may not hold | partial | FFmpeg 6.1 |
 | ZIP | nothing of its own: `NotApplicable`. The structural level decodes every member (stored by CRC-32, DEFLATE by the inflater of PNG) and checks its CRC-32 ([archives.md](archives.md)) | — | Python's `zipfile` |
+| PDF | nothing of its own: `NotApplicable`. The structural level inflates every Flate stream (Adler-32) and checks every JPEG image (`DCTDecode`) as the JPEG format does ([documents.md](documents.md)) | — | qpdf |
+| OLE2 | nothing of its own: `NotApplicable`. A compound file holds no checksums of its streams' data; the structural level checks every chain ([documents.md](documents.md)) | — | olefile |
 
 ### AAC
 

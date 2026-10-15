@@ -1,5 +1,5 @@
 // Fuzz target: every carving format (JPEG, PNG, WEBP, GIF, BMP, MP3, WAV,
-// M4A, AAC, MP4, ZIP) on the input as a file's content: the header check, end
+// M4A, AAC, MP4, ZIP, PDF, OLE2) on the input as a file's content: the header check, end
 // detection and structural validation, with the formats' documented limits
 // checked (never more bytes than were given).
 

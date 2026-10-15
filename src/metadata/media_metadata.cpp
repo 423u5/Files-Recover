@@ -43,6 +43,7 @@ void addContentPreview(detail::Extraction& x) {
             preview.orientation = orientationForRotation(out.video->rotation);
             break;
         case MediaKind::Archive:
+        case MediaKind::Document:
         case MediaKind::Unknown:
             return;
     }
@@ -60,7 +61,7 @@ Result<MediaMetadata> extractMetadata(carving::IContentReader& content, std::str
     out.formatId = std::string(formatId);
     out.kind = kindOfFormat(formatId);
     out.mediaType = std::string(mediaTypeOfFormat(formatId));
-    if (out.kind == MediaKind::Unknown || out.kind == MediaKind::Archive) {
+    if (out.kind == MediaKind::Unknown || out.kind == MediaKind::Archive || out.kind == MediaKind::Document) {
         return out;
     }
     detail::Extraction x{content, options, out};
@@ -105,7 +106,13 @@ Result<MediaMetadata> readMediaMetadata(storage::IStorageSource& source,
     if (!reader.ok()) {
         return reader.error();
     }
-    return extractMetadata(**reader, candidate.formatId, options);
+    Result<MediaMetadata> metadata = extractMetadata(**reader, candidate.formatId, options);
+    if (metadata.ok() && (metadata->kind == MediaKind::Archive || metadata->kind == MediaKind::Document)) {
+        // What the candidate's extension tells of a container (a ZIP archive that is a DOCX).
+        metadata->kind = kindOfFile(candidate.formatId, candidate.data.extension);
+        metadata->mediaType = std::string(mediaTypeOfFile(candidate.formatId, candidate.data.extension));
+    }
+    return metadata;
 }
 
 Result<std::vector<std::byte>> readPreview(carving::IContentReader& content, const PreviewSource& preview,

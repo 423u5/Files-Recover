@@ -38,7 +38,12 @@ Result<MediaMetadata> extractMetadata(IContentReader& content, std::string_view 
 `readMediaMetadata` opens a `CandidateContentReader` on the candidate, so it reads the bytes recovery would write,
 and calls `extractMetadata` with the format the evaluation found (`EvaluatedCandidate::formatId`). An unknown or
 empty format gives `MediaKind::Unknown` and nothing else; a ZIP archive (after P20) gives `MediaKind::Archive` and
-the media type `application/zip`, and nothing else either: an archive has no media of its own, and no preview.
+the media type `application/zip`, and nothing else either: an archive has no media of its own, and no preview. PDF
+and OLE2 files (after P20) give `MediaKind::Document` the same way. Since a container's files are told apart by
+their extension, `readMediaMetadata` then takes the kind and media type of the candidate's extension
+(`kindOfFile`, `mediaTypeOfFile`): a DOCX is a `Document` with the media type
+`application/vnd.openxmlformats-officedocument.wordprocessingml.document`, an MSI package an `Archive`, a thumbnail
+cache `Unknown`; `describeCandidate` does the same ([../formats/documents.md](../formats/documents.md)).
 
 Only headers, tags and frame headers are read, never the coded pixels or samples. `MetadataOptions` bounds the work:
 

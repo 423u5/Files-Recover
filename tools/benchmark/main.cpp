@@ -18,6 +18,7 @@
 #include "carving/format_registry.hpp"
 #include "formats/archive_formats.hpp"
 #include "formats/audio_formats.hpp"
+#include "formats/document_formats.hpp"
 #include "formats/image_formats.hpp"
 #include "formats/video_formats.hpp"
 #include "imaging/image_writer.hpp"
@@ -164,7 +165,8 @@ const carving::FormatRegistry& formats() {
         carving::FormatRegistry made;
         const bool ok = formats::registerImageFormats(made).ok() && formats::registerAudioFormats(made).ok() &&
                         formats::registerVideoFormats(made).ok() &&
-                        formats::registerArchiveFormats(made, validation::deflateDecoder()).ok();
+                        formats::registerArchiveFormats(made, validation::deflateDecoder()).ok() &&
+                        formats::registerDocumentFormats(made, validation::deflateDecoder()).ok();
         if (!ok) {
             throw std::runtime_error("registering the formats");
         }

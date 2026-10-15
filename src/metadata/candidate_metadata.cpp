@@ -133,9 +133,9 @@ CandidateMetadata describeCandidate(const evaluation::EvaluatedCandidate& candid
         out.created = data.filesystemEvidence.created;
         out.modified = data.filesystemEvidence.modified;
     }
-    out.kind = kindOfFormat(candidate.formatId);
+    out.kind = kindOfFile(candidate.formatId, data.extension);
     out.formatId = candidate.formatId;
-    out.mediaType = std::string(mediaTypeOfFormat(candidate.formatId));
+    out.mediaType = std::string(mediaTypeOfFile(candidate.formatId, data.extension));
     out.size = candidate.recoveredSize();
     out.expectedSize = data.expectedSize;
     out.sourceOffset = candidate.sourceOffset();

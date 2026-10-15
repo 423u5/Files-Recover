@@ -2,6 +2,7 @@
 
 #include "formats/archive_formats.hpp"
 #include "formats/audio_formats.hpp"
+#include "formats/document_formats.hpp"
 #include "formats/image_formats.hpp"
 #include "formats/video_formats.hpp"
 #include "imaging/image_metadata.hpp"
@@ -12,6 +13,7 @@
 #include "storage/destination_file.hpp"
 #include "support/audio_builders.hpp"
 #include "support/audio_samples.hpp"
+#include "support/document_samples.hpp"
 #include "support/exfat_builder.hpp"
 #include "support/fat32_builder.hpp"
 #include "support/image_builders.hpp"
@@ -20,7 +22,9 @@
 #include "support/mp4_builders.hpp"
 #include "support/mp4_samples.hpp"
 #include "support/ntfs_builder.hpp"
+#include "support/ole2_builders.hpp"
 #include "support/partition_builder.hpp"
+#include "support/pdf_builders.hpp"
 #include "support/test_files.hpp"
 #include "support/zip_builders.hpp"
 #include "support/zip_samples.hpp"
@@ -245,6 +249,28 @@ std::vector<std::pair<std::string, Bytes>> mediaFiles() {
         png.height = 16;
         add("zip_stored_png", storedArchive({{"icon.png", makePng(png)}, {"notes.txt", makePattern(300, 41)}}));
     }
+    // Documents (after P20): files real writers made, PDFs of every
+    // cross-reference layout (one with a JPEG in it) and compound files of
+    // both versions.
+    for (const document_samples::Sample& sample : document_samples::all()) {
+        add("doc_" + std::string(sample.name), sample.data());
+    }
+    {
+        JpegOptions jpeg;
+        jpeg.width = 16;
+        jpeg.height = 16;
+        add("pdf_jpeg", simplePdf("Seed", makeJpeg(jpeg)));
+        add("pdf_updated", updatedPdf());
+        add("pdf_compressed", compressedPdf());
+        add("pdf_hybrid", hybridPdf());
+        add("pdf_linearized", linearizedPdf());
+        add("ole2_word", wordDocument(3000, 5));
+        add("ole2_excel", excelWorkbook(5000, 6));
+        add("ole2_message", outlookMessage(7));
+        Ole2Options v4;
+        v4.version = 4;
+        add("ole2_v4", compoundFile({{"", "Data", makePattern(6000, 8)}, {"Storage", "Small", makePattern(100, 9)}}, v4));
+    }
     return files;
 }
 
@@ -430,6 +456,7 @@ Status journalSeeds(Seeds& seeds) {
     if (!formats::registerImageFormats(formats).ok() || !formats::registerAudioFormats(formats).ok() ||
         !formats::registerVideoFormats(formats).ok() ||
         !formats::registerArchiveFormats(formats, validation::deflateDecoder()).ok() ||
+        !formats::registerDocumentFormats(formats, validation::deflateDecoder()).ok() ||
         !validation::registerMediaValidators(media).ok()) {
         return makeError(ErrorCode::InternalError, "registering the formats");
     }

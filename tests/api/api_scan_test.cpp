@@ -68,6 +68,54 @@ TEST(ApiScanTest, ADeepScanDeliversWhatTheEngineDelivers) {
     EXPECT_EQ(journalCandidates(world.sessions(), id), expectedCard());
 }
 
+TEST(ApiScanTest, DocumentsAndArchivesAreToldApart) {
+    ApiWorld world;
+    const ::recovery::test::DocumentCard card = ::recovery::test::documentCard();
+    const std::filesystem::path image = world.folder() / "documents.img";
+    ::recovery::test::writeFile(image, card.image);
+    const Result<std::string> id = world.api().startScan(SourceRef::imageFile(image), ScanSettings{});
+    RECOVERY_ASSERT_OK(id);
+    ASSERT_EQ(world.waitIdle(*id).state, OperationState::Completed);
+    const std::vector<CandidateInfo> candidates = allCandidates(world.api(), *id);
+
+    struct Expected {
+        std::string_view name;
+        MediaKind kind;
+        std::string_view format;
+        std::string_view mediaType;
+    };
+    for (const Expected& expected : std::vector<Expected>{
+             {"REPORT.PDF", MediaKind::Document, "pdf", "application/pdf"},
+             {"LETTER.DOC", MediaKind::Document, "ole2", "application/msword"},
+             {"BOOK.DOCX", MediaKind::Document, "zip",
+              "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+             {"APP.APK", MediaKind::Archive, "zip", "application/vnd.android.package-archive"},
+             {"NOTES.ZIP", MediaKind::Archive, "zip", "application/zip"}}) {
+        SCOPED_TRACE(expected.name);
+        const std::optional<CandidateInfo> candidate = named(candidates, expected.name);
+        ASSERT_TRUE(candidate.has_value());
+        EXPECT_EQ(candidate->kind, expected.kind);
+        EXPECT_EQ(candidate->format, expected.format);
+        EXPECT_EQ(candidate->mediaType, expected.mediaType);
+        EXPECT_EQ(candidate->condition, Condition::Complete);
+    }
+    // The DOCX whose entry is gone: carved, and named by its members.
+    const auto carved = std::find_if(candidates.begin(), candidates.end(),
+                                     [](const CandidateInfo& c) { return c.foundBy == FoundBy::Carving; });
+    ASSERT_NE(carved, candidates.end());
+    EXPECT_EQ(carved->kind, MediaKind::Document);
+    EXPECT_EQ(carved->extension, "docx");
+    EXPECT_TRUE(carved->name.ends_with(".docx")) << carved->name;
+    EXPECT_EQ(carved->condition, Condition::Complete);
+    EXPECT_EQ(toString(MediaKind::Document), "document");
+
+    CandidateQuery query;
+    query.filter.kinds = {MediaKind::Document};
+    const Result<CandidatePage> documents = world.api().getCandidates(*id, query);
+    RECOVERY_ASSERT_OK(documents);
+    EXPECT_EQ(documents->matching, 4u);
+}
+
 TEST(ApiScanTest, AQuickScanReadsTheFilesystemOnly) {
     ApiWorld world;
     ScanSettings settings;
