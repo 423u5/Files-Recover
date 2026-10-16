@@ -19,6 +19,12 @@ and `Resident` with `FileAllocation::residentData`, NTFS allocation issues (`Inv
 `CompressedData`, `EncryptedData`, `AttributeListNotFollowed`, `DataAttributeMissing`), entry issues
 (`ParentMissing`, `DamagedRecord`) and scan issue kinds (`RecordInvalid`, `RecordUnreadable`).
 
+After P20 (L10): every module builds `FileRecord::path` from `pathComponent()` of each name, which puts `_` in place
+of a `/` (only a damaged name holds one, and it is flagged `InvalidName`): every `/` of a path separates two names,
+and a damaged folder name is one level of the path. The entry keeps its name. `kOrphanDirectory` (`$OrphanFiles`)
+names the virtual folder under the root that lists entries whose folder is gone: NTFS records whose parent is gone,
+and parts of deleted FAT32 folders whose folder is not known (L243).
+
 ## FAT32 (`filesystem::fat32::Fat32Filesystem`)
 
 ### Opening
@@ -74,8 +80,10 @@ and `Resident` with `FileAllocation::residentData`, NTFS allocation issues (`Inv
   cluster overwritten with a photo listed some 30 junk files): an invalid 8.3 name *and* reserved attribute bits,
   a first cluster outside the volume, or a file size beyond the volume. The folder reports how many with a
   `DirectoryInvalid` scan issue ("N slots hold no directory entry (other data in the directory's clusters)"). An
-  active slot with an invalid name alone is still listed and flagged `InvalidName` (see L200 in
+  active slot with an invalid 8.3 name alone is still listed and flagged `InvalidShortName` (see L200 in
   [../limitations.md](../limitations.md)).
+- A name Windows cannot create on FAT is flagged `InvalidName` (after P20, L10): empty, `.` or `..`, or holding one
+  of `"*/:<>?\|` or a control character (the characters Windows forbids in long names).
 - Timestamps are decoded as local time with no zone (`Timestamp::local`). Out-of-range fields set
   `InvalidTimestamp`.
 
@@ -106,7 +114,20 @@ the strongest evidence there is, and keeps the start recorded when the evidence 
 3. A run of files whose low bits say that they lie one after the other, by what starts at each place
    (`Fat32Options::startsFile`, which a scan gives from its formats: `carving::startsFileNamed`): the one place
    where their starts are mostly free, and where the first four whose names have a known type each start a file
-   of that type. The place recorded is kept when it qualifies too.
+   of that type. Of several such places, the one where the first of them ends exactly at its size (after P20, L242:
+   `Fat32Options::endsFile`, from the scan's formats: `carving::endsFileNamed`, which runs the format's end
+   detection from there, reading at most 64 KiB beyond the size). Otherwise the place recorded is kept when it
+   qualifies too.
+4. A file whose place recorded holds other data now (after P20, L242): more than half of its clusters are in use,
+   or its first cluster is free and what starts there cannot start the file (no file of its type, or no text for a
+   text file's name: `.txt`, `.csv`, `.log`, `.xml`, `.json`, source code and others). It goes to the one other
+   place whose clusters are all free, whose first bytes are not blank (all 0x00 or all 0xFF: never written) and
+   where nothing contradicts its name; of several, the one between the files around it in the listing (where the
+   one before it ends and the one after it starts). A place recorded that may be the file's is kept: a file whose
+   first cluster alone was taken since stays where the rest of it is. On a volume of more than 16.7 million clusters
+   (more than 256 places), this step is left out: each place costs a read.
+
+Step 2 is taken again after steps 3 and 4, around the files they placed.
 
 An entry placed elsewhere than recorded is flagged `StartClusterInferred`, and its candidate's layout is `Guessed`
 (`LayoutGuessed`) even for one cluster. A deleted entry whose recorded start reads as cluster 1 is kept as what is
@@ -123,6 +144,23 @@ is free, is not one of the folder's clusters yet, and holds directory slots only
 with their type and cluster fields zero, 8.3 entries with possible names, attributes, clusters and sizes), at least
 one, and no `.` entry (another folder's first cluster). The search ends at the first cluster that ends the folder, at
 one it cannot find, and at the FAT limit of 65,536 entries.
+
+**Parts of deleted folders found apart from them (after P20, L243).** A folder that grew while other programs wrote
+elsewhere, or whose first cluster was taken by other data, has clusters the search above cannot reach. Once a scan
+has listed every folder, it looks for them among the free clusters right after the data of any file it listed
+(active or deleted) and right after any folder's cluster, which is where a writer's next free cluster was when a
+folder grew: a cluster that no folder listed and that holds folder slots only (as above) starts a part, which is
+followed where it grew in turn. A part goes to the deleted folder that leads to it, among those whose search ended
+at a full cluster:
+
+- the data and folder clusters the scan listed lead from that folder's last file's data, or from its last cluster,
+  to the part, one right after the other (what other programs wrote meanwhile);
+- or a folder listed in the part names that folder's first cluster in its `..` entry.
+
+Its entries are then read on from the folder's last cluster, so that a long name begun there is whole, placed as
+in a listing of that folder (the first one's data right after the part's first cluster), and listed under the
+folder's path. A part that no folder leads to, or that several do, is listed under `/$OrphanFiles`, its entries
+flagged `ParentMissing`. Only `scan()` looks for parts: `readDirectory` lists a folder alone.
 
 ### Traversal limits
 
@@ -168,11 +206,11 @@ All known limitations, with IDs for discussion, are listed in [../limitations.md
 
 - Deleted fragmented files come back as a single contiguous guess, which is wrong for them. Fragment
   reconstruction (P13, [../recovery/fragment_recovery.md](../recovery/fragment_recovery.md)) resolves them.
-- A deleted entry whose start lost its top 16 bits is placed again only when its neighbours, or what starts at
-  each place, single one out; otherwise its start stays as recorded (L242; L7 is resolved).
-- A deleted folder's clusters after the first are found only after the data of its last file so far or right
-  after its previous cluster; a folder that grew elsewhere loses the entries beyond, and of two deleted folders
-  that grew next to each other, one may list the other's entries as well (duplicates; L243; L8 is resolved).
+- A deleted entry whose start lost its top 16 bits stays as recorded when the places it may start at all look alike
+  (L248; L7 and L242 are resolved).
+- The parts of deleted folders found apart from them are looked for only right after data or folder clusters the
+  scan listed; a part no folder alone leads to is listed under `/$OrphanFiles`; of two deleted folders that grew
+  next to each other, one may list the other's entries as well (duplicates; L249; L8 and L243 are resolved).
 - Orphaned clusters (allocated, but not referenced by any entry) can be counted as
   `ClusterUsage::allocated - FileScan::referencedClusters`, but the orphaned chains are not listed yet.
 - The engine's own tests use volumes built by `tests/support/fat32_builder`. Independent checks are
@@ -265,12 +303,16 @@ its clusters in the bitmap. Nothing else in the set changes.
   it appends the new set, seen after P20). These are listed when the name matches the name hash, flagged `MetadataIncomplete`:
   attributes and timestamps are unknown. Deleted sets that fail their checksum are tried the same way. Such an entry
   is a file unless its data shows that it was a directory (after P20, L13): its size is whole clusters, its valid
-  data length its size, its first cluster free, and the first 4 KiB of its data hold at least one File entry set,
-  in use or deleted, whose checksum matches, and no entry a directory other than the root cannot hold
+  data length its size, and the first 4 KiB of its data that are still free, among its first four clusters, hold at
+  least one File entry set, in use or deleted, whose checksum matches, or orphaned Stream Extension and File Name
+  entries whose name matches its hash (L244), and no entry a directory other than the root cannot hold
   (`holdsEntrySets`). It is then listed as a directory and searched like any deleted one.
 - Deleted-looking slots that pass neither check are ignored.
-- A deleted directory is read only if none of its clusters is allocated again and the bitmap is readable. Files found
-  in it have `parentDeleted = true`. Entries inside it that are still marked in use are reported as deleted.
+- A deleted directory is read where its clusters are still free (after P20, L244; until then one cluster allocated
+  again lost all of its entries): the clusters in use again, or whose state the bitmap cannot tell, are left out,
+  with a `DirectoryInvalid` scan issue that counts them, and no entry set continues across them. It is refused when
+  none of its clusters is free, or the volume has no allocation bitmap. Files found in it have
+  `parentDeleted = true`. Entries inside it that are still marked in use are reported as deleted.
 
 ### Traversal and cross-links
 
@@ -286,9 +328,9 @@ All known limitations, with IDs for discussion, are listed in [../limitations.md
 
 - Deleted FAT-chained files whose chain was cleared come back as a contiguous guess, as on FAT32. Fragment
   reconstruction (P13) resolves them.
-- An orphaned entry (`MetadataIncomplete`) is taken for a directory only when the first 4 KiB of its data hold a
-  checksum-verified entry set and its first cluster is still free; otherwise it is a file, as before (L244; L13 is
-  resolved).
+- A deleted directory linked by a FAT chain whose first cluster is in use again cannot be followed: it is read as
+  one run from there, where free; an orphaned entry whose first free clusters hold no entries stays a file (L250;
+  L13 and L244 are resolved).
 - Vendor allocation entries (benign secondaries that own clusters) are skipped, so their clusters count as orphaned.
 - TexFAT support stops at choosing the active FAT and bitmap. Transactions are not examined.
 - The volume GUID and the OEM parameters sector are not reported.
@@ -357,7 +399,8 @@ deleted files too.
   number and does not match.
 - Each `$FILE_NAME` other than a DOS name is an entry in its parent, so a hard link gives several entries sharing one
   record (not a cross-link). A DOS name becomes the `shortName` of the long name in the same directory; a Win32 & DOS
-  name is its own short name. Empty names, `.`, `..`, and names containing `/` or NUL are flagged `InvalidName`.
+  name is its own short name. Empty names, `.`, `..`, and names containing `/` or NUL are flagged `InvalidName`
+  (a `/` is `_` in the path, L10).
 - Entries no directory holds any more (the parent record was reused, is not a directory, is missing, or the parents
   form a cycle) are listed under the virtual directory `/$OrphanFiles`, flagged `ParentMissing`, with their subtrees.
 - **A deleted record keeps everything:** names, times, size and data runs. Its runs are exact, not a guess as on

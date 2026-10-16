@@ -101,11 +101,13 @@ private:
 [[nodiscard]] std::optional<Timestamp> decodeTimestamp(std::uint32_t raw, std::uint8_t tenMilliseconds,
                                                        std::uint8_t utcOffset, bool& invalid);
 
-// Whether `bytes`, the start of some data, are the entries of a directory
-// other than the root: at least one File entry set, in use or deleted, whose
-// checksum matches, and no entry such a directory cannot hold (the root's
-// bitmap, up-case table and label entries, unknown critical entries). Tells
-// a deleted directory whose File entry was overwritten from a file (L13).
-[[nodiscard]] bool holdsEntrySets(std::span<const std::byte> bytes);
+// Whether `bytes`, some data, are entries of a directory other than the
+// root: at least one File entry set, in use or deleted, whose checksum
+// matches, or orphaned Stream Extension and File Name entries whose name
+// matches its hash (L244), and no entry such a directory cannot hold (the
+// root's bitmap, up-case table and label entries, unknown critical entries).
+// Tells a deleted directory whose File entry was overwritten from a file
+// (L13). Hashes of names `upcase` does not cover are not taken as evidence.
+[[nodiscard]] bool holdsEntrySets(std::span<const std::byte> bytes, const UpcaseTable& upcase);
 
 }  // namespace recovery::filesystem::exfat

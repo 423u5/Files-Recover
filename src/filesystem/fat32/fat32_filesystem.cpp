@@ -9,6 +9,8 @@
 #include <array>
 #include <cstring>
 #include <limits>
+#include <set>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace recovery::filesystem::fat32 {
@@ -101,7 +103,8 @@ Fat32Filesystem::Fat32Filesystem(storage::IStorageSource& volume, BootSector boo
     : volume_(volume), boot_(std::move(boot)), logger_(logger) {
     // FatTable keeps a reference to boot_; this object is heap-allocated and never moved.
     fat_ = std::make_unique<FatTable>(volume_, boot_, options.fatCacheBytes);
-    deleted_ = std::make_unique<DeletedEntries>(volume_, boot_, *fat_, std::move(options.startsFile));
+    deleted_ = std::make_unique<DeletedEntries>(volume_, boot_, *fat_, std::move(options.startsFile),
+                                                std::move(options.endsFile));
     switch (boot_.type) {
     case FatType::Fat32:
         info_.type = FilesystemType::Fat32;
@@ -183,8 +186,7 @@ Result<std::unique_ptr<Fat32Filesystem>> Fat32Filesystem::open(storage::IStorage
     fs->recordedFree_ = recordedFree;
 
     // The volume label entry in the root directory takes precedence over the BPB copy.
-    if (const Result<DirectoryListing> root = fs->listDirectory(fs->rootDirectory(), nullptr, false);
-        root.ok() && fs->rootLabel_) {
+    if (const Result<Listed> root = fs->listDirectory(fs->rootDirectory(), false); root.ok() && fs->rootLabel_) {
         fs->info_.label = *fs->rootLabel_;
     }
 
@@ -342,11 +344,14 @@ Result<FileAllocation> Fat32Filesystem::resolveAllocation(const DirectoryEntry& 
 }
 
 Result<DirectoryListing> Fat32Filesystem::readDirectory(const DirectoryEntry& directory) {
-    return listDirectory(directory, nullptr, true);
+    Result<Listed> listed = listDirectory(directory, true);
+    if (!listed.ok()) {
+        return listed.error();
+    }
+    return std::move(listed->listing);
 }
 
-Result<DirectoryListing> Fat32Filesystem::listDirectory(const DirectoryEntry& directory,
-                                                        std::vector<std::uint32_t>* chainOut, bool inferDeleted) {
+Result<Fat32Filesystem::Listed> Fat32Filesystem::listDirectory(const DirectoryEntry& directory, bool inferDeleted) {
     if (!directory.isDirectory) {
         return makeError(ErrorCode::InvalidInput, "not a directory");
     }
@@ -360,8 +365,7 @@ Result<DirectoryListing> Fat32Filesystem::listDirectory(const DirectoryEntry& di
     }
     const auto start = static_cast<std::uint32_t>(first);
 
-    DirectoryListing listing;
-    std::vector<std::uint32_t> clusters;
+    Listed listed;
     if (fixedRoot) {
         // No chain: the region is listed below.
     } else if (deleted) {
@@ -370,19 +374,33 @@ Result<DirectoryListing> Fat32Filesystem::listDirectory(const DirectoryEntry& di
         if (fat_->entry(start).kind != FatEntryKind::Free) {
             return makeError(ErrorCode::InvalidFormat, "deleted directory's cluster has been reused");
         }
-        clusters.push_back(start);
+        listed.clusters.push_back(start);
     } else {
         ChainWalk walk = walkChain(start, maxDirectoryClusters(), true);
-        clusters = std::move(walk.clusters);
+        listed.clusters = std::move(walk.clusters);
         for (const AllocationIssue issue : walk.issues) {
-            listing.issues.push_back(
+            listed.listing.issues.push_back(
                 ScanIssue{ScanIssueKind::DirectoryInvalid, {}, "directory chain: " + std::string(toString(issue))});
-        }
-        if (chainOut != nullptr) {
-            *chainOut = clusters;
         }
     }
 
+    DirectoryParser parser(boot_);
+    if (Status read = readSlots(listed, parser, fixedRoot, deleted, true, nullptr); !read.ok()) {
+        return read.error();
+    }
+    const bool isRoot = fixedRoot || (!deleted && boot_.type == FatType::Fat32 && start == boot_.rootCluster);
+    if (isRoot) {
+        rootLabel_ = parser.volumeLabel();
+    }
+    if (inferDeleted && !fixedRoot) {
+        const DeletedEntries::Listing context{start, start, isRoot, &listed.clusters};
+        deleted_->inferStarts(listed.listing.entries, context);
+    }
+    return listed;
+}
+
+Status Fat32Filesystem::readSlots(Listed& listed, DirectoryParser& parser, bool fixedRoot, bool deleted,
+                                  bool dotFirst, const std::unordered_set<std::uint64_t>* taken) {
     // What the directory is read in: its clusters, or the fixed root's sectors.
     struct Piece {
         std::uint64_t offset = 0;
@@ -397,12 +415,12 @@ Result<DirectoryListing> Fat32Filesystem::listDirectory(const DirectoryEntry& di
             pieces.push_back(Piece{boot_.rootDirOffset + at, length, 0});
         }
     } else {
-        for (const std::uint32_t cluster : clusters) {
+        for (const std::uint32_t cluster : listed.clusters) {
             pieces.push_back(Piece{boot_.clusterOffset(cluster), boot_.clusterSize, cluster});
         }
     }
 
-    DirectoryParser parser(boot_);
+    DirectoryListing& listing = listed.listing;
     std::vector<std::byte> buffer(fixedRoot ? boot_.bytesPerSector : boot_.clusterSize);
     bool reachedEnd = false;
     for (std::size_t index = 0; index < pieces.size() && !reachedEnd; ++index) {
@@ -422,12 +440,12 @@ Result<DirectoryListing> Fat32Filesystem::listDirectory(const DirectoryEntry& di
             }
             continue;
         }
-        if (deleted && index == 0) {
+        if (deleted && index == 0 && dotFirst) {
             // A directory's first entry is "." pointing at itself (FAT12 and FAT16: the low 16 bits only).
             const std::span<const std::byte> dot(buffer.data(), kDirectoryEntrySize);
             const std::uint64_t high = boot_.hasFixedRoot() ? 0 : loadLe16(dot, 20);
             const std::uint64_t self = (high << 16) | loadLe16(dot, 26);
-            if (std::memcmp(dot.data(), ".          ", 11) != 0 || (loadU8(dot, 11) & 0x10) == 0 || self != first) {
+            if (std::memcmp(dot.data(), ".          ", 11) != 0 || (loadU8(dot, 11) & 0x10) == 0 || self != piece.cluster) {
                 return makeError(ErrorCode::InvalidFormat, "deleted directory's cluster no longer holds that directory");
             }
         }
@@ -441,10 +459,13 @@ Result<DirectoryListing> Fat32Filesystem::listDirectory(const DirectoryEntry& di
         }
         // A deleted directory that fills this cluster goes on in one its
         // chain no longer names (L8).
-        if (deleted && !reachedEnd && index + 1 == pieces.size() && clusters.size() < maxDirectoryClusters()) {
-            if (const std::optional<std::uint32_t> next = deleted_->nextCluster(listing.entries, clusters)) {
-                clusters.push_back(*next);
+        if (deleted && !reachedEnd && index + 1 == pieces.size() && listed.clusters.size() < maxDirectoryClusters()) {
+            const std::optional<std::uint32_t> next = deleted_->nextCluster(listing.entries, listed.clusters);
+            if (next.has_value() && (taken == nullptr || !taken->contains(*next))) {
+                listed.clusters.push_back(*next);
                 pieces.push_back(Piece{boot_.clusterOffset(*next), boot_.clusterSize, *next});
+            } else {
+                listed.endedFull = true;
             }
         }
     }
@@ -455,14 +476,154 @@ Result<DirectoryListing> Fat32Filesystem::listDirectory(const DirectoryEntry& di
                                                " slots hold no directory entry (other data in the directory's "
                                                "clusters)"});
     }
-    const bool isRoot = fixedRoot || (!deleted && boot_.type == FatType::Fat32 && start == boot_.rootCluster);
-    if (isRoot) {
-        rootLabel_ = parser.volumeLabel();
+    return success();
+}
+
+Fat32Filesystem::Listed Fat32Filesystem::listPart(std::uint32_t head, const std::unordered_set<std::uint64_t>& taken) {
+    Listed listed;
+    listed.clusters.push_back(head);
+    DirectoryParser parser(boot_);
+    if (!readSlots(listed, parser, false, true, false, &taken).ok()) {
+        return Listed{};
     }
-    if (inferDeleted && !fixedRoot) {
-        deleted_->inferStarts(listing.entries, start, isRoot, clusters);
+    const DeletedEntries::Listing context{head, std::nullopt, false, &listed.clusters};
+    deleted_->inferStarts(listed.listing.entries, context);
+    return listed;
+}
+
+// What a scan saw of the volume's clusters, and the deleted folders that go on somewhere (L243).
+struct Fat32Filesystem::Seen {
+    // A deleted folder whose last cluster found is full: its next one is elsewhere.
+    struct OpenFolder {
+        std::vector<std::uint32_t> clusters;
+        // The places the search for its next cluster looked (L8): after the
+        // data of its last file, and right after its last cluster.
+        std::vector<std::uint64_t> from;
+        std::string path;
+        std::uint32_t depth = 0;
+    };
+
+    // The data runs of the entries listed, [first cluster, cluster after).
+    std::unordered_map<std::uint64_t, std::uint64_t> runs;
+    // Every cluster of every directory listed.
+    std::unordered_set<std::uint64_t> folders;
+    std::vector<OpenFolder> open;
+};
+
+// A part of a deleted folder found apart from it (L243).
+struct Fat32Filesystem::LostPart {
+    Listed listed;
+    // The folder it continues (Seen::open), if one alone leads to it.
+    std::optional<std::size_t> folder;
+};
+
+Result<std::vector<Fat32Filesystem::LostPart>> Fat32Filesystem::findLostParts(const Seen& seen,
+                                                                             const CancellationToken& cancel) {
+    // Where a folder that filled up grew: in the first free cluster when it
+    // did, which is right after something allocated before it, the data of
+    // a file or a folder's cluster.
+    std::vector<std::uint64_t> candidates;
+    candidates.reserve(seen.runs.size() + seen.folders.size());
+    for (const auto& [first, end] : seen.runs) {
+        candidates.push_back(end);
     }
-    return listing;
+    for (const std::uint64_t cluster : seen.folders) {
+        candidates.push_back(cluster + 1);
+    }
+    std::sort(candidates.begin(), candidates.end());
+    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+
+    std::vector<LostPart> parts;
+    std::unordered_map<std::uint64_t, std::size_t> heads;
+    std::unordered_set<std::uint64_t> taken = seen.folders;
+    for (const std::uint64_t cluster : candidates) {
+        if (cancel.isCancellationRequested()) {
+            return makeError(ErrorCode::Cancelled, std::string(toString(info_.type)) + " scan cancelled");
+        }
+        if (taken.contains(cluster) || !deleted_->continuesDirectory(cluster, {})) {
+            continue;
+        }
+        LostPart part;
+        part.listed = listPart(static_cast<std::uint32_t>(cluster), taken);
+        if (part.listed.listing.entries.empty()) {
+            continue;
+        }
+        taken.insert(part.listed.clusters.begin(), part.listed.clusters.end());
+        heads.emplace(cluster, parts.size());
+        parts.push_back(std::move(part));
+    }
+    if (parts.empty()) {
+        return parts;
+    }
+
+    // The folders that lead to each part. A folder grew where the writer's
+    // next free cluster was: after its last file's data, or after what was
+    // written after that (the data of files and folders' clusters the scan
+    // listed, one after the other).
+    constexpr std::size_t kMaxSteps = 64;
+    std::vector<std::set<std::size_t>> leads(parts.size());
+    for (std::size_t folder = 0; folder < seen.open.size(); ++folder) {
+        for (std::uint64_t at : seen.open[folder].from) {
+            for (std::size_t step = 0; step <= kMaxSteps; ++step) {
+                if (const auto head = heads.find(at); head != heads.end()) {
+                    leads[head->second].insert(folder);
+                    break;
+                }
+                if (const auto run = seen.runs.find(at); run != seen.runs.end() && run->second > at) {
+                    at = run->second;
+                } else if (seen.folders.contains(at)) {
+                    ++at;
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+    // A folder listed in a part names the folder it was in with its ".." entry.
+    for (std::size_t index = 0; index < parts.size(); ++index) {
+        for (const DirectoryEntry& entry : parts[index].listed.listing.entries) {
+            const bool placed = entry.state != EntryState::Deleted || (entry.firstCluster.value() >> 16) != 0 ||
+                                !boot_.deletedStartsAmbiguous() || entry.hasIssue(EntryIssue::StartClusterInferred);
+            if (!entry.isDirectory || !placed) {
+                continue;
+            }
+            if (const std::optional<std::uint64_t> parent = deleted_->folderParentAt(entry.firstCluster.value())) {
+                for (std::size_t folder = 0; folder < seen.open.size(); ++folder) {
+                    if (seen.open[folder].clusters.front() == *parent) {
+                        leads[index].insert(folder);
+                    }
+                }
+            }
+        }
+    }
+    for (std::size_t index = 0; index < parts.size(); ++index) {
+        if (leads[index].size() != 1) {
+            continue;
+        }
+        // Read on from the folder's last cluster: an entry's long name may
+        // begin there (its slots go on across the cluster's end).
+        const Seen::OpenFolder& folder = seen.open[*leads[index].begin()];
+        Listed listed;
+        listed.clusters.push_back(folder.clusters.back());
+        listed.clusters.insert(listed.clusters.end(), parts[index].listed.clusters.begin(),
+                               parts[index].listed.clusters.end());
+        DirectoryParser parser(boot_);
+        if (!readSlots(listed, parser, false, true, false, &taken).ok()) {
+            continue;
+        }
+        const std::uint64_t before = boot_.clusterOffset(folder.clusters.back());
+        std::erase_if(listed.listing.entries, [&](const DirectoryEntry& entry) {
+            return entry.metadataOffset >= before && entry.metadataOffset < before + boot_.clusterSize;
+        });
+        listed.clusters.erase(listed.clusters.begin());
+        std::vector<std::uint32_t> all = folder.clusters;
+        all.insert(all.end(), listed.clusters.begin(), listed.clusters.end());
+        const DeletedEntries::Listing context{listed.clusters.front(), folder.clusters.front(), false, &all};
+        deleted_->inferStarts(listed.listing.entries, context);
+        parts[index].listed = std::move(listed);
+        parts[index].folder = *leads[index].begin();
+    }
+    return parts;
 }
 
 Result<FileScan> Fat32Filesystem::scan(const ScanLimits& limits, const CancellationToken& cancel) {
@@ -471,6 +632,10 @@ Result<FileScan> Fat32Filesystem::scan(const ScanLimits& limits, const Cancellat
         std::string path;
         std::uint32_t depth = 0;
         bool deleted = false;
+        // A part of a deleted folder found apart from it, listed already
+        // (L243); `orphaned` when the folder it belongs to is not known.
+        std::optional<Listed> part;
+        bool orphaned = false;
     };
 
     FileScan result;
@@ -483,12 +648,50 @@ Result<FileScan> Fat32Filesystem::scan(const ScanLimits& limits, const Cancellat
             }
         }
     };
+    const auto clusterAt = [&](std::uint64_t offset) { return (offset - boot_.dataOffset) / boot_.clusterSize + 2; };
+
+    // The parts of deleted folders no listing reaches are looked for once the
+    // folders have all been listed (L243).
+    const bool lookForParts = limits.includeDeleted && limits.recurseIntoDeletedDirectories;
+    Seen seen;
+    bool partsLookedFor = false;
+    bool stopped = false;
 
     std::unordered_set<std::uint64_t> visited{boot_.rootCluster};
-    std::vector<Work> stack{Work{rootDirectory(), "", 0, false}};
+    std::vector<Work> stack{Work{rootDirectory(), "", 0, false, std::nullopt, false}};
     std::uint64_t entryCount = 0;
 
-    while (!stack.empty()) {
+    while (true) {
+        if (stack.empty()) {
+            if (!lookForParts || partsLookedFor || stopped) {
+                break;
+            }
+            partsLookedFor = true;
+            Result<std::vector<LostPart>> parts = findLostParts(seen, cancel);
+            if (!parts.ok()) {
+                return parts.error();
+            }
+            for (LostPart& part : *parts) {
+                Work work;
+                work.deleted = true;
+                if (part.folder.has_value()) {
+                    work.path = seen.open[*part.folder].path;
+                    work.depth = seen.open[*part.folder].depth;
+                } else {
+                    work.path = "/" + std::string(kOrphanDirectory);
+                    work.depth = 1;
+                    work.orphaned = true;
+                }
+                work.part = std::move(part.listed);
+                stack.push_back(std::move(work));
+            }
+            std::reverse(stack.begin(), stack.end());  // in the order found
+            if (!stack.empty()) {
+                log(LogLevel::Info, std::string(toString(info_.type)) + " found parts of deleted folders apart from them",
+                    {field("parts", stack.size())});
+            }
+            continue;
+        }
         if (cancel.isCancellationRequested()) {
             return makeError(ErrorCode::Cancelled, std::string(toString(info_.type)) + " scan cancelled");
         }
@@ -496,22 +699,46 @@ Result<FileScan> Fat32Filesystem::scan(const ScanLimits& limits, const Cancellat
         stack.pop_back();
         const std::string shownPath = work.path.empty() ? "/" : work.path;
 
-        std::vector<std::uint32_t> chain;
-        const Result<DirectoryListing> listing = listDirectory(work.directory, work.deleted ? nullptr : &chain, true);
-        if (!listing.ok()) {
-            const ScanIssueKind kind = listing.error().code == ErrorCode::IoError ? ScanIssueKind::DirectoryUnreadable
-                                                                                  : ScanIssueKind::DirectoryInvalid;
-            result.issues.push_back(ScanIssue{kind, shownPath, listing.error().message});
+        const bool part = work.part.has_value();
+        Result<Listed> listed = part ? Result<Listed>(std::move(*work.part)) : listDirectory(work.directory, true);
+        if (!listed.ok()) {
+            const ScanIssueKind kind = listed.error().code == ErrorCode::IoError ? ScanIssueKind::DirectoryUnreadable
+                                                                                 : ScanIssueKind::DirectoryInvalid;
+            result.issues.push_back(ScanIssue{kind, shownPath, listed.error().message});
             continue;
         }
-        claimAll(chain);
-        for (ScanIssue issue : listing->issues) {
+        if (!work.deleted) {
+            claimAll(listed->clusters);
+        }
+        seen.folders.insert(listed->clusters.begin(), listed->clusters.end());
+        for (ScanIssue issue : listed->listing.issues) {
             issue.path = shownPath;
             result.issues.push_back(std::move(issue));
         }
+        if (work.deleted && listed->endedFull && !part) {
+            // Where its next cluster was looked for (L8): it may be beyond (L243).
+            Seen::OpenFolder open;
+            open.clusters = listed->clusters;
+            open.from.push_back(std::uint64_t{listed->clusters.back()} + 1);
+            for (auto it = listed->listing.entries.rbegin(); it != listed->listing.entries.rend(); ++it) {
+                if (!it->isDirectory && it->size == 0) {
+                    continue;
+                }
+                const bool placed = it->state != EntryState::Deleted || (it->firstCluster.value() >> 16) != 0 ||
+                                    !boot_.deletedStartsAmbiguous() || it->hasIssue(EntryIssue::StartClusterInferred);
+                if (placed && boot_.isValidCluster(it->firstCluster.value())) {
+                    const std::uint64_t span = it->isDirectory ? 1 : (it->size - 1) / boot_.clusterSize + 1;
+                    open.from.insert(open.from.begin(), it->firstCluster.value() + span);
+                }
+                break;
+            }
+            open.path = work.path;
+            open.depth = work.depth;
+            seen.open.push_back(std::move(open));
+        }
 
         std::vector<Work> subdirectories;
-        for (const DirectoryEntry& entry : listing->entries) {
+        for (const DirectoryEntry& entry : listed->listing.entries) {
             if (entry.state == EntryState::Deleted && !limits.includeDeleted) {
                 continue;
             }
@@ -519,6 +746,7 @@ Result<FileScan> Fat32Filesystem::scan(const ScanLimits& limits, const Cancellat
                 result.issues.push_back(ScanIssue{ScanIssueKind::EntryLimit, shownPath,
                                                   "stopped after " + std::to_string(limits.maxEntries) + " entries"});
                 result.complete = false;
+                stopped = true;
                 stack.clear();
                 subdirectories.clear();
                 break;
@@ -526,10 +754,13 @@ Result<FileScan> Fat32Filesystem::scan(const ScanLimits& limits, const Cancellat
 
             FileRecord record;
             record.entry = entry;
-            record.path = work.path + "/" + entry.name;
+            record.path = work.path + "/" + pathComponent(entry.name);
             record.parentDeleted = work.deleted;
             if (work.deleted) {
                 record.entry.state = EntryState::Deleted;  // its chain was freed with the parent
+            }
+            if (work.orphaned) {
+                record.entry.issues.push_back(EntryIssue::ParentMissing);
             }
             Resolved resolved = resolve(record.entry);
             const bool active = record.entry.state == EntryState::Active;
@@ -537,6 +768,14 @@ Result<FileScan> Fat32Filesystem::scan(const ScanLimits& limits, const Cancellat
                 claimAll(resolved.ownedClusters);  // directories claim their chain when listed
             }
             record.allocation = std::move(resolved.allocation);
+            for (const Extent& extent : record.allocation.extents) {
+                if (extent.length > 0) {
+                    const std::uint64_t first = clusterAt(extent.offset);
+                    const std::uint64_t end = clusterAt(extent.offset + extent.length - 1) + 1;
+                    std::uint64_t& known = seen.runs[first];
+                    known = std::max(known, end);
+                }
+            }
 
             if (record.entry.isDirectory) {
                 const std::uint64_t cluster = record.entry.firstCluster.value();
@@ -553,7 +792,8 @@ Result<FileScan> Fat32Filesystem::scan(const ScanLimits& limits, const Cancellat
                         result.complete = false;
                     } else {
                         visited.insert(cluster);
-                        subdirectories.push_back(Work{record.entry, record.path, work.depth + 1, !active});
+                        subdirectories.push_back(
+                            Work{record.entry, record.path, work.depth + 1, !active, std::nullopt, false});
                     }
                 }
             }

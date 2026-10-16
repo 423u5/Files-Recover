@@ -5,10 +5,11 @@ get files back. The project's first rule is that no file that could come back is
 recover them wrong come first. [limitations.md](limitations.md) stays the reference for each item's details and
 status: when an item is solved or decided there, take it off this list.
 
-Of the register's 247 items, the 85 below are open: 81 Open, 3 Partly resolved (L46, L212, L213) and 1 Mitigated
-(L197). The 115 Accepted and 47 Resolved items are not listed (L7, L8 and L13 were resolved on 2026-10-15; on
-2026-10-16 L245, a defect found and fixed, L12, L19 and L21, by the images Windows wrote, and L147, L172 and
-L177, which left L246, accepted by the user's choice, and L247).
+Of the register's 250 items, the 84 below are open: 80 Open, 3 Partly resolved (L46, L212, L213) and 1 Mitigated
+(L197). The 115 Accepted and 51 Resolved items are not listed (L7, L8 and L13 were resolved on 2026-10-15; on
+2026-10-16 L245, a defect found and fixed, L12, L19 and L21, by the images Windows wrote, L147, L172 and L177,
+which left L246, accepted by the user's choice, and L247, and L10, L242, L243 and L244, which left L248, L249 and
+L250).
 
 Sizes compare the items with each other: **small** is a contained change, **medium** a new part of an existing
 component with its tests, **large** a new component (a file format, a filesystem structure) with reference samples.
@@ -50,9 +51,9 @@ once their entries are overwritten, they are lost.
 | L238 | A carved compound file ends at its last sector in use: it opens, but it is shorter than the original and its SHA-256 differs. | Decision needed: carving on to the end of what the FAT covers could take another file's data. | small |
 | L60 | A JPEG ends at its first end marker: a second image appended after it (Multi-Picture Format previews, depth maps) is carved as a separate JPEG, and a vendor trailer that is not a JPEG is lost. | Read the MPF index in APP2 to carve the whole file. | medium |
 | L229 | Carving skips every hit inside a verified archive, also in the archive's own records (names, comments, an APK signing block), which are not files of it. None was seen in practice. | Skip only inside the members' data. | small to medium |
-| L242 | A deleted FAT32 file whose start lost its top 16 bits, with no neighbour that places it and no known type to check what starts at each place (text, formats the engine does not carve), keeps the start recorded, which can be another file's data (L7's remainder). | Look for more evidence: the folder's other runs, free space around each place. | medium |
-| L243 | A deleted FAT32 folder that grew elsewhere than after its last file or its previous cluster loses the entries beyond (L8's remainder); their files are found only by carving. Of two deleted folders that grew next to each other, one may list the other's entries as well (duplicates, nothing lost). | Search the free clusters for directory clusters no folder claims, and list their entries. | medium |
-| L244 | An orphaned exFAT directory whose first entry sets are orphans too, or whose first cluster was reused, stays a file (L13's remainder). | Accept orphans and other sets as evidence too. | small |
+| L248 | A deleted FAT32 file whose start lost its top 16 bits stays where its start records when the places it may start at all look alike: several start a file of its type and none or several end at its size, or several free places hold data that may start it (L242's remainder). | Check the whole file at each place left, as candidate evaluation does, or offer each place as a candidate. | medium |
+| L249 | A part of a deleted FAT32 folder found apart from it is looked for only right after data the scan listed: one after data nothing lists is not found (its files are only carved). A part that no folder, or several, lead to is listed under `/$OrphanFiles`. Of two deleted folders that grew next to each other, one may list the other's entries too (duplicates, nothing lost). L243's remainder. | Search every free cluster for folder entries (one more read of the free space); use the size Windows records for a deleted folder. | medium |
+| L250 | A deleted exFAT directory linked by a FAT chain whose first cluster was reused cannot be followed (it is read as one run instead); an orphan whose first free clusters hold no entries stays a file (L244's remainder). | Look for its clusters by their entries, as L243 does on FAT32. | medium |
 
 ## 4. What the user sees (no file is lost)
 
@@ -66,7 +67,6 @@ once their entries are overwritten, they are lost.
 | L93 | The same situation (a chunk beyond the end of a complete file) is `Invalid` for M4A and `Truncated` for MP4. | Decide on one reading. | small |
 | L198 | A carve inside another file's overlong allocation is linked to that file as its container: the report's "inside" evidence is wrong, though the carve is recovered whole. | Link only to what the file's data covers. | small |
 | L239 | Naming by content guesses for some files: templates are named as documents (`.dotx` as `docx`), OpenXPS as `xps`, encrypted Office files `.ole`, JARs and ZIPs by their first member. | Refine the rules where content tells more. | small |
-| L10 | A damaged FAT32 long name holding `/` adds a folder level to the recovered tree, and FAT32 does not flag the name. | Flag it, as exFAT and NTFS do. | small |
 | L180 | `--log` always writes Info and above, and a scan always uses every format (they are part of its identity). | Add a log level option. | small |
 
 ## 5. Checking against real Windows

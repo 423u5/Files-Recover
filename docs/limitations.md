@@ -112,7 +112,7 @@ the same; a list of the chains would add little
 but referenced by no entry). The orphaned chains themselves are not listed. The same applies to exFAT.
 
 ### L10. Paths are built from raw names
-**Status:** Open (recovery output is safe since P7; the FAT32 part remains)  
+**Status:** Resolved (after P20, the user's request of 2026-10-16): FAT names Windows cannot create are flagged, and a `/` in a name is `_` in its path; tests `Fat32FilesystemTest.NamesWithForbiddenCharactersAreFlagged`, `ExFatEntrySetTest.ASlashInAFolderNameIsNoLevelOfThePath`, `NtfsRecordCorruptionTest.InvalidNames`  
 FAT32 does not check long names for characters that FAT forbids. A damaged long name containing `/`
 therefore gives an ambiguous `FileRecord::path`. exFAT and NTFS flag such names (`InvalidName`) but also
 keep them unchanged in the path (NTFS: `NtfsRecordCorruptionTest.InvalidNames`). P4 code was not changed.
@@ -121,8 +121,16 @@ from its path as a whole, so such names cannot leave the destination
 (`RecoveryWriterTest.UnsafeNamesStayInsideTheDestination`). A directory name containing `/` still adds a level
 to the recovered tree, and FAT32 still does not flag the name.
 
+After P20: FAT12, FAT16 and FAT32 flag a name Windows cannot create on FAT (`InvalidName`: empty, `.` or `..`, or
+holding one of `"*/:<>?\|` or a control character), as exFAT and NTFS do; such a candidate's name is
+`NameUncertain`. Every filesystem builds `FileRecord::path` from `filesystem::pathComponent()` of each name, which
+puts `_` in place of a `/`: a damaged folder name is one level of the path and of the recovered tree, and every
+`/` of a path separates two names. The entry keeps its name as recorded (a recovered file's name still goes through
+`safeFileName`). Sessions scanned before keep the paths they recorded, in which such a folder still adds a level;
+the writer still takes a candidate's name off its path as a whole, so their files stay inside the destination.
+
 ### L242. A deleted FAT32 start without evidence stays as recorded
-**Status:** Open (2026-10-15)  
+**Status:** Resolved (after P20, the user's request of 2026-10-16) as far as the evidence allows; what is left is L248. Tests `Fat32DeletedStartTest` (its L242 part), `FormatRegistryTest.EndsFileNamedFindsTheEndOfTheFormatTheExtensionStandsFor`  
 A deleted entry whose start lost its top 16 bits (L7) is placed again only when a neighbour's end or start, or
 what starts at each place, singles one place out. A file with no such neighbour whose name has no known type
 (text, documents of formats the engine does not carve), or whose possible places all look alike, keeps the start
@@ -130,8 +138,26 @@ recorded, which on a volume of more than 65,535 clusters may be another file's d
 file of a known type, without its name. Outside a scan (`Fat32Options::startsFile` empty) only the neighbours are
 used.
 
+After P20 (2026-10-16), two more kinds of evidence place such a start:
+
+- Where the file ends. When several places each start a file of its type, the one where that file's structure ends
+  exactly at the size recorded is taken (`Fat32Options::endsFile`, which a scan gives from its formats:
+  `carving::endsFileNamed` runs the format's end detection on the data from that place, reading at most 64 KiB
+  beyond the size).
+- What the places hold. When the place recorded holds other data now (more than half of its clusters are in use,
+  or its first cluster is free and what starts there cannot start the file: no file of its type, or no text for a
+  text file's name), the file goes to the one other place whose clusters are all free, whose first bytes are not
+  blank (all 0x00 or all 0xFF: never written) and where nothing contradicts its name; of several such places, to
+  the one between the files around it in the folder, which were written before and after it.
+
+The place recorded is kept whenever it may be the file's: a file whose first cluster alone was taken since stays
+where the rest of it is. A text file is told by its extension (`.txt`, `.csv`, `.log`, `.xml`, `.json`, `.html`,
+source code and others): its first bytes must be text (a UTF-16 byte order mark, or no control character that text
+does not hold). The neighbours are asked again afterwards, around the files these steps placed. Outside a scan,
+the clusters' state, blank places, text and the neighbours are used.
+
 ### L243. A deleted FAT32 folder that grew elsewhere loses its later entries
-**Status:** Open (2026-10-15)  
+**Status:** Resolved (after P20, the user's request of 2026-10-16): a scan looks for the clusters of deleted folders that no listing reached and lists their entries; what is left is L249. Tests `Fat32DeletedFolderTest` (its L243 part)  
 A deleted folder's next cluster is looked for at two places only (L8): after the data of the last file it lists so
 far, and right after its previous cluster. A folder that grew while other programs wrote elsewhere, or whose next
 cluster was reused, ends where it cannot be followed: its later entries are not listed, and their files are
@@ -143,6 +169,47 @@ where its parent may have grown. The entries there are then listed in both folde
 duplicates of the same files, nothing lost. A rule telling the two apart would lose a folder's later entries
 whenever it guessed wrong, so none is applied. Windows 10 records a deleted folder's size in bytes in its entry
 (L8): the number of clusters to look for, which the search could use to stop, or to keep looking; it does not yet.
+
+After P20 (2026-10-16): once a scan has listed every folder, it looks for clusters that hold folder entries and
+that no folder listed, among the free clusters right after the data of any file it listed (active or deleted) and
+right after any folder's cluster: that is where a writer's next free cluster was when a folder grew. Each is read
+like a deleted folder's cluster (free, folder slots only, at least one, no `.` entry), and followed where it grew
+in turn (L8). Such a part goes to the deleted folder that leads to it, among those whose search ended at a full
+cluster: when the data and folder clusters the scan listed lead from that folder's last file's data, or from its
+last cluster, to the part, one right after the other (other programs wrote meanwhile), or when the `..` entry of a
+folder in the part names that folder's first cluster. Its entries are read on from the folder's last cluster, so
+that a long name that begins there is whole, and are listed under the folder's path. A part that no folder leads to
+(its folder's first cluster was taken by other data, so the folder itself cannot be listed), or that more than one
+does, is listed under `/$OrphanFiles`, as NTFS lists entries whose folder is gone: its entries are flagged
+`ParentMissing`, and their candidates' warning is `LocationUnknown`. `readDirectory` lists a folder alone and
+does not look for parts. The duplicates of two folders that grew next to each other remain (L249).
+
+### L248. A deleted FAT32 start whose places all look alike stays as recorded
+**Status:** Open (2026-10-16)  
+What is left of L7 and L242. A deleted entry whose start lost its top 16 bits, and that no neighbour places,
+stays as recorded when the places it may start at look alike: several start a file of its type and none, or more
+than one, ends at its size (or its format cannot tell where it ends); the place recorded may be its own (free, and
+nothing there contradicts its name) while another may be too; or several other places are free and hold data that
+may start it, and the files around it do not single one out. A file of a type no format knows that is not text is
+told only by the clusters' state; UTF-16 text without a byte order mark is not taken for text. On a volume of more
+than 16.7 million clusters (more than 256 places 65,536 apart), what the places hold is not examined: each costs a
+read. When a file's own
+clusters were all reused since (its data is gone) and its place recorded holds other data, it may be placed at
+another free place that happens to qualify: its candidate holds other data then, which validation tells for the
+types it checks.
+
+### L249. Parts of deleted FAT32 folders are looked for right after known data only
+**Status:** Open (2026-10-16)  
+What is left of L8 and L243. A scan looks for the parts of deleted folders that no listing reached (L243) only in
+the free clusters right after data or a folder's cluster that it listed: a part after data that nothing lists any
+more (a file whose entry is gone, or space never listed) is not found, and its files are found only by carving. A
+part goes to its folder only when that folder alone leads to it, by the data listed one after the other or by a
+subfolder's `..` entry; otherwise it is listed under `/$OrphanFiles`, and its files lose their folder, not their
+names or data. A part of a folder the scan could not list (its first cluster reused) that lies where another deleted
+folder's next cluster would be is taken for that folder's: its files are then listed in the wrong folder. Of two
+deleted folders that grew next to each other, one may still list the other's entries as well
+(L243's description: duplicates, nothing lost). Windows 10 records a deleted folder's size in its entry (L8), which
+would tell how many clusters to look for; it is not used.
 
 ## exFAT (P5)
 
@@ -212,10 +279,27 @@ beyond the end of the image is read. Cluster analysis still steps through every 
 262,000), which takes about 2 seconds in a debug build.
 
 ### L244. An orphaned exFAT directory is recognised by its first entries only
-**Status:** Open (2026-10-15)  
+**Status:** Resolved (after P20, the user's request of 2026-10-16): orphaned entries are evidence too, and a deleted directory is read where its clusters are still free; what is left is L250. Tests `ExFatFilesystemTest.AnOrphanedFolderHoldingOnlyOrphansIsSearched`, `ExFatFilesystemTest.ADeletedFolderWhoseFirstClusterWasReusedIsReadWhereItIsFree`, `ExFatFilesystemTest.AnOrphanedFolderWhoseFirstClusterWasReusedIsReadWhereItIsFree`  
 An orphaned entry (L13) is taken for a directory only when the first 4 KiB of its data hold a File entry set whose
 checksum matches and its first cluster is free. A deleted directory whose first entry sets were orphaned
 themselves, or whose first cluster was reused, stays a file, and the files in it are found only by carving.
+
+After P20 (2026-10-16): orphaned Stream Extension and File Name entries whose name matches its hash are evidence as
+well as whole entry sets (only names the up-case table in use covers count). The evidence is looked for in the
+first 4 KiB of the directory's data that are still free, among its first four clusters (or its first 4 KiB of
+clusters, when they are smaller): its first cluster may be in use again. A deleted directory, orphaned or not, is
+now read where its clusters are still free, and those in use again are left out with a scan issue ("N of the
+deleted directory's M clusters are in use again or of unknown state ..."); until then one reused cluster lost all
+of its entries. It is refused only when none of its clusters is free, or the volume has no allocation bitmap.
+
+### L250. An exFAT directory chained from a reused first cluster cannot be followed
+**Status:** Open (2026-10-16)  
+What is left of L244. A deleted directory whose clusters a FAT chain linked (not one run), and whose first cluster
+is in use again, cannot be followed: the chain began in that cluster, whose FAT entry belongs to the new file now.
+Such a directory is read as one run from its first cluster on, where free, or not at all when the chain the FAT
+gives from there happens to have its length. Windows makes directories one run while they can grow so (seen on
+the images it wrote, L21). An orphaned entry whose first four clusters still free hold no entry set and no
+verified orphan stays a file.
 
 ## Cross-checking and test data
 

@@ -24,10 +24,6 @@ namespace recovery::filesystem::ntfs {
 
 class ClusterBitmap;
 
-// Virtual directory under the root that holds entries whose parent directory
-// is gone ("/$OrphanFiles/<name>"). It is not a directory of the volume.
-inline constexpr std::string_view kOrphanDirectory = "$OrphanFiles";
-
 struct NtfsOptions {
     // Memory for cached MFT pages; bounds memory use on large volumes.
     std::size_t mftCacheBytes = 4 * kMiB;

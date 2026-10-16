@@ -468,6 +468,41 @@ over the session, API, CLI, storage and checkpoint sources (40 files): no findin
 rest predate it and were triaged above. The test stick was not
 scanned again, with the user's agreement: nothing a scan reads or a recovery writes changed.
 
+## After P20: deleted FAT32 starts by what their places hold, lost folder parts, exFAT folders, names
+
+The user's request of 2026-10-16 ("Solve L10, L242, L243 and L244"). What was built is in
+[../architecture/filesystems.md](../architecture/filesystems.md) and the register's entries.
+
+**What changes for a person recovering files.** A deleted FAT32 file whose start lost its top 16 bits, and that no
+neighbour places, now comes back from where it is in two more cases: when several places start a file of its type,
+the one where that file ends at its size; and when the place its start records holds other data now, the one other
+place it can be (a text file where text is). A deleted FAT32 folder that grew where its last file's data does not
+lead (another program wrote meanwhile), or whose first cluster was taken since, no longer loses the files listed in
+its later clusters: a scan finds those clusters and lists their files in the folder that leads to them, or under
+`/$OrphanFiles` with their names. A deleted exFAT folder whose first cluster was reused is read where it is still
+free (one reused cluster used to lose all of its files), also when its own File entry is gone. A damaged FAT, exFAT
+or NTFS folder name holding `/` is one folder of the recovered tree, not two, and FAT flags such names as exFAT and
+NTFS do. Nothing that was recovered before is recovered differently.
+
+**Tests.** 16 new tests: `Fat32DeletedStartTest` (6: the end check, a recorded place that holds a newer file or no
+text, the place between the files around it, and two cases where the recorded place is kept), `Fat32DeletedFolderTest`
+(4: a part after a file written meanwhile, with a long name begun in the folder's last cluster; a part no folder leads
+to; a part a subfolder's `..` names; none looked for when deleted folders are not searched), `ExFatFilesystemTest` (3),
+`Fat32FilesystemTest.NamesWithForbiddenCharactersAreFlagged`, `ExFatEntrySetTest.ASlashInAFolderNameIsNoLevelOfThePath`
+and `FormatRegistryTest.EndsFileNamedFindsTheEndOfTheFormatTheExtensionStandsFor`; `NtfsRecordCorruptionTest.InvalidNames`
+checks the path too. Two corpus scenarios: `fat32-folder-parts` (35 candidates deep, 20 quick: the photos of a folder
+that grew after another file, a camera folder's last photos under `/$OrphanFiles`, a note placed where text is, a photo
+placed where it ends, a folder name holding `/`) and `exfat-reused-folder` (5 and 5). Every earlier corpus baseline is
+unchanged. A mutation check undid each of the 15 parts of the fix in turn: each was caught by its tests, four by the
+corpus scenarios as well. Fuzz seeds `fat32_folder_parts` and `exfat_reused_folder` (filesystem and scan targets).
+
+**Real data, before and after.** The build of the last commit (a4699e9) and this one scanned (deep) the six images
+Windows 10 wrote (`E:\RecoveryTest\winref`, `winref2`, `winref3`: FAT32 and exFAT, L21): `compare_reports.py` found
+them identical, candidate by candidate (156, 4, 281, 51, 280 and 51 files), with nothing found where nothing is (no
+`/$OrphanFiles` entry). The reference tests pass on `winref2` and `winref3`. The test stick's image (NTFS, 28.6 GiB, read only), where only the paths can change, gave the same 529 candidates as the last scan of it before this work (the L7 work's final build), field for field.
+
+**Checks** (2026-10-16, the final sources). msvc-debug: 1,769 tests, all passing (before four small edits: a reserve, a flag taken before a move, the 256-place bound, a constant's type; the filesystem, registry and four FAT and exFAT corpus tests passed again after them). clang-tidy, both passes, over the filesystem, format registry, scan coordinator, writer and job sources: two findings on this work's lines, both fixed (a multiplication in `int`, a vector filled without a reserve); the rest predate it. The full pass of every CI preset (release, AddressSanitizer, analyze, the fuzz preset and a fuzz run of the new seeds) is still to be run, by the user's choice: the next day.
+
 ## Acceptance
 
 | Criterion | Status |

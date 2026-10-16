@@ -184,6 +184,7 @@ TEST_F(NtfsRecordCorruptionTest, InvalidNames) {
                                       [](const FileRecord& r) { return r.entry.name == "vi/tim.bin"; });
     ASSERT_NE(slashed, scan.records.end());
     EXPECT_TRUE(slashed->entry.hasIssue(EntryIssue::InvalidName));
+    EXPECT_EQ(slashed->path, "/vi_tim.bin") << "a '/' in a name is no level of the path (L10)";
     EXPECT_FALSE(find(scan, "/bystander.txt")->entry.hasIssue(EntryIssue::InvalidName));
 }
 

@@ -165,13 +165,15 @@ enum class EntryIssue : std::uint8_t {
     // directory flag are unknown. The entry is a plain file unless its data
     // shows that it was a directory (exFAT entry sets, L13).
     MetadataIncomplete,
-    // The name is empty or contains characters the filesystem forbids.
+    // The name is empty, "." or "..", or contains characters the filesystem
+    // forbids (FAT: as Windows forbids them in long names, L10).
     InvalidName,
     // The valid data length is larger than the size.
     ValidDataLengthExceedsSize,
     // NTFS: the directory the entry names as its parent no longer exists (its
-    // record was reused or is unreadable). The entry is listed under
-    // "/$OrphanFiles", not at its original path.
+    // record was reused or is unreadable). FAT32: the entry was found in a
+    // cluster of a deleted folder that no folder leads to any more (L243).
+    // The entry is listed under "/$OrphanFiles", not at its original path.
     ParentMissing,
     // NTFS: the metadata record is malformed after some point; attributes
     // beyond the damage are ignored.
@@ -229,10 +231,22 @@ struct DirectoryEntry {
     [[nodiscard]] bool hasIssue(EntryIssue issue) const noexcept;
 };
 
+// Virtual directory under the root ("/$OrphanFiles/<name>") that lists the
+// entries no folder leads to any more (EntryIssue::ParentMissing): NTFS
+// records whose parent is gone, and FAT32 entries of deleted folder clusters
+// whose folder is unknown (L243). It is not a directory of the volume.
+inline constexpr std::string_view kOrphanDirectory = "$OrphanFiles";
+
+// `name` as one component of FileRecord::path: a '/' in it (only a damaged
+// name holds one; it is flagged InvalidName) becomes '_', so that every '/'
+// of a path separates two components (L10). The entry keeps its name.
+[[nodiscard]] std::string pathComponent(std::string_view name);
+
 // A directory entry placed in the tree, with its data location resolved.
 struct FileRecord {
     DirectoryEntry entry;
-    std::string path;  // "/DCIM/100MEDIA/IMG_0001.JPG"
+    // "/DCIM/100MEDIA/IMG_0001.JPG": pathComponent() of each name on the way.
+    std::string path;
     // Found inside a deleted directory (and therefore deleted as well).
     bool parentDeleted = false;
     FileAllocation allocation;

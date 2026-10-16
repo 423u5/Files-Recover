@@ -367,11 +367,17 @@ Result<ScanCoordinator::Run::VolumeOutcome> ScanCoordinator::Run::openVolume(Vol
         return outcome;
     }
     // What starts a file of a given name tells where a deleted FAT32 file
-    // starts when its start lost its top 16 bits (L7).
+    // starts when its start lost its top 16 bits (L7), and where such a
+    // file ends tells places that start alike apart (L242). The view
+    // outlives the filesystem, which the outcome holds after it.
     FilesystemRecoveryOptions filesystemOptions;
     filesystemOptions.fat32.startsFile = [formats = &owner.formats_](std::string_view name,
                                                                      std::span<const std::byte> head) {
         return carving::startsFileNamed(*formats, name, head);
+    };
+    filesystemOptions.fat32.endsFile = [formats = &owner.formats_, volume = outcome.view.get()](
+                                           std::string_view name, std::uint64_t offset, std::uint64_t size) {
+        return carving::endsFileNamed(*formats, *volume, name, offset, size);
     };
     Result<std::unique_ptr<FilesystemRecovery>> recovery =
         openFilesystemRecovery(*outcome.view, record.offset, filesystemOptions, options.logger);

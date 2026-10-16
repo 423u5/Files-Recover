@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <string_view>
 
 namespace recovery::filesystem::fat32 {
 
@@ -40,6 +41,19 @@ std::u16string unitsToName(const std::vector<std::array<char16_t, 13>>& parts) {
         name.pop_back();
     }
     return name;
+}
+
+// A name Windows can create on FAT: not empty, "." or "..", and without the
+// characters it forbids in long names. Only damage, or a writer that does not
+// check, leaves another (L10).
+bool isValidName(std::string_view name) noexcept {
+    if (name.empty() || name == "." || name == "..") {
+        return false;
+    }
+    constexpr std::string_view kForbidden = "\"*/:<>?\\|";
+    return std::none_of(name.begin(), name.end(), [&](char c) {
+        return static_cast<unsigned char>(c) < 0x20 || kForbidden.find(c) != std::string_view::npos;
+    });
 }
 
 bool isDotEntry(std::span<const std::byte> e) {
@@ -319,6 +333,9 @@ bool DirectoryParser::feed(std::span<const std::byte> e, std::uint64_t volumeOff
 
     entry.shortName = formatShortName(name, ntFlags);
     entry.name = longName.has_value() && !longName->empty() ? utf16ToUtf8(*longName) : entry.shortName;
+    if (!isValidName(entry.name)) {
+        entry.issues.push_back(EntryIssue::InvalidName);
+    }
 
     bool invalidTime = false;
     entry.created = decodeTimestamp(loadLe16(e, 16), loadLe16(e, 14), loadU8(e, 13), invalidTime);

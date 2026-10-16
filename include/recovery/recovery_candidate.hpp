@@ -128,7 +128,8 @@ struct FilesystemEvidence {
     // first surviving entry of the set; NTFS: the FILE record).
     std::uint64_t metadataOffset = 0;
     // Original path within the volume ("/DCIM/100MEDIA/IMG_0001.JPG"). NTFS
-    // entries whose parent directory is gone are under "/$OrphanFiles".
+    // entries whose parent directory is gone, and FAT32 entries of deleted
+    // folder parts whose folder is unknown (L243), are under "/$OrphanFiles".
     std::string path;
     std::string shortName;
     filesystem::EntryState state = filesystem::EntryState::Active;

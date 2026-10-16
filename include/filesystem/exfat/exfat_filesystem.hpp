@@ -94,6 +94,13 @@ private:
         // Clusters owned by an active entry (empty for deleted entries).
         std::vector<Run> ownedRuns;
     };
+    // A part of a directory's data to read. `afterGap`: the data just before
+    // it is not read (clusters of a deleted directory in use again), so no
+    // entry set continues into it.
+    struct Piece {
+        Extent extent;
+        bool afterGap = false;
+    };
 
     ExFatFilesystem(storage::IStorageSource& volume, BootSector boot, ExFatOptions options,
                     diagnostics::Logger* logger);
@@ -110,9 +117,14 @@ private:
                                               std::optional<std::uint64_t> trimTo) const;
     [[nodiscard]] Result<DirectoryListing> listDirectory(const DirectoryEntry& directory, std::uint64_t budget,
                                                          bool& truncated, ParseOutput* systemEntries);
+    // The parts of a deleted directory's data (whole clusters) whose clusters
+    // are still free, in order; `skipped` counts the others (in use again, or
+    // of unknown state), which hold other data now or may (L244).
+    [[nodiscard]] std::vector<Piece> freeParts(const std::vector<Extent>& extents, std::uint64_t& skipped);
     // Whether an orphaned entry (its File entry overwritten: no attributes)
-    // is a deleted directory: its data is whole clusters, free now, that
-    // start with entry sets (L13).
+    // is a deleted directory: its data is whole clusters, and the first of
+    // them still free hold entry sets (L13; L244: its first cluster may be in
+    // use again).
     [[nodiscard]] bool isOrphanedDirectory(const DirectoryEntry& entry);
     [[nodiscard]] std::uint64_t maxDirectoryClusters() const noexcept;
     void log(diagnostics::LogLevel level, std::string_view message,

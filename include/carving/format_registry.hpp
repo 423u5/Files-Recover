@@ -10,9 +10,12 @@
 // silently go missing.
 
 #include "carving/file_format.hpp"
+#include "recovery/config.hpp"
 #include "recovery/result.hpp"
+#include "storage/storage_source.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <span>
@@ -57,5 +60,16 @@ private:
 // Places where a deleted file may start are told apart by it (FAT32, L7).
 [[nodiscard]] std::optional<bool> startsFileNamed(const FormatRegistry& formats, std::string_view name,
                                                   std::span<const std::byte> head);
+
+// Whether the file named `name` that would start at `offset` of `source`
+// ends exactly `size` bytes on, by the structure of a format its extension
+// stands for (as startsFileNamed): its header is taken there, and its end
+// detection Finds the end at `size` (at most kEndCheckSlack bytes after it
+// are read). False when it ends elsewhere, its end cannot be told, the name
+// stands for no format, or the source fails. When several places start a
+// file of its type, it tells where a deleted FAT32 file is (L242).
+inline constexpr std::uint64_t kEndCheckSlack = 64 * kKiB;
+[[nodiscard]] bool endsFileNamed(const FormatRegistry& formats, storage::IStorageSource& source, std::string_view name,
+                                 std::uint64_t offset, std::uint64_t size);
 
 }  // namespace recovery::carving

@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <array>
+#include <string>
+#include <string_view>
 #include <unordered_set>
 
 namespace recovery::filesystem::fat32 {
@@ -16,6 +18,23 @@ constexpr std::uint64_t kStep = 0x10000;
 constexpr std::uint64_t kLowMask = 0xFFFF;
 // Files of a run whose start is checked against their names, at each place.
 constexpr std::size_t kMaxCheckedMembers = 4;
+// Places of a file alone that pass the first checks, beyond which none is
+// taken: too many look alike (L242).
+constexpr std::size_t kMaxAlternatives = 8;
+// Places a file alone may start at, beyond which they are not examined (a
+// volume of more than 16.7 million clusters): each costs a read (L242).
+constexpr std::size_t kMaxExaminedPlaces = 256;
+
+// Extensions of files that hold text: whether such a file can start at a
+// place is told by its first bytes, with no format (L242). Not ".ts" (also
+// camcorder video) or ".sub" (also binary subtitles).
+constexpr auto kTextExtensions = std::to_array<std::string_view>({
+    "txt", "text", "log", "csv",  "tsv", "md",  "markdown", "rst", "xml",  "json", "yaml", "yml", "ini", "cfg",
+    "conf", "toml", "properties", "html", "htm", "xhtml", "css", "js", "mjs", "java", "kt", "kts", "gradle", "c",
+    "h",   "cc",   "cpp", "cxx",  "hpp", "hh",  "cs",       "py",  "rb",   "go",   "rs",   "php", "pl",  "sh",
+    "bat", "cmd",  "ps1", "sql",  "srt", "vtt", "ics",      "vcf", "tex",  "svg",  "rtf",  "nfo", "inf", "reg",
+    "m3u", "pls",  "url", "lst",  "diz",
+});
 
 std::uint64_t clustersFor(std::uint64_t bytes, std::uint32_t clusterSize) noexcept {
     return bytes == 0 ? 0 : (bytes - 1) / clusterSize + 1;
@@ -25,11 +44,49 @@ std::uint64_t slotCluster(std::span<const std::byte> slot) {
     return (static_cast<std::uint64_t>(loadLe16(slot, 20)) << 16) | loadLe16(slot, 26);
 }
 
+bool isTextName(std::string_view name) {
+    const std::size_t dot = name.rfind('.');
+    if (dot == std::string_view::npos || dot + 1 == name.size()) {
+        return false;
+    }
+    std::string extension(name.substr(dot + 1));
+    for (char& c : extension) {
+        if (c >= 'A' && c <= 'Z') {
+            c = static_cast<char>(c - 'A' + 'a');
+        }
+    }
+    return std::find(kTextExtensions.begin(), kTextExtensions.end(), extension) != kTextExtensions.end();
+}
+
+// Text: a UTF-16 byte order mark first, or no control character but those
+// text holds (tab, line breaks, form feed, escape, and the end mark of old
+// text files). Other bytes are all taken: text in a code page other than
+// UTF-8 is text too.
+bool looksLikeText(std::span<const std::byte> head) {
+    if (head.size() >= 2) {
+        const auto b0 = static_cast<std::uint8_t>(head[0]);
+        const auto b1 = static_cast<std::uint8_t>(head[1]);
+        if ((b0 == 0xFF && b1 == 0xFE) || (b0 == 0xFE && b1 == 0xFF)) {
+            return true;
+        }
+    }
+    return !head.empty() && std::none_of(head.begin(), head.end(), [](std::byte b) {
+        const auto c = static_cast<std::uint8_t>(b);
+        return c < 0x20 && c != 0x09 && c != 0x0A && c != 0x0B && c != 0x0C && c != 0x0D && c != 0x1A && c != 0x1B;
+    });
+}
+
+// Nothing was written there: every byte 0x00, or every byte 0xFF (erased flash).
+bool isBlank(std::span<const std::byte> head) {
+    return std::all_of(head.begin(), head.end(), [](std::byte b) { return b == std::byte{0x00}; }) ||
+           std::all_of(head.begin(), head.end(), [](std::byte b) { return b == std::byte{0xFF}; });
+}
+
 }  // namespace
 
 DeletedEntries::DeletedEntries(storage::IStorageSource& volume, const BootSector& boot, FatTable& fat,
-                               StartCheck startsFile)
-    : volume_(volume), boot_(boot), fat_(fat), startsFile_(std::move(startsFile)) {}
+                               StartCheck startsFile, EndCheck endsFile)
+    : volume_(volume), boot_(boot), fat_(fat), startsFile_(std::move(startsFile)), endsFile_(std::move(endsFile)) {}
 
 bool DeletedEntries::isAmbiguous(const DirectoryEntry& entry) const noexcept {
     return entry.state == EntryState::Deleted && (entry.firstCluster.value() >> 16) == 0 &&
@@ -80,6 +137,27 @@ bool DeletedEntries::isFree(std::uint64_t cluster) {
     return boot_.isValidCluster(cluster) && fat_.entry(static_cast<std::uint32_t>(cluster)).kind == FatEntryKind::Free;
 }
 
+std::uint64_t DeletedEntries::clustersInUse(std::uint64_t start, std::uint64_t span, std::uint64_t enough) {
+    std::uint64_t used = 0;
+    for (std::uint64_t cluster = start; cluster < start + span && used < enough; ++cluster) {
+        if (used + (start + span - cluster) < enough) {
+            break;  // the clusters left cannot reach it
+        }
+        const FatEntryKind kind = fat_.entry(static_cast<std::uint32_t>(cluster)).kind;
+        used += kind == FatEntryKind::Next || kind == FatEntryKind::EndOfChain || kind == FatEntryKind::Bad ? 1 : 0;
+    }
+    return used;
+}
+
+bool DeletedEntries::runIsFree(std::uint64_t start, std::uint64_t span) {
+    for (std::uint64_t cluster = start; cluster < start + span; ++cluster) {
+        if (!isFree(cluster)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 std::uint64_t DeletedEntries::endOf(const Item& item, const DirectoryEntry& entry) {
     const std::uint64_t start = *item.start;
     if (entry.state == EntryState::Active && !entry.isDirectory) {
@@ -97,20 +175,33 @@ std::uint64_t DeletedEntries::endOf(const Item& item, const DirectoryEntry& entr
     return start + item.clusters;
 }
 
-bool DeletedEntries::isFolderAt(std::uint64_t cluster, std::uint32_t parent, bool parentIsRoot) {
+std::optional<std::uint64_t> DeletedEntries::folderParentAt(std::uint64_t cluster) {
+    if (!boot_.isValidCluster(cluster)) {
+        return std::nullopt;
+    }
     std::array<std::byte, 2 * kDirectoryEntrySize> head{};
     if (!volume_.readExact(ByteOffset{boot_.clusterOffset(static_cast<std::uint32_t>(cluster))}, head).ok()) {
-        return false;
+        return std::nullopt;
     }
     const std::span<const std::byte> dot = std::span<const std::byte>(head).first(kDirectoryEntrySize);
     const std::span<const std::byte> dotDot = std::span<const std::byte>(head).subspan(kDirectoryEntrySize);
     if (!isDotSlot(dot) || loadU8(dot, 1) != ' ' || !isDotSlot(dotDot) || loadU8(dotDot, 1) != '.' ||
         slotCluster(dot) != cluster) {
+        return std::nullopt;
+    }
+    return slotCluster(dotDot);
+}
+
+bool DeletedEntries::isFolderAt(std::uint64_t cluster, const Listing& listing) {
+    const std::optional<std::uint64_t> up = folderParentAt(cluster);
+    if (!up.has_value()) {
         return false;
     }
+    if (!listing.parent.has_value()) {
+        return *up == 0 || boot_.isValidCluster(*up);  // the folder it was in is unknown
+    }
     // ".." names the parent; the root as 0 (some writers put its cluster).
-    const std::uint64_t up = slotCluster(dotDot);
-    return parentIsRoot ? (up == 0 || up == boot_.rootCluster) : up == parent;
+    return listing.isRoot ? (*up == 0 || *up == boot_.rootCluster) : *up == *listing.parent;
 }
 
 std::optional<bool> DeletedEntries::startsFileAt(const DirectoryEntry& entry, std::uint64_t cluster) {
@@ -125,37 +216,96 @@ std::optional<bool> DeletedEntries::startsFileAt(const DirectoryEntry& entry, st
     return startsFile_(entry.name, head);
 }
 
+std::optional<std::vector<std::byte>> DeletedEntries::headAt(std::uint64_t cluster, std::uint64_t size) {
+    const std::uint64_t offset = boot_.clusterOffset(static_cast<std::uint32_t>(cluster));
+    if (offset >= volume_.size()) {
+        return std::nullopt;
+    }
+    std::vector<std::byte> head(
+        static_cast<std::size_t>(std::min<std::uint64_t>({kStartCheckBytes, size, volume_.size() - offset})));
+    if (head.empty() || !volume_.readExact(ByteOffset{offset}, head).ok()) {
+        return std::nullopt;
+    }
+    return head;
+}
+
+std::optional<bool> DeletedEntries::fitsAt(const DirectoryEntry& entry, std::span<const std::byte> head) const {
+    if (startsFile_) {
+        if (const std::optional<bool> typed = startsFile_(entry.name, head)) {
+            return typed;
+        }
+    }
+    if (isTextName(entry.name)) {
+        return looksLikeText(head);
+    }
+    return std::nullopt;
+}
+
+bool DeletedEntries::holdsOtherData(const Item& item, const DirectoryEntry& entry) {
+    const std::uint64_t recorded = item.low;
+    if (!fits(recorded, item.clusters)) {
+        return true;  // no place there: cluster 0 or 1 is what is left of a start further on
+    }
+    // Most of its clusters hold other files' data.
+    const std::uint64_t half = item.clusters / 2;
+    if (clustersInUse(recorded, item.clusters, half + 1) > half) {
+        return true;
+    }
+    // What starts there now cannot start it; data written there since tells nothing.
+    if (!isFree(recorded)) {
+        return false;
+    }
+    const std::optional<std::vector<std::byte>> head = headAt(recorded, entry.size);
+    return head.has_value() && fitsAt(entry, *head) == false;
+}
+
+bool DeletedEntries::mayStartAt(const DirectoryEntry& entry, std::uint64_t place) {
+    if (!isFree(place)) {
+        return false;
+    }
+    const std::optional<std::vector<std::byte>> head = headAt(place, entry.size);
+    return head.has_value() && !isBlank(*head) && fitsAt(entry, *head) != false;
+}
+
 bool DeletedEntries::continuesDirectory(std::uint64_t cluster, const std::vector<std::uint32_t>& clusters) {
     if (!boot_.isValidCluster(cluster) || std::find(clusters.begin(), clusters.end(), cluster) != clusters.end() ||
         !isFree(cluster)) {
         return false;
     }
+    // Its first sector, then the rest: other data shows in the first one.
+    const std::uint64_t offset = boot_.clusterOffset(static_cast<std::uint32_t>(cluster));
+    const std::uint32_t head = std::min<std::uint32_t>(boot_.bytesPerSector, boot_.clusterSize);
     std::vector<std::byte> bytes(boot_.clusterSize);
-    if (!volume_.readExact(ByteOffset{boot_.clusterOffset(static_cast<std::uint32_t>(cluster))}, bytes).ok()) {
-        return false;
-    }
     std::size_t used = 0;
-    for (std::size_t at = 0; at + kDirectoryEntrySize <= bytes.size(); at += kDirectoryEntrySize) {
-        const std::span<const std::byte> slot = std::span<const std::byte>(bytes).subspan(at, kDirectoryEntrySize);
-        if (loadU8(slot, 0) == 0x00) {
-            break;  // the directory ends here
+    std::size_t done = 0;
+    for (const std::uint32_t length : {head, boot_.clusterSize - head}) {
+        const std::span<std::byte> part(bytes.data() + done, length);
+        if (length == 0 || !volume_.readExact(ByteOffset{offset + done}, part).ok()) {
+            return length == 0 && used > 0;
         }
-        if (!isPossibleSlot(slot, boot_)) {
-            return false;  // other data, or another folder's first cluster
+        for (std::size_t at = done; at + kDirectoryEntrySize <= done + length; at += kDirectoryEntrySize) {
+            const std::span<const std::byte> slot = std::span<const std::byte>(bytes).subspan(at, kDirectoryEntrySize);
+            if (loadU8(slot, 0) == 0x00) {
+                return used > 0;  // the directory ends here
+            }
+            if (!isPossibleSlot(slot, boot_)) {
+                return false;  // other data, or another folder's first cluster
+            }
+            ++used;
         }
-        ++used;
+        done += length;
     }
     return used > 0;
 }
 
-void DeletedEntries::placeFolders(std::vector<Item>& items, std::uint32_t directory, bool isRoot) {
+void DeletedEntries::placeFolders(std::vector<Item>& items, const Listing& listing) {
     for (Item& item : items) {
         if (!item.ambiguous || !item.directory) {
             continue;
         }
         std::vector<std::uint64_t> found;
         for (const std::uint64_t place : placesFor(item.low, 1)) {
-            if (isFree(place) && isFolderAt(place, directory, isRoot)) {
+            if (isFree(place) && isFolderAt(place, listing)) {
                 found.push_back(place);
             }
         }
@@ -168,9 +318,9 @@ void DeletedEntries::placeFolders(std::vector<Item>& items, std::uint32_t direct
 }
 
 void DeletedEntries::placeByNeighbours(std::vector<Item>& items, const std::vector<DirectoryEntry>& entries,
-                                       std::uint32_t directory, const std::vector<std::uint32_t>& clusters) {
+                                       const Listing& listing) {
     // The listed directory's own clusters lie between files written while it grew.
-    const std::unordered_set<std::uint64_t> folder(clusters.begin(), clusters.end());
+    const std::unordered_set<std::uint64_t> folder(listing.clusters->begin(), listing.clusters->end());
     const auto skipForward = [&](std::uint64_t cluster) {
         while (folder.contains(cluster)) {
             ++cluster;
@@ -188,7 +338,7 @@ void DeletedEntries::placeByNeighbours(std::vector<Item>& items, const std::vect
     };
 
     // Forward: an entry starts where the one before it ends (the first one,
-    // after the directory's first cluster).
+    // after the cluster that starts the listing).
     for (std::size_t i = 0; i < items.size(); ++i) {
         Item& item = items[i];
         if (!item.ambiguous || item.start.has_value()) {
@@ -196,7 +346,7 @@ void DeletedEntries::placeByNeighbours(std::vector<Item>& items, const std::vect
         }
         std::optional<std::uint64_t> place;
         if (i == 0) {
-            place = skipForward(std::uint64_t{directory} + 1);
+            place = skipForward(std::uint64_t{listing.first} + 1);
         } else if (items[i - 1].start.has_value()) {
             place = skipForward(endOf(items[i - 1], entries[items[i - 1].entry]));
         }
@@ -286,6 +436,23 @@ void DeletedEntries::placeRun(std::vector<Item>& items, const std::vector<Direct
             supported.push_back(place);
         }
     }
+    // Of several places, the one where the run's first typed file ends at its
+    // size, if only one does (L242): its data is there, end to end.
+    if (supported.size() > 1 && endsFile_) {
+        const std::size_t member = typed.front();
+        const DirectoryEntry& entry = entries[items[member].entry];
+        std::vector<std::uint64_t> ending;
+        for (const std::uint64_t place : supported) {
+            const std::uint64_t start = place + offsets[member - first];
+            if (isFree(start) &&
+                endsFile_(entry.name, boot_.clusterOffset(static_cast<std::uint32_t>(start)), entry.size)) {
+                ending.push_back(place);
+            }
+        }
+        if (ending.size() == 1) {
+            supported = std::move(ending);
+        }
+    }
     // Where it was recorded (the lowest place), when the evidence agrees; else
     // the one place it singles out.
     if (!supported.empty() && (supported.front() == items[first].low || supported.size() == 1)) {
@@ -295,8 +462,71 @@ void DeletedEntries::placeRun(std::vector<Item>& items, const std::vector<Direct
     }
 }
 
-void DeletedEntries::inferStarts(std::vector<DirectoryEntry>& entries, std::uint32_t directory, bool isRoot,
-                                 const std::vector<std::uint32_t>& clusters) {
+void DeletedEntries::placeAlone(std::vector<Item>& items, const std::vector<DirectoryEntry>& entries) {
+    for (std::size_t i = 0; i < items.size(); ++i) {
+        Item& item = items[i];
+        if (!item.ambiguous || item.start.has_value() || item.directory) {
+            continue;
+        }
+        const DirectoryEntry& entry = entries[item.entry];
+        if (!holdsOtherData(item, entry)) {
+            continue;  // it may well be where it was recorded
+        }
+        // The places where something that can start it was written: cheap
+        // checks first, then the state of every cluster of its run.
+        const std::vector<std::uint64_t> possible = placesFor(item.low, item.clusters);
+        if (possible.size() > kMaxExaminedPlaces) {
+            continue;
+        }
+        std::vector<std::uint64_t> places;
+        for (const std::uint64_t place : possible) {
+            if (place != item.low && mayStartAt(entry, place)) {
+                places.push_back(place);
+                if (places.size() > kMaxAlternatives) {
+                    break;
+                }
+            }
+        }
+        if (places.size() > kMaxAlternatives) {
+            continue;
+        }
+        std::erase_if(places, [&](std::uint64_t place) { return !runIsFree(place, item.clusters); });
+        if (places.size() > 1) {
+            // Of several, the one between the files around it in the listing,
+            // which were written before and after it.
+            std::optional<std::uint64_t> after;
+            for (std::size_t j = i; j-- > 0;) {
+                if (items[j].start.has_value()) {
+                    after = endOf(items[j], entries[items[j].entry]);
+                    break;
+                }
+            }
+            std::optional<std::uint64_t> before;
+            for (std::size_t j = i + 1; j < items.size(); ++j) {
+                if (items[j].start.has_value()) {
+                    before = *items[j].start;
+                    break;
+                }
+            }
+            if ((after.has_value() || before.has_value()) && (!after || !before || *after < *before)) {
+                std::vector<std::uint64_t> between;
+                for (const std::uint64_t place : places) {
+                    if ((!after || place >= *after) && (!before || place + item.clusters <= *before)) {
+                        between.push_back(place);
+                    }
+                }
+                if (between.size() == 1) {
+                    places = std::move(between);
+                }
+            }
+        }
+        if (places.size() == 1) {
+            item.start = places.front();
+        }
+    }
+}
+
+void DeletedEntries::inferStarts(std::vector<DirectoryEntry>& entries, const Listing& listing) {
     if (!boot_.deletedStartsAmbiguous()) {
         return;
     }
@@ -304,11 +534,13 @@ void DeletedEntries::inferStarts(std::vector<DirectoryEntry>& entries, std::uint
     if (std::none_of(items.begin(), items.end(), [](const Item& item) { return item.ambiguous; })) {
         return;
     }
-    placeFolders(items, directory, isRoot);
-    placeByNeighbours(items, entries, directory, clusters);
+    placeFolders(items, listing);
+    placeByNeighbours(items, entries, listing);
     if (startsFile_) {
         placeRuns(items, entries);
     }
+    placeAlone(items, entries);
+    placeByNeighbours(items, entries, listing);
     for (const Item& item : items) {
         if (!item.ambiguous || !item.start.has_value()) {
             continue;

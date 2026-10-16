@@ -1,0 +1,14 @@
+# corpus scenario exfat-reused-folder: exFAT: a folder of two clusters deleted with its photos, its File entry and first cluster taken by a newer file
+# image 4243968 bytes, sha256 9f1119b6e055ab7f, 5 originals
+# deep scan: 5 candidates
+#1 filesystem unverified(not-validated) other/- "/A newer note file.txt" size=400/400 valid=not-validated:unsupported/not-run sha=bce0d499e461875c recovery=recovered "A newer note file.txt" => /A newer note file.txt
+#2 filesystem complete image/jpeg "/Kept.jpg" size=19667/19667 valid=valid:passed/passed sha=661ff4a6f4bd0a1f recovery=recovered "Kept.jpg" => /Kept.jpg
+#3 filesystem unverified(not-validated) other/- "/Old Photos/empty note 4.txt" size=0/0 deleted valid=not-validated:unsupported/not-run sha=e3b0c44298fc1c14 recovery=recovered "Old Photos/empty note 4.txt" => /Old Photos/empty note 4.txt
+#4 filesystem complete image/jpeg "/Old Photos/Beach.jpg" size=5591/5591 deleted valid=valid:passed/passed sha=94ca16c68d2bdcf0 recovery=recovered "Old Photos/Beach.jpg" => /Old Photos/Beach.jpg
+#5 filesystem complete image/png "/Old Photos/Party.png" size=21007/21007 deleted valid=valid:passed/passed sha=f07a67580a72e934 recovery=recovered "Old Photos/Party.png" => /Old Photos/Party.png
+# quick scan: 5 candidates
+#1 filesystem unverified(not-validated) other/- "/A newer note file.txt" size=400/400 valid=not-validated:unsupported/not-run sha=bce0d499e461875c recovery=recovered "A newer note file.txt" => /A newer note file.txt
+#2 filesystem complete image/jpeg "/Kept.jpg" size=19667/19667 valid=valid:passed/passed sha=661ff4a6f4bd0a1f recovery=recovered "Kept.jpg" => /Kept.jpg
+#3 filesystem unverified(not-validated) other/- "/Old Photos/empty note 4.txt" size=0/0 deleted valid=not-validated:unsupported/not-run sha=e3b0c44298fc1c14 recovery=recovered "Old Photos/empty note 4.txt" => /Old Photos/empty note 4.txt
+#4 filesystem complete image/jpeg "/Old Photos/Beach.jpg" size=5591/5591 deleted valid=valid:passed/passed sha=94ca16c68d2bdcf0 recovery=recovered "Old Photos/Beach.jpg" => /Old Photos/Beach.jpg
+#5 filesystem complete image/png "/Old Photos/Party.png" size=21007/21007 deleted valid=valid:passed/passed sha=f07a67580a72e934 recovery=recovered "Old Photos/Party.png" => /Old Photos/Party.png

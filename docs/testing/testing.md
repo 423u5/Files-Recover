@@ -33,7 +33,7 @@ Run the same suite under AddressSanitizer with `msvc-asan`. Run static analysis 
 | --- | --- | --- |
 | `unit` | `tests/unit` | Memory only (core, storage, imaging metadata, partitions, reconstruction of hand-made candidates and their data as file content, output names), plus temporary files for the destination-guard tests |
 | `integration` | `tests/integration` | Temporary files under `%TEMP%\recovery-tests\<random>`, deleted afterwards; the Windows disk resolver; the Windows disk list (P19: disks opened with desired access 0, nothing read) |
-| `filesystem` | `tests/filesystem` | FAT32 (and FAT16 and FAT12, after P20), exFAT and NTFS volumes generated in memory: normal, deleted, fragmented, contiguous, resident, Unicode, different cluster, sector and record sizes; after P20 also deleted FAT32 entries whose starts lost their top 16 bits, deleted folders that grew (`fat32_deleted_entry_test.cpp`, L7, L8) and orphaned exFAT folders (L13) |
+| `filesystem` | `tests/filesystem` | FAT32 (and FAT16 and FAT12, after P20), exFAT and NTFS volumes generated in memory: normal, deleted, fragmented, contiguous, resident, Unicode, different cluster, sector and record sizes; after P20 also deleted FAT32 entries whose starts lost their top 16 bits, deleted folders that grew (`fat32_deleted_entry_test.cpp`, L7, L8; with what the places hold and where files end, L242, and the parts of deleted folders a scan finds apart from them, L243), orphaned exFAT folders (L13) and deleted exFAT folders whose first cluster was reused (L244), and names holding characters FAT forbids (L10) |
 | `corruption` | `tests/corruption` | Damaged FAT32, exFAT and NTFS metadata: loops, cross-links, truncated chains, damaged entry sets, torn and damaged FILE records, invalid run lists, directory cycles, orphans, unreadable sectors, hostile boot sectors and sizes, random mutation (also of recovery candidates and their reconstruction) |
 | `recovery` | `tests/recovery` | Recovery candidates from generated FAT32, exFAT and NTFS volumes (contiguous, fragmented, deleted, partly overwritten, sparse, resident, Unicode and duplicate names, partitioned disks), their reconstructed data compared with the original files, and recovered files written below `%TEMP%\recovery-tests\<random>`. MP4 recovery (P12): FILESYSTEM, HYBRID and CARVING candidates from volumes and virtual sources larger than 4 GiB. Fragment reconstruction (P13): fragmented files on volumes whose free space holds old data, every status, mutation fuzzing |
 | `carving` | `tests/carving` | The carving framework with test-only formats: signatures, registration, scanning, candidate generation, boundaries, bad sectors, cancellation, and virtual images up to 1 TiB (memory only), plus one temporary disk image file |
@@ -755,7 +755,7 @@ closed it) and the card's originals, byte for byte. A crash is the session folde
 
 ## Corruption corpus (P20)
 
-`tests/support/corpus.cpp` holds 32 scenarios (P20's 26; since then `fat16-card`, `zip-archives`, `fat12-floppy`, `documents`, `fat32-windows-deleted` and `exfat-orphaned-folder`): disk images built the same, byte for byte, every time, each with the
+`tests/support/corpus.cpp` holds 34 scenarios (P20's 26; since then `fat16-card`, `zip-archives`, `fat12-floppy`, `documents`, `fat32-windows-deleted`, `exfat-orphaned-folder`, `fat32-folder-parts` and `exfat-reused-folder`): disk images built the same, byte for byte, every time, each with the
 original files it holds and what recovery must give back of each (found by the filesystem with its name, found by
 carving only, found but damaged, lost, or stored inside an archive that is recovered: then no file of its own, and
 byte for byte a stored member of a recovered Complete archive, also of an archive stored in one; or an image inside a
@@ -843,7 +843,7 @@ instrumentation without libFuzzer's runtime).
 | Target | What the input is |
 | --- | --- |
 | `fuzz_partition` | The start of a disk (MBR with extended partitions, GPT and its backup, superfloppies); the first byte picks 512 or 4096-byte sectors |
-| `fuzz_filesystem` | A FAT12, FAT16, FAT32, exFAT or NTFS volume: opened for recovery (backup boot records too), every candidate listed and its data reconstructed; deleted FAT32 starts that lost their top bits are placed with the formats' start check, as in a scan (L7) |
+| `fuzz_filesystem` | A FAT12, FAT16, FAT32, exFAT or NTFS volume: opened for recovery (backup boot records too), every candidate listed and its data reconstructed; deleted FAT32 starts that lost their top bits are placed with the formats' start and end checks, as in a scan (L7, L242) |
 | `fuzz_formats` | A file's content for every carving format (ZIP too, since after P20, with the engine's DEFLATE decoder): header check, end detection and structural validation, never past the bytes given |
 | `fuzz_media` | A file for the validation levels and every media decoder (JPEG, PNG inflate, GIF LZW, BMP RLE, VP8/VP8L, ADPCM, AAC, AVC, HEVC) |
 | `fuzz_mp4` | A file for the MP4 parser and analysis: boxes, movie, sample tables, fragments, moov search, sample framing |

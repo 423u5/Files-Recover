@@ -159,6 +159,39 @@ TEST(Fat32FilesystemTest, LongAndUnicodeNames) {
     }
 }
 
+// L10 (after P20): a long name holding a character Windows forbids on FAT
+// (only damage, or a writer that does not check, leaves one) is flagged, and
+// a '/' in a folder's name does not add a level to the paths below it.
+TEST(Fat32FilesystemTest, NamesWithForbiddenCharactersAreFlagged) {
+    Fat32ImageBuilder builder;
+    const auto folder = builder.addDirectory(builder.root(), "Photos/2024");
+    (void)builder.addFile(folder.clusters.front(), "beach.jpg", bytesOf(700, 1));
+    (void)builder.addFile(builder.root(), "a:b?.txt", bytesOf(10, 2));
+    const auto gone = builder.addFile(builder.root(), "old|note.txt", bytesOf(10, 3));
+    (void)builder.addFile(builder.root(), "fine name.txt", bytesOf(10, 4));
+    builder.deleteEntry(gone);
+    const Mounted m = mount(builder.build());
+
+    const FileScan scan = m.scan();
+    const FileRecord* photos = find(scan, "/Photos_2024");
+    ASSERT_NE(photos, nullptr);
+    EXPECT_EQ(photos->entry.name, "Photos/2024") << "the entry keeps its name";
+    EXPECT_TRUE(photos->entry.hasIssue(EntryIssue::InvalidName));
+    const FileRecord* beach = find(scan, "/Photos_2024/beach.jpg");
+    ASSERT_NE(beach, nullptr) << "one level below the folder, not two";
+    EXPECT_FALSE(beach->entry.hasIssue(EntryIssue::InvalidName));
+    const FileRecord* colon = find(scan, "/a:b?.txt");
+    ASSERT_NE(colon, nullptr);
+    EXPECT_TRUE(colon->entry.hasIssue(EntryIssue::InvalidName));
+    const FileRecord* deleted = find(scan, "/old|note.txt");
+    ASSERT_NE(deleted, nullptr);
+    EXPECT_EQ(deleted->entry.state, EntryState::Deleted);
+    EXPECT_TRUE(deleted->entry.hasIssue(EntryIssue::InvalidName));
+    const FileRecord* fine = find(scan, "/fine name.txt");
+    ASSERT_NE(fine, nullptr);
+    EXPECT_TRUE(fine->entry.issues.empty());
+}
+
 TEST(Fat32FilesystemTest, DecodesTimestampsAndAttributes) {
     Fat32ImageBuilder builder;
     const auto e = builder.addFile(builder.root(), "A.TXT", bytesOf(10, 1));

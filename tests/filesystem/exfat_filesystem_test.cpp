@@ -638,6 +638,99 @@ TEST(ExFatFilesystemTest, AnOrphanedFolderWhoseClusterWasReusedStaysAFile) {
     EXPECT_EQ(find(scan, "/Old Photos/beach.jpg"), nullptr);
 }
 
+// L244 (after P20): orphaned Stream Extension and File Name entries in an
+// orphan's data tell that it was a folder too, when no whole set is left.
+TEST(ExFatFilesystemTest, AnOrphanedFolderHoldingOnlyOrphansIsSearched) {
+    ExFatImageBuilder builder;
+    const auto folder = builder.addDirectory(builder.root(), "Old Photos");
+    const auto data = bytesOf(1500, 43);
+    const auto inner = builder.addFile(folder.clusters[0], "beach.jpg", data);
+    builder.deleteEntry(inner);
+    builder.deleteEntry(folder);
+    // Newer sets took the File entries of both, and are broken themselves.
+    for (const auto& entry : {folder, inner}) {
+        const std::span<std::byte> file = builder.slot(entry, 0);
+        file[0] = std::byte{0x85};
+        file[1] = std::byte{0x00};
+    }
+    const Mounted m = mount(builder.build());
+
+    const FileScan scan = m.scan();
+    const FileRecord* directory = find(scan, "/Old Photos");
+    ASSERT_NE(directory, nullptr);
+    EXPECT_TRUE(directory->entry.isDirectory);
+    const FileRecord* photo = find(scan, "/Old Photos/beach.jpg");
+    ASSERT_NE(photo, nullptr);
+    EXPECT_TRUE(photo->entry.hasIssue(EntryIssue::MetadataIncomplete));
+    EXPECT_TRUE(photo->parentDeleted);
+    EXPECT_EQ(test::readExtents(*m.source, photo->allocation.extents), data);
+}
+
+// A deleted folder of two clusters in one run (NoFatChain, as Windows makes
+// folders), whose first cluster a newer file took: five empty notes (four
+// entries each) fill it beyond its first cluster before any data is written,
+// then a photo's entries go into the second.
+struct ReusedFolder {
+    Mounted mounted;
+    std::vector<std::byte> photo;
+};
+
+ReusedFolder folderWhoseFirstClusterWasReused(bool orphaned) {
+    ExFatImageBuilder builder;
+    const auto folder = builder.addDirectory(builder.root(), "Old Photos");
+    std::vector<ExFatImageBuilder::Entry> entries;
+    for (int i = 0; i < 5; ++i) {
+        entries.push_back(builder.addFile(folder.clusters[0], "empty note " + std::to_string(i) + ".txt", {}));
+    }
+    ReusedFolder reused;
+    reused.photo = bytesOf(1500, 44);
+    entries.push_back(builder.addFile(folder.clusters[0], "beach.jpg", reused.photo));
+    const std::span<std::byte> stream = builder.slot(folder, 1);
+    EXPECT_EQ(loadLe64(stream, 24), 2u * builder.clusterSize());
+    EXPECT_NE(static_cast<std::uint8_t>(stream[1]) & 0x02, 0) << "one run";
+    for (const auto& entry : entries) {
+        builder.deleteEntry(entry);
+    }
+    builder.deleteEntry(folder);
+    if (orphaned) {
+        const std::span<std::byte> file = builder.slot(folder, 0);
+        file[0] = std::byte{0x85};
+        file[1] = std::byte{0x00};
+    }
+    const std::vector<std::byte> other = bytesOf(builder.clusterSize(), 45);
+    (void)builder.addFileInClusters(builder.root(), "newer.bin", other, {folder.clusters[0]});
+    reused.mounted = mount(builder.build());
+    return reused;
+}
+
+void expectFoundWhereFree(const ReusedFolder& reused) {
+    const FileScan scan = reused.mounted.scan();
+    const FileRecord* directory = find(scan, "/Old Photos");
+    ASSERT_NE(directory, nullptr);
+    EXPECT_TRUE(directory->entry.isDirectory);
+    const FileRecord* photo = find(scan, "/Old Photos/beach.jpg");
+    ASSERT_NE(photo, nullptr) << "its entries in the second cluster are read";
+    EXPECT_EQ(photo->entry.state, EntryState::Deleted);
+    EXPECT_EQ(test::readExtents(*reused.mounted.source, photo->allocation.extents), reused.photo);
+    EXPECT_EQ(find(scan, "/Old Photos/empty note 0.txt"), nullptr) << "the first cluster holds the newer file now";
+    const bool told = std::any_of(scan.issues.begin(), scan.issues.end(), [](const ScanIssue& issue) {
+        return issue.path == "/Old Photos" && issue.kind == ScanIssueKind::DirectoryInvalid &&
+               issue.detail.find("in use again") != std::string::npos;
+    });
+    EXPECT_TRUE(told);
+}
+
+TEST(ExFatFilesystemTest, ADeletedFolderWhoseFirstClusterWasReusedIsReadWhereItIsFree) {
+    expectFoundWhereFree(folderWhoseFirstClusterWasReused(false));
+}
+
+TEST(ExFatFilesystemTest, AnOrphanedFolderWhoseFirstClusterWasReusedIsReadWhereItIsFree) {
+    const ReusedFolder reused = folderWhoseFirstClusterWasReused(true);
+    expectFoundWhereFree(reused);
+    const FileScan scan = reused.mounted.scan();
+    EXPECT_TRUE(find(scan, "/Old Photos")->entry.hasIssue(EntryIssue::MetadataIncomplete));
+}
+
 TEST(ExFatFilesystemTest, ExcludingDeletedEntries) {
     ExFatImageBuilder builder;
     const auto file = builder.addFile(builder.root(), "gone.txt", bytesOf(10, 1));

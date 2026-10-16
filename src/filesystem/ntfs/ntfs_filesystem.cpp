@@ -1073,7 +1073,8 @@ Result<FileScan> NtfsFilesystem::scan(const ScanLimits& limits, const Cancellati
                         }
                         continue;
                     }
-                    emit(placement, work.path + "/" + placement.name, work.deleted, false, work.depth, subdirectories);
+                    emit(placement, work.path + "/" + pathComponent(placement.name), work.deleted, false, work.depth,
+                         subdirectories);
                 }
             }
             stack.insert(stack.end(), std::make_move_iterator(subdirectories.rbegin()),
@@ -1109,7 +1110,7 @@ Result<FileScan> NtfsFilesystem::scan(const ScanLimits& limits, const Cancellati
         }
         const Catalog::Placement& placement = c.placements[record.firstPlacement];
         std::vector<Work> subdirectories;
-        emit(placement, orphanPath + "/" + placement.name, false, true, 0, subdirectories);
+        emit(placement, orphanPath + "/" + pathComponent(placement.name), false, true, 0, subdirectories);
         stack.assign(std::make_move_iterator(subdirectories.begin()), std::make_move_iterator(subdirectories.end()));
         if (Status drained = drain(); !drained.ok()) {
             return drained.error();

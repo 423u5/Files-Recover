@@ -154,4 +154,10 @@ bool DirectoryEntry::hasIssue(EntryIssue issue) const noexcept {
     return std::find(issues.begin(), issues.end(), issue) != issues.end();
 }
 
+std::string pathComponent(std::string_view name) {
+    std::string component(name);
+    std::replace(component.begin(), component.end(), '/', '_');
+    return component;
+}
+
 }  // namespace recovery::filesystem

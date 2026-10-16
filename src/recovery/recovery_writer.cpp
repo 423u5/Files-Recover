@@ -66,7 +66,8 @@ bool nameTaken(const std::filesystem::path& path) {
 }
 
 // The directory part of a candidate's original path. The name is removed as
-// a whole, since a damaged name may itself contain '/'.
+// a whole: in the paths of sessions scanned before L10 was solved, a damaged
+// name may itself contain '/' (scans since put '_' in its place).
 std::string_view parentPathOf(const RecoveryCandidate& candidate) {
     const std::string_view path = candidate.filesystemEvidence.path;
     const std::string_view name = candidate.filename;

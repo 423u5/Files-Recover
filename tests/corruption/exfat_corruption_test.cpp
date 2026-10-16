@@ -342,6 +342,19 @@ TEST(ExFatEntrySetTest, InvalidNameCharactersAreFlagged) {
     (void)dots;
 }
 
+// L10 (after P20): a '/' in a folder's name does not add a level to the paths below it.
+TEST(ExFatEntrySetTest, ASlashInAFolderNameIsNoLevelOfThePath) {
+    ExFatImageBuilder builder;
+    const auto folder = builder.addDirectory(builder.root(), "Photos/2024");
+    (void)builder.addFile(folder.clusters[0], "beach.jpg", test::makePattern(700, 3));
+    const Mounted m = mount(builder.build());
+    const FileScan scan = scanOf(m);
+    const FileRecord& photos = record(scan, "Photos/2024");
+    EXPECT_TRUE(photos.entry.hasIssue(EntryIssue::InvalidName));
+    EXPECT_EQ(photos.path, "/Photos_2024");
+    EXPECT_EQ(record(scan, "beach.jpg").path, "/Photos_2024/beach.jpg");
+}
+
 TEST(ExFatEntrySetTest, ValidDataLengthBeyondSizeIsFlagged) {
     ExFatImageBuilder builder;
     const auto file = builder.addFile(builder.root(), "a.bin", test::makePattern(100, 1));

@@ -36,13 +36,12 @@ std::string lowerExtension(std::string_view name) {
     return extension;
 }
 
-}  // namespace
-
-std::optional<bool> startsFileNamed(const FormatRegistry& formats, std::string_view name,
-                                    std::span<const std::byte> head) {
+// The formats the extension of `name` stands for, in registration order.
+std::vector<const IFileFormat*> formatsNamed(const FormatRegistry& formats, std::string_view name) {
+    std::vector<const IFileFormat*> named;
     const std::string extension = lowerExtension(name);
     if (extension.empty()) {
-        return std::nullopt;
+        return named;
     }
     std::string_view id;
     for (const auto& [from, to] : kExtensionFormats) {
@@ -50,23 +49,64 @@ std::optional<bool> startsFileNamed(const FormatRegistry& formats, std::string_v
             id = to;
         }
     }
-    bool known = false;
     for (const std::shared_ptr<const IFileFormat>& format : formats.formats()) {
         const FormatDescriptor& descriptor = format->descriptor();
-        if (descriptor.id != id && descriptor.id != extension && descriptor.extension != extension) {
+        if (descriptor.id == id || descriptor.id == extension || descriptor.extension == extension) {
+            named.push_back(format.get());
+        }
+    }
+    return named;
+}
+
+// Whether `head` holds one of the format's signatures and its header check takes it.
+bool startsFormat(const IFileFormat& format, std::span<const std::byte> head) {
+    const FormatDescriptor& descriptor = format.descriptor();
+    const bool signature =
+        std::any_of(descriptor.signatures.begin(), descriptor.signatures.end(), [&](const FileSignature& candidate) {
+            return candidate.reach() <= head.size() && candidate.matches(head.subspan(candidate.offset));
+        });
+    return signature &&
+           format.checkHeader(head.first(std::min<std::size_t>(descriptor.headerSize, head.size()))).plausible;
+}
+
+}  // namespace
+
+std::optional<bool> startsFileNamed(const FormatRegistry& formats, std::string_view name,
+                                    std::span<const std::byte> head) {
+    const std::vector<const IFileFormat*> named = formatsNamed(formats, name);
+    if (named.empty()) {
+        return std::nullopt;
+    }
+    return std::any_of(named.begin(), named.end(), [&](const IFileFormat* format) { return startsFormat(*format, head); });
+}
+
+bool endsFileNamed(const FormatRegistry& formats, storage::IStorageSource& source, std::string_view name,
+                   std::uint64_t offset, std::uint64_t size) {
+    if (size == 0 || offset >= source.size() || size > source.size() - offset) {
+        return false;
+    }
+    const std::uint64_t slack = std::min(kEndCheckSlack, source.size() - offset - size);
+    for (const IFileFormat* format : formatsNamed(formats, name)) {
+        const FormatDescriptor& descriptor = format->descriptor();
+        if (size < descriptor.minimumSize || size > descriptor.maximumSize) {
             continue;
         }
-        known = true;
-        const bool signature = std::any_of(
-            descriptor.signatures.begin(), descriptor.signatures.end(), [&](const FileSignature& candidate) {
-                return candidate.reach() <= head.size() && candidate.matches(head.subspan(candidate.offset));
-            });
-        if (signature &&
-            format->checkHeader(head.first(std::min<std::size_t>(descriptor.headerSize, head.size()))).plausible) {
+        Result<std::unique_ptr<SourceContentReader>> reader =
+            SourceContentReader::open(source, offset, std::min(size + slack, descriptor.maximumSize));
+        if (!reader.ok()) {
+            continue;
+        }
+        const Result<std::span<const std::byte>> header =
+            (*reader)->read(0, static_cast<std::size_t>(std::min<std::uint64_t>(descriptor.headerSize, size)));
+        if (!header.ok() || !startsFormat(*format, *header)) {
+            continue;
+        }
+        const Result<EndDetection> end = format->findEnd(**reader);
+        if (end.ok() && end->status == EndStatus::Found && end->length == size) {
             return true;
         }
     }
-    return known ? std::optional<bool>(false) : std::nullopt;
+    return false;
 }
 
 Status FormatRegistry::add(std::shared_ptr<const IFileFormat> format) {

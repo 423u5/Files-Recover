@@ -31,7 +31,9 @@
 #include "validation/deflate_decoder.hpp"
 #include "validation/media_validator.hpp"
 
+#include <algorithm>
 #include <map>
+#include <span>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -396,6 +398,85 @@ Bytes deletedStartsFat32() {
     return image;
 }
 
+// After P20 (L243): a small FAT32 volume whose deleted folders grew after
+// other files' data: one whose fifth long name begins in its first cluster's
+// last slots and that holds a folder whose ".." names it, and one of 8.3
+// names whose first cluster a newer file took. A scan lists their parts
+// apart from them. Kept up to a little past its last file.
+Bytes folderPartsFat32() {
+    Fat32BuilderOptions options;
+    options.label = "SEEDL243";
+    options.entriesBeforeData = true;
+    Fat32ImageBuilder builder(options);
+    const std::uint32_t root = Fat32ImageBuilder::root();
+    JpegOptions jpeg;
+    jpeg.width = 16;
+    jpeg.height = 16;
+    std::vector<Fat32ImageBuilder::Entry> deleted;
+    const auto trip = builder.addDirectory(root, "Trip");
+    for (int i = 0; i < 6; ++i) {
+        if (i == 4) {
+            (void)builder.addFile(root, "log.txt", Bytes(600, std::byte{'a'}));
+        }
+        deleted.push_back(builder.addFile(trip.clusters.front(), "photo number " + std::to_string(i) + ".jpg",
+                                          makeJpeg(jpeg)));
+    }
+    const auto sub = builder.addDirectory(trip.clusters.front(), "SUB");
+    deleted.push_back(builder.addFile(sub.clusters.front(), "INNER.JPG", makeJpeg(jpeg)));
+    deleted.push_back(sub);
+    deleted.push_back(trip);
+    const auto camera = builder.addDirectory(root, "Camera");
+    for (int i = 0; i < 16; ++i) {
+        if (i == 14) {
+            (void)builder.addFile(root, "INDEX.DAT", Bytes(700, std::byte{'b'}));
+        }
+        deleted.push_back(
+            builder.addFile(camera.clusters.front(), "IMG_00" + std::to_string(10 + i) + ".JPG", makeJpeg(jpeg)));
+    }
+    deleted.push_back(camera);
+    for (const auto& entry : deleted) {
+        builder.deleteEntry(entry);
+    }
+    (void)builder.addFileInClusters(root, "NEWER.BIN", Bytes(512, std::byte{'c'}), {camera.clusters.front()});
+    Bytes image = builder.build();
+    image.resize(std::min<std::size_t>(image.size(), builder.clusterOffset(builder.cursor() + 8)));
+    return image;
+}
+
+// After P20 (L244): exFAT, a deleted folder of two clusters in one run whose
+// File entry a newer note's entry set took and whose first cluster its data
+// took: the folder's second cluster is read where it is free.
+Bytes reusedFolderExFat() {
+    ExFatBuilderOptions options;
+    options.clusterCount = 256;
+    options.label = "SEEDL244";
+    ExFatImageBuilder builder(options);
+    const std::uint32_t root = builder.root();
+    JpegOptions jpeg;
+    jpeg.width = 16;
+    jpeg.height = 16;
+    const auto note = builder.addFile(root, "a.txt", Bytes(300, std::byte{'n'}));
+    const auto album = builder.addDirectory(root, "Album");
+    std::vector<ExFatImageBuilder::Entry> gone{note};
+    for (int i = 0; i < 5; ++i) {
+        gone.push_back(builder.addFile(album.clusters.front(), "empty note " + std::to_string(i) + ".txt", {}));
+    }
+    gone.push_back(builder.addFile(album.clusters.front(), "photo.jpg", makeJpeg(jpeg)));
+    gone.push_back(album);
+    for (const auto& entry : gone) {
+        builder.deleteEntry(entry);
+    }
+    const auto added =
+        builder.addFileInClusters(root, "A newer note file.txt", Bytes(400, std::byte{'z'}), {album.clusters.front()});
+    for (std::size_t i = 0; i < added.slotCount; ++i) {
+        const std::span<std::byte> from = builder.slot(added, i);
+        const std::span<std::byte> to = builder.directorySlot(root, note.firstSlot + i);
+        std::copy(from.begin(), from.end(), to.begin());
+        std::fill(from.begin(), from.end(), std::byte{0});
+    }
+    return builder.build();
+}
+
 Bytes smallExFat() {
     ExFatBuilderOptions options;
     options.clusterCount = 256;
@@ -642,8 +723,16 @@ Status writeFuzzSeeds(const std::filesystem::path& folder) {
     const Bytes fat12 = smallFat12();
     const Bytes exfat = smallExFat();
     const Bytes ntfs = smallNtfs();
+    const Bytes parts = folderPartsFat32();
+    const Bytes reused = reusedFolderExFat();
     for (const auto& [name, bytes] : std::vector<std::pair<std::string, const Bytes*>>{
-             {"fat32", &fat32}, {"fat16", &fat16}, {"fat12", &fat12}, {"exfat", &exfat}, {"ntfs", &ntfs}}) {
+             {"fat32", &fat32},
+             {"fat16", &fat16},
+             {"fat12", &fat12},
+             {"exfat", &exfat},
+             {"ntfs", &ntfs},
+             {"fat32_folder_parts", &parts},
+             {"exfat_reused_folder", &reused}}) {
         for (const std::string target : {"filesystem", "scan"}) {
             if (Status added = seeds.add(target, name, *bytes); !added.ok()) {
                 return added;

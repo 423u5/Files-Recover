@@ -80,8 +80,8 @@ to be intact. The same regions of a guessed layout show where a guess ran into a
 | `CrossLinked` | Active entry sharing clusters with another |
 | `AllocationDamaged` | Loops, invalid, free or bad clusters in a chain, a malformed run list, an invalid start cluster, a size larger than the volume, a chain longer than the size, an active entry whose clusters are free, a missing data attribute, or more stored bytes than the volume holds |
 | `AllocationUnknown` | The allocation table or bitmap is unreadable where the data is |
-| `NameUncertain` | Name rebuilt (FAT32 deleted 8.3 names lose their first character), unverified, not matching its hash or checksum, or containing forbidden characters |
-| `LocationUnknown` | NTFS orphan: the parent directory is gone, the path is under `/$OrphanFiles` |
+| `NameUncertain` | Name rebuilt (FAT32 deleted 8.3 names lose their first character), unverified, not matching its hash or checksum, or containing forbidden characters (on FAT too since L10) |
+| `LocationUnknown` | The original folder is unknown, the path is under `/$OrphanFiles`: an NTFS record whose parent directory is gone, or an entry of a part of a deleted FAT32 folder whose folder no evidence names (L243) |
 | `MetadataDamaged` | Checksum mismatch, damaged or incomplete record, invalid timestamps or attribute bits, valid data length larger than the size |
 
 The allocation and entry issues from the filesystem are kept alongside the warnings, as evidence.
@@ -94,7 +94,7 @@ its filesystem, and supplies what is specific to it:
 
 | | FAT32 (`Fat32Recovery`) | exFAT (`ExFatRecovery`) | NTFS (`NtfsRecovery`) |
 | --- | --- | --- | --- |
-| Deleted file layout | `Guessed` beyond one cluster (Windows frees the chain), and whenever the start cluster was inferred (L7) | `Recorded` for contiguous runs and surviving chains, `Guessed` if the chain was cleared | `Recorded`: the record keeps its runs |
+| Deleted file layout | `Guessed` beyond one cluster (Windows frees the chain), and whenever the start cluster was inferred (L7, L242) | `Recorded` for contiguous runs and surviving chains, `Guessed` if the chain was cleared | `Recorded`: the record keeps its runs |
 | Valid data length | None | Bytes beyond it are `Zeros` | Initialized size: bytes beyond it are `Zeros` |
 | Special data | | | Resident data is `Embedded`. Sparse files are laid out from the record's run list, holes as `Zeros`. Compressed and encrypted data is `Missing` (`DataNotDecoded`) |
 | Not candidates | Directories | Directories | Directories, the metadata files (records 0-15, everything under `/$Extend`) |

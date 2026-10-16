@@ -25,8 +25,10 @@ constexpr std::uint64_t kMaxDirectoryBytes = 256ULL * 1024 * 1024;
 constexpr std::size_t kDirectoryChunk = 64 * 1024;
 // Clusters counted per step of the cluster analysis (1 MiB of bitmap).
 constexpr std::uint64_t kAnalysisSlice = 8ULL * 1024 * 1024;
-// Bytes of an orphaned entry's data read to tell whether it is a directory.
+// Bytes of an orphaned entry's data read to tell whether it is a directory,
+// among its first clusters (at least this many) that are still free.
 constexpr std::uint64_t kOrphanProbeBytes = 4096;
+constexpr std::uint64_t kOrphanProbeClusters = 4;
 constexpr std::size_t kBootSectorSize = 512;
 
 std::uint64_t clustersFor(std::uint64_t bytes, std::uint32_t clusterSize) noexcept {
@@ -500,10 +502,7 @@ Result<DirectoryListing> ExFatFilesystem::listDirectory(const DirectoryEntry& di
     const Resolved resolved = resolve(directory);
     const FileAllocation& allocation = resolved.allocation;
     if (deleted) {
-        if (allocation.hasIssue(AllocationIssue::ClustersInUse)) {
-            return makeError(ErrorCode::InvalidFormat, "deleted directory's clusters have been reused");
-        }
-        if (allocation.hasIssue(AllocationIssue::UnreadableAllocationTable)) {
+        if (bitmap_ == nullptr) {
             return makeError(ErrorCode::InvalidFormat, "deleted directory's clusters cannot be verified as unused");
         }
     } else {
@@ -520,6 +519,28 @@ Result<DirectoryListing> ExFatFilesystem::listDirectory(const DirectoryEntry& di
     if (allocation.extents.empty()) {
         return makeError(ErrorCode::CorruptedFilesystem, "directory has no clusters");
     }
+    // What is read. Of a deleted directory, the clusters still free: those
+    // in use again hold other data now, and the others still hold its entries
+    // (L244; until then, one reused cluster lost the whole directory).
+    std::vector<Piece> pieces;
+    if (deleted) {
+        std::uint64_t skipped = 0;
+        pieces = freeParts(allocation.extents, skipped);
+        if (pieces.empty()) {
+            return makeError(ErrorCode::InvalidFormat, "deleted directory's clusters have been reused");
+        }
+        if (skipped > 0) {
+            listing.issues.push_back(ScanIssue{
+                ScanIssueKind::DirectoryInvalid, {},
+                std::format("{} of the deleted directory's {} clusters are in use again or of unknown state; the "
+                            "entries they held are lost",
+                            skipped, allocation.clusterCount)});
+        }
+    } else {
+        for (const Extent& extent : allocation.extents) {
+            pieces.push_back(Piece{extent, false});
+        }
+    }
 
     ParseOutput out;
     DirectoryParser parser(boot_, upcase_);
@@ -535,7 +556,11 @@ Result<DirectoryListing> ExFatFilesystem::listDirectory(const DirectoryEntry& di
             }
         }
     };
-    for (const Extent& extent : allocation.extents) {
+    for (const Piece& part : pieces) {
+        if (part.afterGap) {
+            parser.interrupt(out);  // no entry set continues across the clusters left out
+        }
+        const Extent& extent = part.extent;
         for (std::uint64_t pos = 0; pos < extent.length && !ended && !truncated;) {
             const auto length = static_cast<std::size_t>(std::min<std::uint64_t>(kDirectoryChunk, extent.length - pos));
             const std::uint64_t offset = extent.offset + pos;
@@ -590,24 +615,65 @@ Result<DirectoryListing> ExFatFilesystem::listDirectory(const DirectoryEntry& di
     return listing;
 }
 
+std::vector<ExFatFilesystem::Piece> ExFatFilesystem::freeParts(const std::vector<Extent>& extents,
+                                                               std::uint64_t& skipped) {
+    std::vector<Piece> pieces;
+    bool gap = false;
+    for (const Extent& extent : extents) {
+        for (std::uint64_t at = 0; at < extent.length; at += boot_.clusterSize) {
+            const std::uint64_t offset = extent.offset + at;
+            const std::uint64_t length = std::min<std::uint64_t>(boot_.clusterSize, extent.length - at);
+            const auto cluster = static_cast<std::uint32_t>((offset - boot_.dataOffset) / boot_.clusterSize + 2);
+            if (bitmap_ == nullptr || bitmap_->state(cluster) != BitState::Free) {
+                ++skipped;
+                gap = true;
+                continue;
+            }
+            if (!gap && !pieces.empty() && pieces.back().extent.offset + pieces.back().extent.length == offset) {
+                pieces.back().extent.length += length;
+            } else {
+                pieces.push_back(Piece{Extent{offset, length}, gap});
+            }
+            gap = false;
+        }
+    }
+    return pieces;
+}
+
 bool ExFatFilesystem::isOrphanedDirectory(const DirectoryEntry& entry) {
     const std::uint64_t first = entry.firstCluster.value();
     // A directory's data is whole clusters, all valid (ValidDataLength = DataLength).
     if (entry.size == 0 || entry.size % boot_.clusterSize != 0 || entry.validDataLength != entry.size ||
-        !boot_.isValidCluster(first)) {
+        !boot_.isValidCluster(first) || bitmap_ == nullptr) {
         return false;
     }
-    // Its clusters were freed with it; reused ones hold other data now.
-    if (bitmap_ == nullptr || bitmap_->state(static_cast<std::uint32_t>(first)) != BitState::Free) {
-        return false;
+    // Where it would be read as a directory: its run, or the chain it kept.
+    DirectoryEntry asDirectory = entry;
+    asDirectory.isDirectory = true;
+    std::vector<Extent> extents = resolve(asDirectory).allocation.extents;
+    // Its first entries suffice: a directory's entry sets start its data. Its
+    // clusters were freed with it, and those reused since hold other data
+    // now: the free ones among its first are read (its first cluster itself
+    // may be in use again, L244).
+    std::uint64_t probe = std::max<std::uint64_t>(kOrphanProbeClusters, kOrphanProbeBytes / boot_.clusterSize) *
+                          boot_.clusterSize;
+    for (Extent& extent : extents) {
+        extent.length = std::min(extent.length, probe);
+        probe -= extent.length;
     }
-    // The first entries suffice: a directory's first entry set starts its data.
-    const std::uint64_t readable = entry.contiguousData ? entry.size : boot_.clusterSize;
-    std::vector<std::byte> head(static_cast<std::size_t>(std::min<std::uint64_t>(kOrphanProbeBytes, readable)));
-    if (!volume_.readExact(ByteOffset{boot_.clusterOffset(static_cast<std::uint32_t>(first))}, head).ok()) {
-        return false;
+    std::uint64_t skipped = 0;
+    std::uint64_t budget = kOrphanProbeBytes;
+    for (const Piece& piece : freeParts(extents, skipped)) {
+        std::vector<std::byte> bytes(static_cast<std::size_t>(std::min(piece.extent.length, budget)));
+        if (bytes.empty()) {
+            break;
+        }
+        if (volume_.readExact(ByteOffset{piece.extent.offset}, bytes).ok() && holdsEntrySets(bytes, upcase_)) {
+            return true;
+        }
+        budget -= bytes.size();
     }
-    return holdsEntrySets(head);
+    return false;
 }
 
 Result<FileScan> ExFatFilesystem::scan(const ScanLimits& limits, const CancellationToken& cancel) {
@@ -667,7 +733,7 @@ Result<FileScan> ExFatFilesystem::scan(const ScanLimits& limits, const Cancellat
 
             FileRecord record;
             record.entry = entry;
-            record.path = work.path + "/" + entry.name;
+            record.path = work.path + "/" + pathComponent(entry.name);
             record.parentDeleted = work.deleted;
             if (work.deleted) {
                 record.entry.state = EntryState::Deleted;  // its clusters were freed with the parent

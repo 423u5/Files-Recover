@@ -113,11 +113,12 @@ std::optional<Timestamp> decodeTimestamp(std::uint32_t raw, std::uint8_t tenMill
     return stamp;
 }
 
-bool holdsEntrySets(std::span<const std::byte> bytes) {
+bool holdsEntrySets(std::span<const std::byte> bytes, const UpcaseTable& upcase) {
     std::size_t verified = 0;
     const std::size_t slots = bytes.size() / kDirectoryEntrySize;
+    const auto slotAt = [&](std::size_t i) { return bytes.subspan(i * kDirectoryEntrySize, kDirectoryEntrySize); };
     for (std::size_t i = 0; i < slots;) {
-        const std::span<const std::byte> e = bytes.subspan(i * kDirectoryEntrySize, kDirectoryEntrySize);
+        const std::span<const std::byte> e = slotAt(i);
         const std::uint8_t type = loadU8(e, 0);
         if (type == kEndOfDirectory) {
             break;
@@ -128,6 +129,30 @@ bool holdsEntrySets(std::span<const std::byte> bytes) {
         }
         if ((type & kCategoryMask) == kInUse && (type & kBenign) == 0 && type != kTypeFile) {
             return false;  // an unknown critical primary entry
+        }
+        if (type == kDeletedStream) {
+            // An orphan (L244): a deleted Stream Extension and File Name
+            // entries whose File entry is gone, verified by the name's hash.
+            const std::uint8_t nameLength = loadU8(e, 3);
+            const std::size_t names = nameEntriesFor(nameLength);
+            bool orphan = (loadU8(e, 1) & kAllocationPossible) != 0 && nameLength > 0 && i + 1 + names <= slots;
+            std::u16string units;
+            for (std::size_t k = 1; orphan && k <= names; ++k) {
+                orphan = loadU8(slotAt(i + k), 0) == kDeletedName;
+                units += loadUtf16Le(slotAt(i + k).subspan(2), kNameCharsPerEntry);
+            }
+            if (orphan) {
+                units.resize(nameLength);
+                orphan = std::all_of(units.begin(), units.end(), [&](char16_t unit) { return upcase.covers(unit); }) &&
+                         nameHash(units, upcase) == loadLe16(e, 4);
+            }
+            if (orphan) {
+                ++verified;
+                i += 1 + names;
+            } else {
+                ++i;
+            }
+            continue;
         }
         if (inUse != kTypeFile) {
             ++i;

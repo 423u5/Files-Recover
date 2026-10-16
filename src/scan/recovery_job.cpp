@@ -65,7 +65,8 @@ std::wstring nameKey(std::wstring_view name) {
 }
 
 // The directory part of a candidate's original path, as RecoveryWriter takes
-// it: the name is removed as a whole, since a damaged name may hold '/'.
+// it: the name is removed as a whole, since in the paths of sessions scanned
+// before L10 was solved a damaged name may hold '/'.
 std::string_view parentPathOf(const RecoveryCandidate& candidate) {
     const std::string_view path = candidate.filesystemEvidence.path;
     const std::string_view name = candidate.filename;

@@ -1,9 +1,11 @@
 // What deletion takes from FAT32 entries besides their chains (after P20):
 // the top 16 bits of a deleted entry's start cluster, which Windows clears
 // (L7), placed again by a folder's "." and ".." entries, by the files around
-// an entry, and by what starts at each place it may start; and a deleted
+// an entry, by what starts at each place it may start and where it ends, and
+// by what the place recorded and the other places hold (L242); and a deleted
 // folder's clusters after the first, whose chain is gone (L8), found where
-// writers put them when the folder grew.
+// writers put them when the folder grew, or over the volume after a scan,
+// in their folder or under "/$OrphanFiles" (L243).
 
 #include "filesystem/fat32/fat32_filesystem.hpp"
 
@@ -16,6 +18,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 
 namespace recovery::filesystem::fat32 {
@@ -38,6 +41,33 @@ Bytes jpegLike(std::size_t size, std::uint64_t seed) {
     data[1] = std::byte{0xD8};
     data[2] = std::byte{0xFF};
     return data;
+}
+
+// Data that starts and ends like a JPEG image (what jpegEnds() looks for).
+Bytes jpegWhole(std::size_t size, std::uint64_t seed) {
+    Bytes data = jpegLike(size, seed);
+    data[size - 2] = std::byte{0xFF};
+    data[size - 1] = std::byte{0xD9};
+    return data;
+}
+
+// Text of `size` bytes: lines of words.
+Bytes textOf(std::size_t size, std::uint64_t seed) {
+    const Bytes noise = bytesOf(size, seed);
+    Bytes text(size);
+    for (std::size_t i = 0; i < size; ++i) {
+        const auto n = static_cast<std::uint8_t>(noise[i]);
+        text[i] = i % 64 == 63 ? std::byte{'\n'} : static_cast<std::byte>(n % 7 == 0 ? ' ' : 'a' + n % 26);
+    }
+    return text;
+}
+
+std::vector<std::uint32_t> run(std::uint32_t first, std::uint32_t count) {
+    std::vector<std::uint32_t> clusters;
+    for (std::uint32_t i = 0; i < count; ++i) {
+        clusters.push_back(first + i);
+    }
+    return clusters;
 }
 
 // Stands for the scan's formats: names ending in ".jpg" start with FF D8 FF.
@@ -69,12 +99,21 @@ struct Mounted {
     }
 };
 
-Mounted mount(std::vector<std::byte> image, StartCheck startsFile = {}) {
+// `checkEnds`: stands for the scan's formats as to where files end too: a
+// file named ".jpg" ends with FF D9 at its size.
+Mounted mount(std::vector<std::byte> image, StartCheck startsFile = {}, bool checkEnds = false) {
     Mounted m;
     m.source = std::make_unique<test::MemoryStorageSource>(std::move(image), 512);
     EXPECT_TRUE(m.source->open().ok());
     Fat32Options options;
     options.startsFile = std::move(startsFile);
+    if (checkEnds) {
+        options.endsFile = [source = m.source.get()](std::string_view name, std::uint64_t offset, std::uint64_t size) {
+            std::array<std::byte, 2> end{};
+            return name.ends_with(".jpg") && size >= 2 && source->readExact(ByteOffset{offset + size - 2}, end).ok() &&
+                   end[0] == std::byte{0xFF} && end[1] == std::byte{0xD9};
+        };
+    }
     Result<std::unique_ptr<Fat32Filesystem>> fs = Fat32Filesystem::open(*m.source, options);
     EXPECT_TRUE(fs.ok()) << (fs.ok() ? "" : describe(fs.error()));
     if (fs.ok()) {
@@ -306,6 +345,113 @@ TEST(Fat32DeletedStartTest, SmallVolumesHaveNoTopBitsToLose) {
 }
 
 // ---------------------------------------------------------------------------
+// L242: more evidence for a start no neighbour places
+// ---------------------------------------------------------------------------
+
+TEST(Fat32DeletedStartTest, AFileWhoseRecordedPlaceHoldsOtherDataGoesWhereItAloneCanBe) {
+    Fat32ImageBuilder builder(bigVolume());
+    // A newer file covers the place its start records, next to nothing of it.
+    (void)builder.addFileInClusters(builder.root(), "newer.bin", bytesOf(20 * 512, 1), run(290, 20));
+    const std::uint32_t start = kStep + 300;
+    const Bytes data = bytesOf(1800, 2);  // a type no format knows
+    const auto gone = builder.addFileInClusters(builder.root(), "settings.dat", data, run(start, 4));
+    builder.deleteEntry(gone, true, true);
+
+    const Mounted m = mount(builder.build());
+    expectDeletedFile(m, m.scan(), "/settings.dat", start, data, true);
+}
+
+TEST(Fat32DeletedStartTest, ATextFileGoesWhereTextIsWrittenNotWhereOtherDataIs) {
+    Fat32ImageBuilder builder(bigVolume());
+    const std::uint32_t start = kStep + 400;
+    const Bytes notes = textOf(3000, 3);
+    const auto gone = builder.addFileInClusters(builder.root(), "notes.txt", notes, run(start, 6));
+    builder.deleteEntry(gone, true, true);
+    // Where its start records: free, but no text (a photo deleted long ago).
+    const Bytes photo = jpegLike(6 * 512, 4);
+    std::memcpy(builder.raw().data() + builder.clusterOffset(400), photo.data(), photo.size());
+
+    const Mounted m = mount(builder.build());
+    expectDeletedFile(m, m.scan(), "/notes.txt", start, notes, true);
+}
+
+TEST(Fat32DeletedStartTest, AFileThatMayBeWhereItsStartRecordsStaysThere) {
+    Fat32ImageBuilder builder(bigVolume());
+    const Bytes notes = textOf(3000, 5);
+    const auto gone = builder.addFileInClusters(builder.root(), "notes.txt", notes, run(500, 6));
+    builder.deleteEntry(gone, true, true);
+    // Free text 65,536 clusters on as well: it could be there too.
+    const Bytes other = textOf(3000, 6);
+    std::memcpy(builder.raw().data() + builder.clusterOffset(kStep + 500), other.data(), other.size());
+
+    const Mounted m = mount(builder.build());
+    expectDeletedFile(m, m.scan(), "/notes.txt", 500, notes, false);
+}
+
+TEST(Fat32DeletedStartTest, AFileMostlyStillWhereItsStartRecordsStaysThere) {
+    Fat32ImageBuilder builder(bigVolume());
+    const Bytes log = textOf(8 * 512, 7);
+    const auto gone = builder.addFileInClusters(builder.root(), "app.log", log, run(600, 8));
+    builder.deleteEntry(gone, true, true);
+    // A newer file took its first cluster only; text 65,536 clusters on as well.
+    (void)builder.addFileInClusters(builder.root(), "NEW.BIN", bytesOf(512, 8), {600});
+    const Bytes other = textOf(8 * 512, 9);
+    std::memcpy(builder.raw().data() + builder.clusterOffset(kStep + 600), other.data(), other.size());
+
+    const Mounted m = mount(builder.build());
+    const FileScan scan = m.scan();
+    const FileRecord* record = find(scan, "/app.log");
+    ASSERT_NE(record, nullptr);
+    EXPECT_EQ(record->entry.firstCluster.value(), 600u) << "the rest of it is still there";
+    EXPECT_FALSE(record->entry.hasIssue(EntryIssue::StartClusterInferred));
+}
+
+TEST(Fat32DeletedStartTest, OfPlacesWhereItCanBeTheOneBetweenTheFilesAroundItIsTaken) {
+    test::Fat32BuilderOptions options = bigVolume();
+    options.clusterCount = 140'000;  // a start's low bits name three places
+    Fat32ImageBuilder builder(options);
+    // Written one after the other, with gaps: a file, the deleted one, a file.
+    (void)builder.addFileInClusters(builder.root(), "before.bin", bytesOf(10 * 512, 1), run(kStep + 600, 10));
+    const Bytes data = bytesOf(4 * 512, 2);
+    const auto gone = builder.addFileInClusters(builder.root(), "between.dat", data, run(kStep + 700, 4));
+    (void)builder.addFileInClusters(builder.root(), "after.bin", bytesOf(10 * 512, 3), run(kStep + 800, 10));
+    builder.deleteEntry(gone, true, true);
+    // A newer file holds the place recorded; old data lies 131,072 clusters on.
+    (void)builder.addFileInClusters(builder.root(), "NEWER.BIN", bytesOf(4 * 512, 4), run(700, 4));
+    const Bytes old = bytesOf(4 * 512, 5);
+    std::memcpy(builder.raw().data() + builder.clusterOffset(2 * kStep + 700), old.data(), old.size());
+
+    const Mounted m = mount(builder.build());
+    expectDeletedFile(m, m.scan(), "/between.dat", kStep + 700, data, true);
+}
+
+TEST(Fat32DeletedStartTest, OfPlacesThatStartAlikeTheOneWhereTheFileEndsAtItsSizeIsTaken) {
+    Fat32ImageBuilder builder(bigVolume());
+    builder.skipClusters(kStep);
+    (void)builder.addFile(builder.root(), "first.bin", bytesOf(3000, 1));
+    builder.skipClusters(100);
+    const Bytes data = jpegWhole(4000, 2);
+    const auto photo = builder.addFile(builder.root(), "photo.jpg", data);
+    builder.deleteEntry(photo, true, true);
+    // A JPEG starts at the place recorded as well (a larger one: it ends further on).
+    const std::uint32_t recorded = photo.clusters.front() - kStep;
+    const Bytes other = jpegLike(9 * 512, 3);
+    ASSERT_FALSE(other[3998] == std::byte{0xFF} && other[3999] == std::byte{0xD9});
+    std::memcpy(builder.raw().data() + builder.clusterOffset(recorded), other.data(), other.size());
+    const Bytes image = builder.build();
+
+    // Its end tells the places apart.
+    const Mounted checked = mount(image, jpegCheck, true);
+    expectDeletedFile(checked, checked.scan(), "/photo.jpg", photo.clusters.front(), data, true);
+    // Without it, the start stays as recorded (AStartTheEvidenceDoesNotSingleOutStaysAsRecorded).
+    const Mounted unchecked = mount(image, jpegCheck);
+    const FileScan scan = unchecked.scan();
+    const FileRecord* record = find(scan, "/photo.jpg");
+    ASSERT_NE(record, nullptr);
+    EXPECT_EQ(record->entry.firstCluster.value(), recorded);
+}
+
+// ---------------------------------------------------------------------------
 // L8: a deleted folder's clusters after the first
 // ---------------------------------------------------------------------------
 
@@ -422,6 +568,139 @@ TEST(Fat32DeletedFolderTest, AFolderWhoseClustersLostTheirTopBitsIsReadWhole) {
     for (std::size_t i = 0; i < grown.files.size(); ++i) {
         expectDeletedFile(m, scan, grown.paths[i], grown.files[i].clusters.front(), grown.data[i], true);
     }
+}
+
+// ---------------------------------------------------------------------------
+// L243: a deleted folder's clusters the search after its last file misses
+// ---------------------------------------------------------------------------
+
+bool listsOrphans(const FileScan& scan) {
+    return std::any_of(scan.records.begin(), scan.records.end(),
+                       [](const FileRecord& record) { return record.path.starts_with("/$OrphanFiles"); });
+}
+
+// Files written into a folder one by one; between the fourth and the fifth,
+// which no longer fit into its first cluster, another program wrote a file
+// elsewhere, and the folder grew after that file's data. The fifth file's
+// long name begins in the first cluster's last two slots.
+struct FolderGrownAfterAnother {
+    Fat32ImageBuilder builder;
+    Fat32ImageBuilder::Entry folder;
+    std::vector<Fat32ImageBuilder::Entry> files;
+    std::vector<Bytes> data;
+    std::vector<std::string> paths;
+
+    FolderGrownAfterAnother() : builder(test::Fat32BuilderOptions{.entriesBeforeData = true}) {
+        folder = builder.addDirectory(builder.root(), "Trip");
+        for (int i = 0; i < 8; ++i) {
+            if (i == 4) {
+                (void)builder.addFile(builder.root(), "log.bin", bytesOf(3000, 50));
+            }
+            const std::string name = "photo number " + std::to_string(i) + ".jpg";
+            data.push_back(bytesOf(700 + 37 * static_cast<std::size_t>(i), 60 + static_cast<std::uint64_t>(i)));
+            files.push_back(builder.addFile(folder.clusters.front(), name, data.back()));
+            paths.push_back("/Trip/" + name);
+        }
+        for (const auto& file : files) {
+            builder.deleteEntry(file);
+        }
+        builder.deleteEntry(folder);
+    }
+};
+
+TEST(Fat32DeletedFolderTest, AFolderThatGrewAfterAFileWrittenMeanwhileGoesOnThere) {
+    FolderGrownAfterAnother grown;
+    const std::vector<std::uint32_t>& clusters = grown.builder.directoryClusters(grown.folder.clusters.front());
+    ASSERT_GE(clusters.size(), 2u);
+    const Mounted m = mount(grown.builder.build());
+    const FileScan scan = m.scan();
+    for (std::size_t i = 0; i < grown.files.size(); ++i) {
+        expectDeletedFile(m, scan, grown.paths[i], grown.files[i].clusters.front(), grown.data[i], false);
+    }
+    EXPECT_FALSE(listsOrphans(scan));
+}
+
+TEST(Fat32DeletedFolderTest, APartOfAFolderNoFolderLeadsToIsListedUnderOrphanFiles) {
+    test::Fat32BuilderOptions options;
+    options.entriesBeforeData = true;
+    Fat32ImageBuilder builder(options);
+    const auto folder = builder.addDirectory(builder.root(), "Camera");
+    std::vector<Fat32ImageBuilder::Entry> files;
+    std::vector<Bytes> data;
+    // Fourteen 8.3 names fill its first cluster after "." and "..".
+    for (int i = 0; i < 18; ++i) {
+        if (i == 14) {
+            (void)builder.addFile(builder.root(), "LOG.BIN", bytesOf(3000, 70));
+        }
+        data.push_back(bytesOf(600, 80 + static_cast<std::uint64_t>(i)));
+        files.push_back(builder.addFile(folder.clusters.front(), "IMG_00" + std::to_string(10 + i) + ".JPG", data.back()));
+    }
+    for (const auto& file : files) {
+        builder.deleteEntry(file);
+    }
+    builder.deleteEntry(folder);
+    // A newer file took the folder's first cluster: the folder cannot be listed.
+    (void)builder.addFileInClusters(builder.root(), "NEWER.BIN", bytesOf(512, 71), {folder.clusters.front()});
+
+    const Mounted m = mount(builder.build());
+    const FileScan scan = m.scan();
+    for (std::size_t i = 14; i < files.size(); ++i) {
+        const std::string path = "/$OrphanFiles/_MG_00" + std::to_string(10 + i) + ".JPG";
+        expectDeletedFile(m, scan, path, files[i].clusters.front(), data[i], false);
+        const FileRecord* record = find(scan, path);
+        ASSERT_NE(record, nullptr);
+        EXPECT_TRUE(record->entry.hasIssue(EntryIssue::ParentMissing));
+        EXPECT_TRUE(record->parentDeleted);
+    }
+    EXPECT_EQ(find(scan, "/$OrphanFiles/_MG_0010.JPG"), nullptr) << "the first cluster's entries are gone";
+}
+
+TEST(Fat32DeletedFolderTest, APartOfAFolderGoesWhereItsSubfolderSaysItWas) {
+    test::Fat32BuilderOptions options;
+    options.entriesBeforeData = true;
+    Fat32ImageBuilder builder(options);
+    const auto folder = builder.addDirectory(builder.root(), "Album");
+    std::vector<Fat32ImageBuilder::Entry> gone;
+    for (int i = 0; i < 14; ++i) {
+        gone.push_back(builder.addFile(folder.clusters.front(), "PIC" + std::to_string(10 + i) + ".JPG",
+                                       bytesOf(600, 90 + static_cast<std::uint64_t>(i))));
+    }
+    // Then nothing the scan knows: free space, then another folder, after which the album grew.
+    builder.skipClusters(20);
+    (void)builder.addDirectory(builder.root(), "Other");
+    const Bytes last = bytesOf(900, 110);
+    gone.push_back(builder.addFile(folder.clusters.front(), "LAST.JPG", last));
+    const auto sub = builder.addDirectory(folder.clusters.front(), "SUB");
+    const Bytes inner = bytesOf(1200, 111);
+    const auto innerEntry = builder.addFile(sub.clusters.front(), "INNER.JPG", inner);
+    ASSERT_GE(builder.directoryClusters(folder.clusters.front()).size(), 2u);
+    builder.deleteEntry(innerEntry);
+    builder.deleteEntry(sub);
+    for (const auto& file : gone) {
+        builder.deleteEntry(file);
+    }
+    builder.deleteEntry(folder);
+
+    const Mounted m = mount(builder.build());
+    const FileScan scan = m.scan();
+    expectDeletedFile(m, scan, "/Album/_AST.JPG", gone.back().clusters.front(), last, false);
+    const FileRecord* subfolder = find(scan, "/Album/_UB");
+    ASSERT_NE(subfolder, nullptr);
+    EXPECT_TRUE(subfolder->entry.isDirectory);
+    EXPECT_FALSE(subfolder->entry.hasIssue(EntryIssue::ParentMissing));
+    expectDeletedFile(m, scan, "/Album/_UB/_NNER.JPG", innerEntry.clusters.front(), inner, false);
+    EXPECT_FALSE(listsOrphans(scan));
+}
+
+TEST(Fat32DeletedFolderTest, NoPartsAreLookedForWhenDeletedFoldersAreNotSearched) {
+    FolderGrownAfterAnother grown;
+    const Mounted m = mount(grown.builder.build());
+    ScanLimits limits;
+    limits.recurseIntoDeletedDirectories = false;
+    Result<FileScan> scan = m.fs->scan(limits, {});
+    RECOVERY_ASSERT_OK(scan);
+    EXPECT_FALSE(listsOrphans(*scan));
+    EXPECT_EQ(find(*scan, grown.paths[4]), nullptr);
 }
 
 }  // namespace

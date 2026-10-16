@@ -1,0 +1,59 @@
+# corpus scenario fat32-folder-parts: FAT32 of 70,000 clusters: deleted folders that grew after other files' data, one whose first cluster a newer file took; deleted starts no neighbour places; a folder name holding '/'
+# image 36416512 bytes, sha256 7009ccff47c7ca0c, 35 originals
+# deep scan: 35 candidates
+#1 filesystem complete image/jpeg "/KEEP.JPG" size=19849/19849 valid=valid:passed/passed sha=51b944eed0c8bd47 recovery=recovered "KEEP.JPG" => /KEEP.JPG
+#2 filesystem unverified(not-validated) other/- "/SETTINGS.DAT" size=25600/25600 valid=not-validated:unsupported/not-run sha=79995977a0e6bb8f recovery=recovered "SETTINGS.DAT" => /SETTINGS.DAT
+#3 filesystem unverified(not-validated) other/- "/notes.txt" size=7000/7000 deleted valid=not-validated:unsupported/not-run sha=c3f1164b317466a6 recovery=recovered "notes.txt" => /notes.txt
+#4 hybrid complete image/jpeg "/photo.jpg" size=8316/8316 deleted valid=valid:passed/passed sha=afa358d869461820 recovery=recovered "photo.jpg" => /photo.jpg
+#5 filesystem unverified(not-validated) other/- "/log.txt" size=3000/3000 valid=not-validated:unsupported/not-run sha=c3be8f061ae43e8d recovery=recovered "log.txt" => /log.txt
+#6 filesystem unverified(not-validated) other/- "/INDEX.DAT" size=2500/2500 valid=not-validated:unsupported/not-run sha=79614a34a03cb177 recovery=recovered "INDEX.DAT" => /INDEX.DAT
+#7 filesystem unverified(not-validated) other/- "/NEWER.BIN" size=512/512 valid=not-validated:unsupported/not-run sha=5ddfb5fd7e330f54 recovery=recovered "NEWER.BIN" => /NEWER.BIN
+#8 filesystem complete image/jpeg "/Photos_2024/beach.jpg" size=5517/5517 valid=valid:passed/passed sha=831f15b7cce87493 recovery=recovered "Photos_2024/beach.jpg" => /Photos_2024/beach.jpg
+#9 hybrid complete image/jpeg "/Trip 2024/photo number 0.jpg" size=2401/2401 deleted valid=valid:passed/passed sha=158b432b024d31ed recovery=recovered "Trip 2024/photo number 0.jpg" => /Trip 2024/photo number 0.jpg
+#10 hybrid complete image/jpeg "/Trip 2024/photo number 1.jpg" size=2513/2513 deleted valid=valid:passed/passed sha=a41c47b2f7b0c348 recovery=recovered "Trip 2024/photo number 1.jpg" => /Trip 2024/photo number 1.jpg
+#11 hybrid complete image/jpeg "/Trip 2024/photo number 2.jpg" size=2540/2540 deleted valid=valid:passed/passed sha=020527589e995852 recovery=recovered "Trip 2024/photo number 2.jpg" => /Trip 2024/photo number 2.jpg
+#12 hybrid complete image/jpeg "/Trip 2024/photo number 3.jpg" size=2529/2529 deleted valid=valid:passed/passed sha=30e065a9ee107ec4 recovery=recovered "Trip 2024/photo number 3.jpg" => /Trip 2024/photo number 3.jpg
+#13 hybrid complete image/jpeg "/Trip 2024/photo number 4.jpg" size=2473/2473 deleted valid=valid:passed/passed sha=4a609343334d38fc recovery=recovered "Trip 2024/photo number 4.jpg" => /Trip 2024/photo number 4.jpg
+#14 hybrid complete image/jpeg "/Trip 2024/photo number 5.jpg" size=2341/2341 deleted valid=valid:passed/passed sha=51cd82256babec0d recovery=recovered "Trip 2024/photo number 5.jpg" => /Trip 2024/photo number 5.jpg
+#15 hybrid complete image/jpeg "/Trip 2024/photo number 6.jpg" size=2269/2269 deleted valid=valid:passed/passed sha=2eef5382396318fa recovery=recovered "Trip 2024/photo number 6.jpg" => /Trip 2024/photo number 6.jpg
+#16 hybrid complete image/jpeg "/Trip 2024/photo number 7.jpg" size=2304/2304 deleted valid=valid:passed/passed sha=7b7b0b8902622b21 recovery=recovered "Trip 2024/photo number 7.jpg" => /Trip 2024/photo number 7.jpg
+#17 hybrid complete image/jpeg "/$OrphanFiles/_MG_0024.JPG" size=2396/2396 deleted valid=valid:passed/passed sha=399ce719bfcd6293 recovery=recovered "$OrphanFiles/_MG_0024.JPG" => /$OrphanFiles/_MG_0024.JPG
+#18 hybrid complete image/jpeg "/$OrphanFiles/_MG_0025.JPG" size=2331/2331 deleted valid=valid:passed/passed sha=562be4c9fb21c2f6 recovery=recovered "$OrphanFiles/_MG_0025.JPG" => /$OrphanFiles/_MG_0025.JPG
+#19 hybrid complete image/jpeg "/$OrphanFiles/_MG_0026.JPG" size=2339/2339 deleted valid=valid:passed/passed sha=4bab6f69247bfb56 recovery=recovered "$OrphanFiles/_MG_0026.JPG" => /$OrphanFiles/_MG_0026.JPG
+#20 hybrid complete image/jpeg "/$OrphanFiles/_MG_0027.JPG" size=2414/2414 deleted valid=valid:passed/passed sha=0d6a0eb76544e31f recovery=recovered "$OrphanFiles/_MG_0027.JPG" => /$OrphanFiles/_MG_0027.JPG
+#21 carving complete image/jpeg "recovered_000021.jpg" size=11004/11004 valid=valid:passed/passed sha=fdddd7353e35d658 recovery=recovered "recovered_000021.jpg" => (unnamed original 6)
+#22 carving complete image/jpeg "recovered_000022.jpg" size=2328/2328 valid=valid:passed/passed sha=958b5e95df935a58 recovery=recovered "recovered_000022.jpg" => (unnamed original 16)
+#23 carving complete image/jpeg "recovered_000023.jpg" size=2387/2387 valid=valid:passed/passed sha=3251ae89251fd9a6 recovery=recovered "recovered_000023.jpg" => (unnamed original 17)
+#24 carving complete image/jpeg "recovered_000024.jpg" size=2461/2461 valid=valid:passed/passed sha=de0f11900a5cf008 recovery=recovered "recovered_000024.jpg" => (unnamed original 18)
+#25 carving complete image/jpeg "recovered_000025.jpg" size=2541/2541 valid=valid:passed/passed sha=e7350105d7d09e0b recovery=recovered "recovered_000025.jpg" => (unnamed original 19)
+#26 carving complete image/jpeg "recovered_000026.jpg" size=2541/2541 valid=valid:passed/passed sha=2c5574cb54a0ac57 recovery=recovered "recovered_000026.jpg" => (unnamed original 20)
+#27 carving complete image/jpeg "recovered_000027.jpg" size=2513/2513 valid=valid:passed/passed sha=0b59746bed5ff4a6 recovery=recovered "recovered_000027.jpg" => (unnamed original 21)
+#28 carving complete image/jpeg "recovered_000028.jpg" size=2396/2396 valid=valid:passed/passed sha=3480f2f1b6c9ab54 recovery=recovered "recovered_000028.jpg" => (unnamed original 22)
+#29 carving complete image/jpeg "recovered_000029.jpg" size=2286/2286 valid=valid:passed/passed sha=71cab97d0b108174 recovery=recovered "recovered_000029.jpg" => (unnamed original 23)
+#30 carving complete image/jpeg "recovered_000030.jpg" size=2276/2276 valid=valid:passed/passed sha=c4fd168818bf63f2 recovery=recovered "recovered_000030.jpg" => (unnamed original 24)
+#31 carving complete image/jpeg "recovered_000031.jpg" size=2356/2356 valid=valid:passed/passed sha=bb5f238d5e3d54f6 recovery=recovered "recovered_000031.jpg" => (unnamed original 25)
+#32 carving complete image/jpeg "recovered_000032.jpg" size=2462/2462 valid=valid:passed/passed sha=9311a9df3d4ad8c4 recovery=recovered "recovered_000032.jpg" => (unnamed original 26)
+#33 carving complete image/jpeg "recovered_000033.jpg" size=2521/2521 valid=valid:passed/passed sha=96a690c3cebc650f recovery=recovered "recovered_000033.jpg" => (unnamed original 27)
+#34 carving complete image/jpeg "recovered_000034.jpg" size=2527/2527 valid=valid:passed/passed sha=d4e1429951926790 recovery=recovered "recovered_000034.jpg" => (unnamed original 28)
+#35 carving complete image/jpeg "recovered_000035.jpg" size=2515/2515 valid=valid:passed/passed sha=55bdc510de42a29a recovery=recovered "recovered_000035.jpg" => (unnamed original 29)
+# quick scan: 20 candidates
+#1 filesystem complete image/jpeg "/KEEP.JPG" size=19849/19849 valid=valid:passed/passed sha=51b944eed0c8bd47 recovery=recovered "KEEP.JPG" => /KEEP.JPG
+#2 filesystem unverified(not-validated) other/- "/SETTINGS.DAT" size=25600/25600 valid=not-validated:unsupported/not-run sha=79995977a0e6bb8f recovery=recovered "SETTINGS.DAT" => /SETTINGS.DAT
+#3 filesystem unverified(not-validated) other/- "/notes.txt" size=7000/7000 deleted valid=not-validated:unsupported/not-run sha=c3f1164b317466a6 recovery=recovered "notes.txt" => /notes.txt
+#4 hybrid complete image/jpeg "/photo.jpg" size=8316/8316 deleted valid=valid:passed/passed sha=afa358d869461820 recovery=recovered "photo.jpg" => /photo.jpg
+#5 filesystem unverified(not-validated) other/- "/log.txt" size=3000/3000 valid=not-validated:unsupported/not-run sha=c3be8f061ae43e8d recovery=recovered "log.txt" => /log.txt
+#6 filesystem unverified(not-validated) other/- "/INDEX.DAT" size=2500/2500 valid=not-validated:unsupported/not-run sha=79614a34a03cb177 recovery=recovered "INDEX.DAT" => /INDEX.DAT
+#7 filesystem unverified(not-validated) other/- "/NEWER.BIN" size=512/512 valid=not-validated:unsupported/not-run sha=5ddfb5fd7e330f54 recovery=recovered "NEWER.BIN" => /NEWER.BIN
+#8 filesystem complete image/jpeg "/Photos_2024/beach.jpg" size=5517/5517 valid=valid:passed/passed sha=831f15b7cce87493 recovery=recovered "Photos_2024/beach.jpg" => /Photos_2024/beach.jpg
+#9 hybrid complete image/jpeg "/Trip 2024/photo number 0.jpg" size=2401/2401 deleted valid=valid:passed/passed sha=158b432b024d31ed recovery=recovered "Trip 2024/photo number 0.jpg" => /Trip 2024/photo number 0.jpg
+#10 hybrid complete image/jpeg "/Trip 2024/photo number 1.jpg" size=2513/2513 deleted valid=valid:passed/passed sha=a41c47b2f7b0c348 recovery=recovered "Trip 2024/photo number 1.jpg" => /Trip 2024/photo number 1.jpg
+#11 hybrid complete image/jpeg "/Trip 2024/photo number 2.jpg" size=2540/2540 deleted valid=valid:passed/passed sha=020527589e995852 recovery=recovered "Trip 2024/photo number 2.jpg" => /Trip 2024/photo number 2.jpg
+#12 hybrid complete image/jpeg "/Trip 2024/photo number 3.jpg" size=2529/2529 deleted valid=valid:passed/passed sha=30e065a9ee107ec4 recovery=recovered "Trip 2024/photo number 3.jpg" => /Trip 2024/photo number 3.jpg
+#13 hybrid complete image/jpeg "/Trip 2024/photo number 4.jpg" size=2473/2473 deleted valid=valid:passed/passed sha=4a609343334d38fc recovery=recovered "Trip 2024/photo number 4.jpg" => /Trip 2024/photo number 4.jpg
+#14 hybrid complete image/jpeg "/Trip 2024/photo number 5.jpg" size=2341/2341 deleted valid=valid:passed/passed sha=51cd82256babec0d recovery=recovered "Trip 2024/photo number 5.jpg" => /Trip 2024/photo number 5.jpg
+#15 hybrid complete image/jpeg "/Trip 2024/photo number 6.jpg" size=2269/2269 deleted valid=valid:passed/passed sha=2eef5382396318fa recovery=recovered "Trip 2024/photo number 6.jpg" => /Trip 2024/photo number 6.jpg
+#16 hybrid complete image/jpeg "/Trip 2024/photo number 7.jpg" size=2304/2304 deleted valid=valid:passed/passed sha=7b7b0b8902622b21 recovery=recovered "Trip 2024/photo number 7.jpg" => /Trip 2024/photo number 7.jpg
+#17 hybrid complete image/jpeg "/$OrphanFiles/_MG_0024.JPG" size=2396/2396 deleted valid=valid:passed/passed sha=399ce719bfcd6293 recovery=recovered "$OrphanFiles/_MG_0024.JPG" => /$OrphanFiles/_MG_0024.JPG
+#18 hybrid complete image/jpeg "/$OrphanFiles/_MG_0025.JPG" size=2331/2331 deleted valid=valid:passed/passed sha=562be4c9fb21c2f6 recovery=recovered "$OrphanFiles/_MG_0025.JPG" => /$OrphanFiles/_MG_0025.JPG
+#19 hybrid complete image/jpeg "/$OrphanFiles/_MG_0026.JPG" size=2339/2339 deleted valid=valid:passed/passed sha=4bab6f69247bfb56 recovery=recovered "$OrphanFiles/_MG_0026.JPG" => /$OrphanFiles/_MG_0026.JPG
+#20 hybrid complete image/jpeg "/$OrphanFiles/_MG_0027.JPG" size=2414/2414 deleted valid=valid:passed/passed sha=0d6a0eb76544e31f recovery=recovered "$OrphanFiles/_MG_0027.JPG" => /$OrphanFiles/_MG_0027.JPG

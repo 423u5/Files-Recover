@@ -11,9 +11,11 @@
 
 #include <gtest/gtest.h>
 
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace recovery::carving {
@@ -194,6 +196,49 @@ TEST(FormatRegistryTest, StartsFileNamedAsksTheFormatsTheExtensionStandsFor) {
     EXPECT_EQ(startsFileNamed(registry, "Report.docx", zipStart), true) << "a ZIP-based document";
     EXPECT_EQ(startsFileNamed(registry, "notes.txt", jpegStart), std::nullopt) << "no format for the name";
     EXPECT_EQ(startsFileNamed(registry, "README", jpegStart), std::nullopt) << "no extension";
+}
+
+// After P20 (L242): of places that start alike, the one where a file of the
+// name's format ends exactly at the size recorded tells where it is.
+TEST(FormatRegistryTest, EndsFileNamedFindsTheEndOfTheFormatTheExtensionStandsFor) {
+    FormatRegistry registry;
+    FormatDescriptor jpeg = test::scriptedDescriptor("jpeg", "JPEGHEAD");
+    jpeg.extension = "jpg";
+    auto jpegFormat = std::make_shared<test::ScriptedFormat>(jpeg);
+    // Its files end after the marker "END!".
+    jpegFormat->onEnd([](IContentReader& content) -> Result<EndDetection> {
+        const Result<std::span<const std::byte>> bytes = content.read(0, static_cast<std::size_t>(content.size()));
+        if (!bytes.ok()) {
+            return bytes.error();
+        }
+        const std::string text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+        const std::size_t marker = text.find("END!");
+        if (marker == std::string::npos) {
+            return EndDetection{EndStatus::Truncated, content.size(), "no end marker", {}};
+        }
+        return EndDetection{EndStatus::Found, marker + 4, "end marker", {}};
+    });
+    RECOVERY_ASSERT_OK(registry.add(jpegFormat));
+
+    constexpr std::string_view photo = "JPEGHEAD1 a small photo, then END!";
+    constexpr std::string_view open = "JPEGHEAD1 a photo that does not end here";
+    constexpr std::string_view other = "Other data of the same size, END!";
+    std::vector<std::byte> volume(4096, std::byte{'.'});
+    std::memcpy(volume.data() + 100, photo.data(), photo.size());
+    std::memcpy(volume.data() + 1000, open.data(), open.size());
+    std::memcpy(volume.data() + 2000, other.data(), other.size());
+    test::MemoryStorageSource source(volume, 512);
+    RECOVERY_ASSERT_OK(source.open());
+    const std::uint64_t size = photo.size();
+
+    EXPECT_TRUE(endsFileNamed(registry, source, "IMG_0001.JPG", 100, size));
+    EXPECT_FALSE(endsFileNamed(registry, source, "IMG_0001.JPG", 100, size + 1)) << "it ends a byte earlier";
+    EXPECT_FALSE(endsFileNamed(registry, source, "IMG_0001.JPG", 100, size - 1)) << "it goes on a byte further";
+    EXPECT_FALSE(endsFileNamed(registry, source, "IMG_0001.JPG", 1000, size)) << "no end there";
+    EXPECT_FALSE(endsFileNamed(registry, source, "IMG_0001.JPG", 2000, other.size()))
+        << "no file of its format starts there";
+    EXPECT_FALSE(endsFileNamed(registry, source, "notes.txt", 100, size)) << "no format for the name";
+    EXPECT_FALSE(endsFileNamed(registry, source, "IMG_0001.JPG", 4090, size)) << "beyond the source";
 }
 
 }  // namespace

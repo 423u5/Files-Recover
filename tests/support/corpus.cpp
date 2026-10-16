@@ -2302,6 +2302,160 @@ Image exfatOrphanedFolder() {
     return image;
 }
 
+// After P20 (L242, L243, L10): a FAT32 volume of 70,000 clusters that Windows
+// wrote and deleted from (entries before their data, deleted starts without
+// their top 16 bits). Beyond cluster 65,536: a folder of photos that grew,
+// after a file another program wrote meanwhile, into a cluster its last
+// photo's data does not lead to; a camera folder that grew likewise, whose
+// first cluster a newer file took since. Two deleted files no neighbour
+// places: a note whose place recorded a newer file holds, and a photo whose
+// place recorded holds another photo deleted long ago. A folder whose damaged
+// name holds '/'.
+Image fat32FolderParts() {
+    Fat32BuilderOptions options = fatGeometry(1, 70'000, "PARTS");
+    options.entriesBeforeData = true;
+    FatVolume v(options, 0x2001);
+    Fat32ImageBuilder& b = v.builder;
+    const std::uint32_t root = Fat32ImageBuilder::root();
+    constexpr std::uint32_t kStep = 0x10000;
+    std::vector<Original> files;
+    std::vector<Fat32ImageBuilder::Entry> deleted;
+
+    const Bytes keep = cameraJpeg(3201, 320, 240);
+    (void)b.addFile(root, "KEEP.JPG", keep);
+    files.push_back(named("/KEEP.JPG", keep));
+    const std::uint32_t damaged = v.folder(root, "Photos/2024");
+    const Bytes beach = jpeg(3202, 160, 120);
+    (void)b.addFile(damaged, "beach.jpg", beach);
+    files.push_back(named("/Photos_2024/beach.jpg", beach, Expected::Complete,
+                          "a folder whose damaged name holds '/': one level of its path"));
+
+    // A note whose start recorded lies inside a newer file.
+    const Bytes settings = text(3203, 50 * 512);
+    (void)b.addFileInClusters(root, "SETTINGS.DAT", settings, run<std::uint32_t>(1990, 50));
+    files.push_back(named("/SETTINGS.DAT", settings, Expected::Unverified));
+    const Bytes notes = text(3204, 7000);
+    deleted.push_back(b.addFileInClusters(root, "notes.txt", notes, run<std::uint32_t>(kStep + 2000, v.clustersFor(7000))));
+    files.push_back(named("/notes.txt", notes, Expected::Unverified,
+                          "deleted, no neighbour: SETTINGS.DAT holds the place its start records; text where it is"));
+    // A photo whose start recorded holds another photo, deleted long ago.
+    const Bytes photo = jpeg(3205, 200, 150);
+    deleted.push_back(
+        b.addFileInClusters(root, "photo.jpg", photo, run<std::uint32_t>(kStep + 3000, v.clustersFor(photo.size()))));
+    files.push_back(named("/photo.jpg", photo, Expected::Complete,
+                          "deleted, no neighbour: a photo starts where its start records too, but ends elsewhere"));
+    const Bytes older = jpeg(3206, 240, 180);
+    v.place(3000, older);
+    files.push_back(with("", older, Outcome::Carved, "no entry: a photo deleted long ago where photo.jpg's start records"));
+
+    b.skipClusters(kStep + 1000 - b.cursor());
+    // Photos with long names: four fill the folder's first cluster, and the
+    // fifth's long name begins in its last two slots.
+    const auto trip = b.addDirectory(root, "Trip 2024");
+    for (int i = 0; i < 8; ++i) {
+        if (i == 4) {
+            const Bytes log = text(3207, 3000);
+            (void)b.addFile(root, "log.txt", log);
+            files.push_back(named("/log.txt", log, Expected::Unverified, "written while Trip 2024 was being filled"));
+        }
+        const Bytes shot = jpeg(3210 + static_cast<std::uint64_t>(i), 96, 72);
+        const std::string name = "photo number " + std::to_string(i) + ".jpg";
+        deleted.push_back(b.addFile(trip.clusters.front(), name, shot));
+        files.push_back(named("/Trip 2024/" + name, shot, Expected::Complete,
+                              i < 4 ? "deleted with its folder"
+                                    : "deleted with its folder, in the cluster it grew into after log.txt"));
+    }
+    deleted.push_back(trip);
+    // A camera's folder: fourteen 8.3 names fill its first cluster.
+    const auto camera = b.addDirectory(root, "Camera");
+    std::vector<Fat32ImageBuilder::Entry> shots;
+    for (int i = 0; i < 18; ++i) {
+        if (i == 14) {
+            const Bytes index = text(3230, 2500);
+            (void)b.addFile(root, "INDEX.DAT", index);
+            files.push_back(named("/INDEX.DAT", index, Expected::Unverified, "written while Camera was being filled"));
+        }
+        const Bytes shot = jpeg(3240 + static_cast<std::uint64_t>(i), 96, 72);
+        const std::string name = "IMG_00" + std::to_string(10 + i) + ".JPG";
+        shots.push_back(b.addFile(camera.clusters.front(), name, shot));
+        if (i < 14) {
+            files.push_back(with("", shot, Outcome::Carved,
+                                 "deleted with its folder, whose first cluster NEWER.BIN took: no entry left"));
+        } else {
+            files.push_back(named("/$OrphanFiles/_" + name.substr(1), shot, Expected::Complete,
+                                  "deleted with its folder, whose first cluster NEWER.BIN took: in the cluster it "
+                                  "grew into, which no folder leads to"));
+        }
+    }
+    deleted.insert(deleted.end(), shots.begin(), shots.end());
+    deleted.push_back(camera);
+
+    // Windows deletes a folder's files before the folder.
+    for (const auto& entry : deleted) {
+        b.deleteEntry(entry, true, true);
+    }
+    const Bytes newer = text(3260, 512);
+    (void)b.addFileInClusters(root, "NEWER.BIN", newer, {camera.clusters.front()});
+    files.push_back(named("/NEWER.BIN", newer, Expected::Unverified, "written over Camera's first cluster"));
+
+    Image image;
+    image.bytes = b.build();
+    image.originals = std::move(files);
+    return image;
+}
+
+// After P20 (L244): exFAT, a folder of two clusters in one run (NoFatChain,
+// as Windows makes folders) deleted with its photos, whose File entry the
+// entry set of a newer note took and whose first cluster that note's data
+// took: its second cluster still holds the photos' entries.
+Image exfatReusedFolder() {
+    ExFatVolume v(exfatGeometry(0, 8192, "EXREUSED"), 0x2101);  // 512-byte clusters, 4 MiB
+    ExFatImageBuilder& b = v.builder;
+    const std::uint32_t root = b.root();
+    std::vector<Original> files;
+
+    const auto note = b.addFile(root, "a.txt", text(3301, 300));  // three entries
+    const auto album = b.addDirectory(root, "Old Photos");        // three entries
+    // Empty notes (four entries each) fill its first cluster before any data
+    // is written, so that it grows into the next one: one run of two.
+    std::vector<ExFatImageBuilder::Entry> gone{note};
+    for (int i = 0; i < 5; ++i) {
+        gone.push_back(b.addFile(album.clusters.front(), "empty note " + std::to_string(i) + ".txt", {}));
+    }
+    const Bytes beach = jpeg(3302, 160, 120);
+    gone.push_back(b.addFile(album.clusters.front(), "Beach.jpg", beach));
+    const Bytes party = png(3303, 96, 72);
+    gone.push_back(b.addFile(album.clusters.front(), "Party.png", party));
+    const Bytes kept = cameraJpeg(3304, 320, 240);
+    (void)b.addFile(root, "Kept.jpg", kept);
+    files.push_back(named("/Kept.jpg", kept));
+    gone.push_back(album);
+    for (const auto& entry : gone) {
+        b.deleteEntry(entry);
+    }
+    // The newer note's four entries go where a.txt's three and the folder's
+    // File entry were, and its data into the folder's first cluster.
+    const Bytes newer = text(3305, 400);
+    const auto added = b.addFileInClusters(root, "A newer note file.txt", newer, {album.clusters.front()});
+    for (std::size_t i = 0; i < added.slotCount; ++i) {
+        const std::span<std::byte> from = b.slot(added, i);
+        const std::span<std::byte> to = b.directorySlot(root, note.firstSlot + i);
+        std::copy(from.begin(), from.end(), to.begin());
+        std::fill(from.begin(), from.end(), std::byte{0});  // the directory ends there again
+    }
+    files.push_back(named("/A newer note file.txt", newer, Expected::Unverified));
+    files.push_back(named("/Old Photos/Beach.jpg", beach, Expected::Complete,
+                          "deleted with its folder, whose File entry and first cluster a newer note took"));
+    files.push_back(named("/Old Photos/Party.png", party, Expected::Complete,
+                          "deleted with its folder, whose File entry and first cluster a newer note took"));
+    files.push_back(named("/Old Photos/empty note 4.txt", {}, Expected::Unverified,
+                          "an empty note whose entries are in the folder's second cluster"));
+    Image image;
+    image.bytes = b.build();
+    image.originals = std::move(files);
+    return image;
+}
+
 struct Entry {
     Scenario scenario;
     std::function<Image()> make;
@@ -2377,6 +2531,11 @@ const std::vector<Entry>& entries() {
             "16 bits cleared, a deleted folder that grew three times", {"deleted files"}, fat32WindowsDeleted);
         add("exfat-orphaned-folder", "exFAT: a folder deleted with its photos, its File entry taken by a newer "
             "file's entry set", {"deleted files", "corrupt filesystem metadata"}, exfatOrphanedFolder);
+        add("fat32-folder-parts", "FAT32 of 70,000 clusters: deleted folders that grew after other files' data, one "
+            "whose first cluster a newer file took; deleted starts no neighbour places; a folder name holding '/'",
+            {"deleted files", "partially overwritten files", "corrupt filesystem metadata"}, fat32FolderParts);
+        add("exfat-reused-folder", "exFAT: a folder of two clusters deleted with its photos, its File entry and first "
+            "cluster taken by a newer file", {"deleted files", "partially overwritten files"}, exfatReusedFolder);
         return list;
     }();
     return all;
