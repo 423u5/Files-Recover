@@ -113,6 +113,50 @@ std::optional<Timestamp> decodeTimestamp(std::uint32_t raw, std::uint8_t tenMill
     return stamp;
 }
 
+bool holdsEntrySets(std::span<const std::byte> bytes) {
+    std::size_t verified = 0;
+    const std::size_t slots = bytes.size() / kDirectoryEntrySize;
+    for (std::size_t i = 0; i < slots;) {
+        const std::span<const std::byte> e = bytes.subspan(i * kDirectoryEntrySize, kDirectoryEntrySize);
+        const std::uint8_t type = loadU8(e, 0);
+        if (type == kEndOfDirectory) {
+            break;
+        }
+        const auto inUse = static_cast<std::uint8_t>(type | kInUse);
+        if (inUse == kTypeBitmap || inUse == kTypeUpcase || inUse == kTypeLabel) {
+            return false;  // only the root holds these
+        }
+        if ((type & kCategoryMask) == kInUse && (type & kBenign) == 0 && type != kTypeFile) {
+            return false;  // an unknown critical primary entry
+        }
+        if (inUse != kTypeFile) {
+            ++i;
+            continue;
+        }
+        const std::uint8_t secondaries = loadU8(e, 1);
+        if (secondaries < kMinFileSecondaries || secondaries > kMaxFileSecondaries) {
+            ++i;
+            continue;
+        }
+        if (i + 1 + secondaries > slots) {
+            break;  // the set goes on beyond these bytes
+        }
+        // The checksum covers the set as it was in use.
+        std::vector<std::byte> set(bytes.begin() + static_cast<std::ptrdiff_t>(i * kDirectoryEntrySize),
+                                   bytes.begin() + static_cast<std::ptrdiff_t>((i + 1 + secondaries) * kDirectoryEntrySize));
+        for (std::size_t s = 0; s <= secondaries; ++s) {
+            set[s * kDirectoryEntrySize] |= std::byte{kInUse};
+        }
+        if (entrySetChecksum(set) == loadLe16(e, 2)) {
+            ++verified;
+            i += 1 + secondaries;
+        } else {
+            ++i;
+        }
+    }
+    return verified > 0;
+}
+
 bool DirectoryParser::feed(std::span<const std::byte> entry, std::uint64_t volumeOffset, ParseOutput& out) {
     Slot slot;
     std::copy_n(entry.begin(), std::min(entry.size(), kDirectoryEntrySize), slot.bytes.begin());

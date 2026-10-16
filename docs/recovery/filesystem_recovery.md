@@ -56,8 +56,8 @@ contiguous run from it is a guess, and it is labelled as one:
 
 | `LayoutEvidence` | When |
 | --- | --- |
-| `Recorded` | Active chains, exFAT contiguous runs (also when deleted), exFAT chains that survived deletion, NTFS run lists (also of deleted records), resident data, and a guessed file of one cluster (it cannot be fragmented) |
-| `Guessed` | A contiguous guess of more than one cluster. `fragmentation.known` is false and the warning `LayoutGuessed` is set |
+| `Recorded` | Active chains, exFAT contiguous runs (also when deleted), exFAT chains that survived deletion, NTFS run lists (also of deleted records), resident data, and a guessed file of one cluster (it cannot be fragmented) whose start cluster is the one recorded |
+| `Guessed` | A contiguous guess of more than one cluster, or a deleted FAT32 file whose start cluster was inferred because its top 16 bits were cleared (`StartClusterInferred`, L7; also of one cluster). `fragmentation.known` is false and the warning `LayoutGuessed` is set |
 | `None` | Nothing located (an empty file, no usable allocation) |
 
 ### Partly overwritten files
@@ -94,7 +94,7 @@ its filesystem, and supplies what is specific to it:
 
 | | FAT32 (`Fat32Recovery`) | exFAT (`ExFatRecovery`) | NTFS (`NtfsRecovery`) |
 | --- | --- | --- | --- |
-| Deleted file layout | `Guessed` beyond one cluster (Windows frees the chain) | `Recorded` for contiguous runs and surviving chains, `Guessed` if the chain was cleared | `Recorded`: the record keeps its runs |
+| Deleted file layout | `Guessed` beyond one cluster (Windows frees the chain), and whenever the start cluster was inferred (L7) | `Recorded` for contiguous runs and surviving chains, `Guessed` if the chain was cleared | `Recorded`: the record keeps its runs |
 | Valid data length | None | Bytes beyond it are `Zeros` | Initialized size: bytes beyond it are `Zeros` |
 | Special data | | | Resident data is `Embedded`. Sparse files are laid out from the record's run list, holes as `Zeros`. Compressed and encrypted data is `Missing` (`DataNotDecoded`) |
 | Not candidates | Directories | Directories | Directories, the metadata files (records 0-15, everything under `/$Extend`) |

@@ -90,6 +90,40 @@ Deleted files therefore get `ContiguousGuess` allocations, which are flagged:
 A deleted directory is listed only if its first cluster is still free and still starts with a `.` entry
 that points to itself. The files found inside it have `parentDeleted = true`.
 
+**Start clusters that lost their top 16 bits (after P20, L7).** Windows also clears bytes 20-21 of a deleted
+entry, the top 16 bits of its start cluster (FAT32; seen on Windows 10, for files and folders, on an image it
+wrote, L21). On a volume of more than 65,535 clusters
+(`BootSector::deletedStartsAmbiguous`) such a deleted entry may start at any of several clusters 65,536 apart, and
+the one recorded is the lowest. When a directory is listed, `DeletedEntries::inferStarts` places each such entry by
+the strongest evidence there is, and keeps the start recorded when the evidence does not single one place out:
+
+1. A folder by its first cluster: the one place, free, whose `.` entry names that cluster and whose `..` entry
+   names the folder being listed (0, or the root's cluster, for the root).
+2. A file by its neighbours in the listing, because files written one after the other lie one after the other: it
+   starts where the entry before it ends (an active file's chain says where; the first entry starts after the
+   folder's first cluster), or ends where the entry after it starts, when the low 16 bits agree. The folder's own
+   clusters are skipped: a folder grows between the files written into it.
+3. A run of files whose low bits say that they lie one after the other, by what starts at each place
+   (`Fat32Options::startsFile`, which a scan gives from its formats: `carving::startsFileNamed`): the one place
+   where their starts are mostly free, and where the first four whose names have a known type each start a file
+   of that type. The place recorded is kept when it qualifies too.
+
+An entry placed elsewhere than recorded is flagged `StartClusterInferred`, and its candidate's layout is `Guessed`
+(`LayoutGuessed`) even for one cluster. A deleted entry whose recorded start reads as cluster 1 is kept as what is
+left of a start 65,536 clusters on. Starts that kept their top bits (other systems delete so), and volumes of up to
+65,535 clusters, are taken as recorded.
+
+**A deleted folder's later clusters (after P20, L8).** A deleted folder's chain is gone too, so after its first
+cluster its clusters are unknown. When the first cluster is full (no end marker), `DeletedEntries::nextCluster`
+looks for the next one where writers put it: Windows and cameras write a new entry before the new file's data, so
+a folder that fills up grows at the place after the data of the file written before, that is, after the last file
+its clusters so far list; failing that, right after its previous cluster. When that last file's start lost its top
+bits, every place it may have ended at is tried, and taken only if one alone qualifies. A cluster qualifies when it
+is free, is not one of the folder's clusters yet, and holds directory slots only (`isPossibleSlot`: long-name slots
+with their type and cluster fields zero, 8.3 entries with possible names, attributes, clusters and sizes), at least
+one, and no `.` entry (another folder's first cluster). The search ends at the first cluster that ends the folder, at
+one it cannot find, and at the FAT limit of 65,536 entries.
+
 ### Traversal limits
 
 The traversal is depth-first and limited by `ScanLimits`: maximum depth (64), maximum number of entries
@@ -134,9 +168,11 @@ All known limitations, with IDs for discussion, are listed in [../limitations.md
 
 - Deleted fragmented files come back as a single contiguous guess, which is wrong for them. Fragment
   reconstruction (P13, [../recovery/fragment_recovery.md](../recovery/fragment_recovery.md)) resolves them.
-- Some Windows versions clear the high 16 bits of a deleted entry's start cluster. On volumes with more
-  than 65,535 clusters, such entries point to the wrong cluster. This is not corrected yet.
-- Only the first cluster of a deleted directory is read.
+- A deleted entry whose start lost its top 16 bits is placed again only when its neighbours, or what starts at
+  each place, single one out; otherwise its start stays as recorded (L242; L7 is resolved).
+- A deleted folder's clusters after the first are found only after the data of its last file so far or right
+  after its previous cluster; a folder that grew elsewhere loses the entries beyond, and of two deleted folders
+  that grew next to each other, one may list the other's entries as well (duplicates; L243; L8 is resolved).
 - Orphaned clusters (allocated, but not referenced by any entry) can be counted as
   `ClusterUsage::allocated - FileScan::referencedClusters`, but the orphaned chains are not listed yet.
 - The engine's own tests use volumes built by `tests/support/fat32_builder`. Independent checks are
@@ -209,7 +245,7 @@ optional benign secondaries such as vendor extensions, which are skipped.
 | Active, NoFatChain | `Contiguous` | One run from the first cluster, clipped to the heap (`BeyondVolume`) | `ClustersMarkedFree` if a cluster is free |
 | Active, FAT-chained | `ClusterChain` | The chain, walked as on FAT32: loops, invalid, bad and unreadable entries, chain shorter or longer than the size | `ClustersMarkedFree` |
 | Deleted, NoFatChain | `Contiguous` | The exact run, which deletion does not change | `ClustersInUse` if a cluster was reused |
-| Deleted, FAT-chained, chain intact | `ClusterChain` | The old chain. Deletion only has to update the bitmap, so the chain may survive. It is used only if it has exactly the right length and ends with end-of-chain | `ClustersInUse` |
+| Deleted, FAT-chained, chain intact | `ClusterChain` | The old chain. Deletion only has to update the bitmap, so the chain may survive (Windows 10 leaves it, seen after P20, L12). It is used only if it has exactly the right length and ends with end-of-chain | `ClustersInUse` |
 | Deleted, FAT-chained, chain gone | `ContiguousGuess` | A run from the first cluster, as on FAT32 | `ClustersInUse` |
 
 Directories follow the same rules in whole clusters. Unlike FAT32 directories they have a size, which their chains
@@ -225,9 +261,13 @@ its clusters in the bitmap. Nothing else in the set changes.
   with the InUse bits set again. If the checksum fails, the set is dropped, since its fields may belong to different
   files.
 - **Orphaned entries:** a new entry set can overwrite the File entry of a deleted set and leave its Stream Extension
-  and File Name entries behind. These are listed when the name matches the name hash, flagged `MetadataIncomplete`:
-  attributes and timestamps are unknown, and the entry is reported as a file. Deleted sets that fail their checksum
-  are tried the same way.
+  and File Name entries behind (Windows 10 does so when a folder has no room left at its end; where there is room
+  it appends the new set, seen after P20). These are listed when the name matches the name hash, flagged `MetadataIncomplete`:
+  attributes and timestamps are unknown. Deleted sets that fail their checksum are tried the same way. Such an entry
+  is a file unless its data shows that it was a directory (after P20, L13): its size is whole clusters, its valid
+  data length its size, its first cluster free, and the first 4 KiB of its data hold at least one File entry set,
+  in use or deleted, whose checksum matches, and no entry a directory other than the root cannot hold
+  (`holdsEntrySets`). It is then listed as a directory and searched like any deleted one.
 - Deleted-looking slots that pass neither check are ignored.
 - A deleted directory is read only if none of its clusters is allocated again and the bitmap is readable. Files found
   in it have `parentDeleted = true`. Entries inside it that are still marked in use are reported as deleted.
@@ -246,8 +286,9 @@ All known limitations, with IDs for discussion, are listed in [../limitations.md
 
 - Deleted FAT-chained files whose chain was cleared come back as a contiguous guess, as on FAT32. Fragment
   reconstruction (P13) resolves them.
-- Orphaned entries (`MetadataIncomplete`) don't say whether they were directories. A deleted directory found this way
-  is reported as a file and not searched.
+- An orphaned entry (`MetadataIncomplete`) is taken for a directory only when the first 4 KiB of its data hold a
+  checksum-verified entry set and its first cluster is still free; otherwise it is a file, as before (L244; L13 is
+  resolved).
 - Vendor allocation entries (benign secondaries that own clusters) are skipped, so their clusters count as orphaned.
 - TexFAT support stops at choosing the active FAT and bitmap. Transactions are not examined.
 - The volume GUID and the OEM parameters sector are not reported.

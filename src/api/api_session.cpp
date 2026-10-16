@@ -165,10 +165,10 @@ OpenSession::LiveToken::LiveToken(ApiContext& context) : context_(context) {
 }
 
 OpenSession::LiveToken::~LiveToken() {
-    {
-        const std::lock_guard lock(context_.liveMutex);
-        --context_.liveSessions;
-    }
+    // Notified under the lock: the API, waiting for the last session to go,
+    // destroys the context as soon as it takes the lock (L245).
+    const std::lock_guard lock(context_.liveMutex);
+    --context_.liveSessions;
     context_.liveChanged.notify_all();
 }
 

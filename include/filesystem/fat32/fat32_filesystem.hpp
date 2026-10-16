@@ -8,17 +8,32 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
+#include <span>
+#include <string_view>
 #include <vector>
 
 namespace recovery::filesystem::fat32 {
 
 class FatTable;
+class DeletedEntries;
+
+// Whether `head` (the first bytes of where a file may start: kStartCheckBytes,
+// fewer at the end of the volume) starts a file named `name`: true, false, or
+// nullopt when the name tells nothing (no known type for it). Must be safe to
+// call from the thread that scans the filesystem.
+using StartCheck = std::function<std::optional<bool>(std::string_view name, std::span<const std::byte> head)>;
+inline constexpr std::size_t kStartCheckBytes = 4096;
 
 struct Fat32Options {
     // Memory for cached allocation-table pages; bounds memory use on large volumes.
     std::size_t fatCacheBytes = 4 * kMiB;
+    // What starts a file of a given name (the scan's formats). Lets the start
+    // cluster of a deleted file whose top 16 bits were cleared be found when
+    // the entries around it cannot tell (L7). Empty: only they are used.
+    StartCheck startsFile;
 };
 
 // Read-only FAT32 implementation of IFilesystem.
@@ -35,6 +50,13 @@ struct Fat32Options {
 // Deleted files: Windows clears the cluster chain when a file is deleted, so
 // only the start cluster and size survive. Their allocation is reported as
 // ContiguousGuess and flagged when any guessed cluster is in use again.
+// Windows also clears the top 16 bits of the start cluster (FAT32): on a
+// volume of more than 65,535 clusters the start is then inferred from the
+// folder's other entries, from what starts there, and for a folder from its
+// "." and ".." entries (EntryIssue::StartClusterInferred, L7). A deleted
+// folder's chain is gone too: its clusters after the first are found where
+// writers put them, after the folder's last file or after its previous
+// cluster, if they hold folder entries (L8).
 class Fat32Filesystem final : public IFilesystem {
 public:
     ~Fat32Filesystem() override;
@@ -75,8 +97,10 @@ private:
     [[nodiscard]] Resolved resolve(const DirectoryEntry& entry);
     [[nodiscard]] FileAllocation toAllocation(const std::vector<std::uint32_t>& clusters,
                                               std::optional<std::uint64_t> trimTo) const;
+    // `inferDeleted`: place the deleted entries whose start lost its top 16
+    // bits (off for reading the root's label only).
     [[nodiscard]] Result<DirectoryListing> listDirectory(const DirectoryEntry& directory,
-                                                         std::vector<std::uint32_t>* chainOut);
+                                                         std::vector<std::uint32_t>* chainOut, bool inferDeleted);
     [[nodiscard]] std::uint64_t maxDirectoryClusters() const noexcept;
     void log(diagnostics::LogLevel level, std::string_view message,
              std::initializer_list<diagnostics::LogField> fields = {}) const;
@@ -87,6 +111,7 @@ private:
     std::optional<std::uint32_t> recordedFree_;
     std::optional<std::string> rootLabel_;
     std::unique_ptr<FatTable> fat_;
+    std::unique_ptr<DeletedEntries> deleted_;
     diagnostics::Logger* logger_;
 };
 

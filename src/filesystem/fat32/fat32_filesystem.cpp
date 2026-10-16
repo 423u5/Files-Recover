@@ -1,5 +1,6 @@
 #include "filesystem/fat32/fat32_filesystem.hpp"
 
+#include "deleted_entries.hpp"
 #include "directory_parser.hpp"
 #include "fat_table.hpp"
 #include "recovery/byte_order.hpp"
@@ -100,6 +101,7 @@ Fat32Filesystem::Fat32Filesystem(storage::IStorageSource& volume, BootSector boo
     : volume_(volume), boot_(std::move(boot)), logger_(logger) {
     // FatTable keeps a reference to boot_; this object is heap-allocated and never moved.
     fat_ = std::make_unique<FatTable>(volume_, boot_, options.fatCacheBytes);
+    deleted_ = std::make_unique<DeletedEntries>(volume_, boot_, *fat_, std::move(options.startsFile));
     switch (boot_.type) {
     case FatType::Fat32:
         info_.type = FilesystemType::Fat32;
@@ -177,11 +179,12 @@ Result<std::unique_ptr<Fat32Filesystem>> Fat32Filesystem::open(storage::IStorage
         }
     }
 
-    std::unique_ptr<Fat32Filesystem> fs(new Fat32Filesystem(volume, std::move(boot), options, logger));
+    std::unique_ptr<Fat32Filesystem> fs(new Fat32Filesystem(volume, std::move(boot), std::move(options), logger));
     fs->recordedFree_ = recordedFree;
 
     // The volume label entry in the root directory takes precedence over the BPB copy.
-    if (const Result<DirectoryListing> root = fs->readDirectory(fs->rootDirectory()); root.ok() && fs->rootLabel_) {
+    if (const Result<DirectoryListing> root = fs->listDirectory(fs->rootDirectory(), nullptr, false);
+        root.ok() && fs->rootLabel_) {
         fs->info_.label = *fs->rootLabel_;
     }
 
@@ -339,11 +342,11 @@ Result<FileAllocation> Fat32Filesystem::resolveAllocation(const DirectoryEntry& 
 }
 
 Result<DirectoryListing> Fat32Filesystem::readDirectory(const DirectoryEntry& directory) {
-    return listDirectory(directory, nullptr);
+    return listDirectory(directory, nullptr, true);
 }
 
 Result<DirectoryListing> Fat32Filesystem::listDirectory(const DirectoryEntry& directory,
-                                                        std::vector<std::uint32_t>* chainOut) {
+                                                        std::vector<std::uint32_t>* chainOut, bool inferDeleted) {
     if (!directory.isDirectory) {
         return makeError(ErrorCode::InvalidInput, "not a directory");
     }
@@ -362,7 +365,8 @@ Result<DirectoryListing> Fat32Filesystem::listDirectory(const DirectoryEntry& di
     if (fixedRoot) {
         // No chain: the region is listed below.
     } else if (deleted) {
-        // Only the first cluster is known, and only if nothing reused it.
+        // The chain is gone: the first cluster is known, if nothing reused
+        // it; the next ones are found as the entries are read (L8).
         if (fat_->entry(start).kind != FatEntryKind::Free) {
             return makeError(ErrorCode::InvalidFormat, "deleted directory's cluster has been reused");
         }
@@ -402,7 +406,7 @@ Result<DirectoryListing> Fat32Filesystem::listDirectory(const DirectoryEntry& di
     std::vector<std::byte> buffer(fixedRoot ? boot_.bytesPerSector : boot_.clusterSize);
     bool reachedEnd = false;
     for (std::size_t index = 0; index < pieces.size() && !reachedEnd; ++index) {
-        const Piece& piece = pieces[index];
+        const Piece piece = pieces[index];  // a copy: a deleted directory's pieces grow below
         const std::span<std::byte> bytes(buffer.data(), piece.length);
         if (const Status read = volume_.readExact(ByteOffset{piece.offset}, bytes); !read.ok()) {
             const std::string where =
@@ -410,8 +414,11 @@ Result<DirectoryListing> Fat32Filesystem::listDirectory(const DirectoryEntry& di
                     ? "cluster " + std::to_string(piece.cluster)
                     : "root directory sector " + std::to_string((piece.offset - boot_.rootDirOffset) / boot_.bytesPerSector);
             listing.issues.push_back(ScanIssue{ScanIssueKind::DirectoryUnreadable, {}, where + ": " + describe(read.error())});
-            if (deleted) {
+            if (deleted && index == 0) {
                 return makeError(ErrorCode::IoError, "deleted directory cluster is unreadable");
+            }
+            if (deleted) {
+                break;  // no chain to go on with
             }
             continue;
         }
@@ -432,6 +439,14 @@ Result<DirectoryListing> Fat32Filesystem::listDirectory(const DirectoryEntry& di
                 break;
             }
         }
+        // A deleted directory that fills this cluster goes on in one its
+        // chain no longer names (L8).
+        if (deleted && !reachedEnd && index + 1 == pieces.size() && clusters.size() < maxDirectoryClusters()) {
+            if (const std::optional<std::uint32_t> next = deleted_->nextCluster(listing.entries, clusters)) {
+                clusters.push_back(*next);
+                pieces.push_back(Piece{boot_.clusterOffset(*next), boot_.clusterSize, *next});
+            }
+        }
     }
 
     if (parser.garbageSlots() != 0) {
@@ -440,8 +455,12 @@ Result<DirectoryListing> Fat32Filesystem::listDirectory(const DirectoryEntry& di
                                                " slots hold no directory entry (other data in the directory's "
                                                "clusters)"});
     }
-    if (fixedRoot || (!deleted && boot_.type == FatType::Fat32 && start == boot_.rootCluster)) {
+    const bool isRoot = fixedRoot || (!deleted && boot_.type == FatType::Fat32 && start == boot_.rootCluster);
+    if (isRoot) {
         rootLabel_ = parser.volumeLabel();
+    }
+    if (inferDeleted && !fixedRoot) {
+        deleted_->inferStarts(listing.entries, start, isRoot, clusters);
     }
     return listing;
 }
@@ -478,7 +497,7 @@ Result<FileScan> Fat32Filesystem::scan(const ScanLimits& limits, const Cancellat
         const std::string shownPath = work.path.empty() ? "/" : work.path;
 
         std::vector<std::uint32_t> chain;
-        const Result<DirectoryListing> listing = listDirectory(work.directory, work.deleted ? nullptr : &chain);
+        const Result<DirectoryListing> listing = listDirectory(work.directory, work.deleted ? nullptr : &chain, true);
         if (!listing.ok()) {
             const ScanIssueKind kind = listing.error().code == ErrorCode::IoError ? ScanIssueKind::DirectoryUnreadable
                                                                                   : ScanIssueKind::DirectoryInvalid;

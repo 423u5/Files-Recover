@@ -123,7 +123,7 @@ template <> struct EnumLimit<filesystem::AllocationIssue>
 template <> struct EnumLimit<filesystem::EntryState>
     : EnumLimitOf<filesystem::EntryState, filesystem::EntryState::Deleted> {};
 template <> struct EnumLimit<filesystem::EntryIssue>
-    : EnumLimitOf<filesystem::EntryIssue, filesystem::EntryIssue::DamagedRecord> {};
+    : EnumLimitOf<filesystem::EntryIssue, filesystem::EntryIssue::StartClusterInferred> {};
 template <> struct EnumLimit<filesystem::ScanIssueKind>
     : EnumLimitOf<filesystem::ScanIssueKind, filesystem::ScanIssueKind::RecordUnreadable> {};
 template <> struct EnumLimit<RecoveryMethod> : EnumLimitOf<RecoveryMethod, RecoveryMethod::Fragmented> {};

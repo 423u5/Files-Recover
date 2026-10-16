@@ -104,6 +104,41 @@ std::optional<Timestamp> decodeTimestamp(std::uint16_t date, std::uint16_t time,
     return stamp;
 }
 
+bool isDotSlot(std::span<const std::byte> slot) noexcept {
+    return isDotEntry(slot) && (loadU8(slot, 11) & kAttrDirectory) != 0;
+}
+
+bool isPossibleSlot(std::span<const std::byte> e, const BootSector& boot) noexcept {
+    const std::uint8_t first = loadU8(e, 0);
+    const std::uint8_t attributes = loadU8(e, 11);
+    if ((attributes & 0x3F) == kAttrLongName) {
+        if (loadU8(e, 12) != 0 || loadLe16(e, 26) != 0) {
+            return false;
+        }
+        const std::uint8_t ordinal = first & 0x1F;
+        return first == kDeletedMarker ||
+               ((first & ~(kLastLongEntry | 0x1F)) == 0 && ordinal >= 1 && ordinal <= kMaxLongNameParts);
+    }
+    if ((attributes & 0xC0) != 0 || isDotEntry(e)) {
+        return false;
+    }
+    for (std::size_t i = 0; i < 11; ++i) {
+        const std::uint8_t c = loadU8(e, i);
+        const bool deletedMark = i == 0 && (c == kDeletedMarker || c == 0x05);
+        if (!deletedMark && (!isValidShortNameByte(c) || (i == 0 && c == ' '))) {
+            return false;
+        }
+    }
+    const std::uint64_t high = boot.hasFixedRoot() ? 0 : loadLe16(e, 20);
+    const std::uint64_t cluster = (high << 16) | loadLe16(e, 26);
+    // Cluster 1 can be what is left of a start whose top bits were cleared.
+    const bool clearedHigh = first == kDeletedMarker && high == 0 && boot.deletedStartsAmbiguous();
+    if (cluster != 0 && !boot.isValidCluster(cluster) && !clearedHigh) {
+        return false;
+    }
+    return (attributes & kAttrDirectory) != 0 || loadLe32(e, 28) <= boot.volumeBytes;
+}
+
 std::optional<std::u16string> DirectoryParser::takeActiveLongName(std::uint8_t checksum, bool& mismatch) {
     std::vector<LongNamePart> parts;
     parts.swap(pending_);
@@ -221,8 +256,11 @@ bool DirectoryParser::feed(std::span<const std::byte> e, std::uint64_t volumeOff
         }
     }
 
+    // A deleted entry's start may have lost its top 16 bits (L7): cluster 1
+    // is then what is left of a start 65,536 clusters further on.
+    const bool clearedHigh = deleted && high == 0 && boot_.deletedStartsAmbiguous();
     const bool impossibleCluster =
-        entry.firstCluster.value() != 0 && !boot_.isValidCluster(entry.firstCluster.value());
+        entry.firstCluster.value() != 0 && !boot_.isValidCluster(entry.firstCluster.value()) && !clearedHigh;
     if (deleted) {
         // Reject slots that are clearly not a former file entry (garbage).
         if (!nameValid || (attributes & 0xC0) != 0 || impossibleCluster) {

@@ -162,7 +162,8 @@ enum class EntryIssue : std::uint8_t {
     // exFAT: the name does not match the name hash stored with it.
     NameHashMismatch,
     // Part of the metadata was overwritten: attributes, timestamps and the
-    // directory flag are unknown (reported as a plain file).
+    // directory flag are unknown. The entry is a plain file unless its data
+    // shows that it was a directory (exFAT entry sets, L13).
     MetadataIncomplete,
     // The name is empty or contains characters the filesystem forbids.
     InvalidName,
@@ -175,6 +176,11 @@ enum class EntryIssue : std::uint8_t {
     // NTFS: the metadata record is malformed after some point; attributes
     // beyond the damage are ignored.
     DamagedRecord,
+    // FAT32: the top 16 bits of the start cluster were cleared when the entry
+    // was deleted (as Windows does), and firstCluster is where the evidence
+    // places the data: the entries around it, or what starts there (L7).
+    // Last, so the values sessions recorded keep their meaning.
+    StartClusterInferred,
 };
 
 [[nodiscard]] std::string_view toString(EntryIssue issue) noexcept;

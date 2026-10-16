@@ -162,5 +162,39 @@ TEST(FormatRegistryTest, ScannerKeepsTheFormatsItWasCreatedWith) {
     EXPECT_EQ(hits[0].format->descriptor().id, "sized");
 }
 
+// After P20 (L7): what tells apart the places a deleted FAT32 file may start
+// at: whether the bytes there start a file of the format its name stands for.
+TEST(FormatRegistryTest, StartsFileNamedAsksTheFormatsTheExtensionStandsFor) {
+    FormatRegistry registry;
+    FormatDescriptor jpeg = test::scriptedDescriptor("jpeg", "JPEGHEAD");
+    jpeg.extension = "jpg";
+    auto jpegFormat = std::make_shared<test::ScriptedFormat>(jpeg);
+    // Its header check refuses a version byte of 0 after the magic.
+    jpegFormat->onHeader([](std::span<const std::byte> header) {
+        return header.size() > 8 && header[8] != std::byte{0} ? HeaderCheck::accept()
+                                                              : HeaderCheck::reject("version 0");
+    });
+    FormatDescriptor zip = test::scriptedDescriptor("zip", "PKZIPHEAD");
+    zip.extension = "zip";
+    RECOVERY_ASSERT_OK(registry.add(jpegFormat));
+    RECOVERY_ASSERT_OK(registry.add(scripted(zip)));
+
+    const std::vector<std::byte> jpegStart = test::bytesOf("JPEGHEAD1 and the rest");
+    std::vector<std::byte> versionZero = jpegStart;
+    versionZero[8] = std::byte{0};
+    const std::vector<std::byte> zipStart = test::bytesOf("PKZIPHEAD and the rest");
+    const std::vector<std::byte> other = test::bytesOf("nothing in particular");
+
+    EXPECT_EQ(startsFileNamed(registry, "IMG_0001.JPG", jpegStart), true);
+    EXPECT_EQ(startsFileNamed(registry, "holiday.jpeg", jpegStart), true) << "a variant of the extension";
+    EXPECT_EQ(startsFileNamed(registry, "photo.jpg", other), false);
+    EXPECT_EQ(startsFileNamed(registry, "photo.jpg", versionZero), false) << "the header check refuses it";
+    EXPECT_EQ(startsFileNamed(registry, "photo.jpg", {}), false) << "an empty head asks whether the name is known";
+    EXPECT_EQ(startsFileNamed(registry, "archive.zip", jpegStart), false) << "another format's start";
+    EXPECT_EQ(startsFileNamed(registry, "Report.docx", zipStart), true) << "a ZIP-based document";
+    EXPECT_EQ(startsFileNamed(registry, "notes.txt", jpegStart), std::nullopt) << "no format for the name";
+    EXPECT_EQ(startsFileNamed(registry, "README", jpegStart), std::nullopt) << "no extension";
+}
+
 }  // namespace
 }  // namespace recovery::carving

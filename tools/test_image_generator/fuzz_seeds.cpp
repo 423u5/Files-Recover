@@ -361,6 +361,41 @@ Bytes smallFat12() {
     return image;
 }
 
+// After P20 (L7, L8): a FAT32 volume of 70,000 clusters, so that deleted
+// starts may have lost their top 16 bits, with one FAT (273 KiB) and kept up
+// to a little past its last file: deleted files and a deleted folder that
+// grew twice, deleted as Windows deletes (top bits cleared, the folder's
+// whole chain freed), and entries written before their data.
+Bytes deletedStartsFat32() {
+    Fat32BuilderOptions options;
+    options.clusterCount = 70'000;
+    options.fatCount = 1;
+    options.label = "SEEDL7";
+    options.entriesBeforeData = true;
+    Fat32ImageBuilder builder(options);
+    const std::uint32_t root = Fat32ImageBuilder::root();
+    JpegOptions jpeg;
+    jpeg.width = 16;
+    jpeg.height = 16;
+    (void)builder.addFile(root, "PHOTO.JPG", makeJpeg(jpeg));
+    const auto photo = builder.addFile(root, "Deleted photo.jpg", makeJpeg(jpeg));
+    const auto folder = builder.addDirectory(root, "A deleted folder");
+    std::vector<Fat32ImageBuilder::Entry> deleted;
+    for (int i = 1; i <= 10; ++i) {
+        deleted.push_back(
+            builder.addFile(folder.clusters.front(), "Picture number " + std::to_string(i) + ".png", makePng({})));
+    }
+    deleted.push_back(folder);
+    deleted.push_back(photo);
+    deleted.push_back(builder.addFile(root, "Voice note.wav", makeWav({})));
+    for (const auto& entry : deleted) {
+        builder.deleteEntry(entry, true, true);
+    }
+    Bytes image = builder.build();
+    image.resize(std::min<std::size_t>(image.size(), builder.clusterOffset(builder.cursor() + 8)));
+    return image;
+}
+
 Bytes smallExFat() {
     ExFatBuilderOptions options;
     options.clusterCount = 256;
@@ -602,6 +637,10 @@ Status writeFuzzSeeds(const std::filesystem::path& folder) {
                 return added;
             }
         }
+    }
+    // Larger than the scan target's inputs (256 KiB): the filesystem target only.
+    if (Status added = seeds.add("filesystem", "fat32_deleted_starts", deletedStartsFat32()); !added.ok()) {
+        return added;
     }
     for (const auto& [name, bytes] : mediaFiles()) {
         const bool mp4 = name.find("mp4") != std::string::npos || name.find("m4a") != std::string::npos ||

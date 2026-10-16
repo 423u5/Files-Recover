@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -44,5 +45,17 @@ public:
 private:
     std::vector<std::shared_ptr<const IFileFormat>> formats_;
 };
+
+// Whether `head`, the first bytes at some place, start a file named `name`:
+// true when a format the name's extension stands for matches one of its
+// signatures there and its header check takes them, false when none does,
+// and nullopt when no format stands for the extension (so a call with an
+// empty head asks only that). An extension stands for the format whose
+// extension or id it is, or by its common variants (".jpeg", ".mov", ...);
+// Office, OpenDocument, EPUB and Java/Android packages for ZIP; Office 97-2003
+// documents, Outlook messages and Windows Installer packages for OLE2.
+// Places where a deleted file may start are told apart by it (FAT32, L7).
+[[nodiscard]] std::optional<bool> startsFileNamed(const FormatRegistry& formats, std::string_view name,
+                                                  std::span<const std::byte> head);
 
 }  // namespace recovery::carving

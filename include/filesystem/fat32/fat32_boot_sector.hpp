@@ -78,6 +78,12 @@ struct BootSector {
     [[nodiscard]] bool hasFixedRoot() const noexcept { return type != FatType::Fat32; }
 
     [[nodiscard]] std::uint32_t lastCluster() const noexcept { return clusterCount + 1; }
+    // A FAT32 volume of more than 65,535 clusters: a deleted entry whose start
+    // cluster lost its top 16 bits (Windows clears them) may start at any of
+    // several clusters 65,536 apart (L7).
+    [[nodiscard]] bool deletedStartsAmbiguous() const noexcept {
+        return type == FatType::Fat32 && lastCluster() > 0xFFFF;
+    }
     [[nodiscard]] bool isValidCluster(std::uint64_t cluster) const noexcept {
         return cluster >= 2 && cluster <= lastCluster();
     }

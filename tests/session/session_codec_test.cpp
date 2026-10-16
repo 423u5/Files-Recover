@@ -234,7 +234,8 @@ scan::ScanUpdate richUpdate() {
     evidence.created = filesystem::Timestamp{SessionTime{std::chrono::milliseconds{-1234}}, false};
     evidence.modified = filesystem::Timestamp{SessionTime{std::chrono::milliseconds{1'700'000'000'123}}, true};
     evidence.attributes = filesystem::EntryAttributes{true, false, true, false};
-    evidence.entryIssues = {filesystem::EntryIssue::ParentMissing, filesystem::EntryIssue::DamagedRecord};
+    evidence.entryIssues = {filesystem::EntryIssue::ParentMissing, filesystem::EntryIssue::DamagedRecord,
+                            filesystem::EntryIssue::StartClusterInferred};
     evidence.allocation.method = filesystem::AllocationMethod::RunList;
     evidence.allocation.layout = LayoutEvidence::Recorded;
     evidence.allocation.firstCluster = filesystem::ClusterNumber{77};

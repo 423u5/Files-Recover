@@ -572,6 +572,72 @@ TEST(ExFatFilesystemTest, OrphanAfterNewEntrySetOverwroteTheHead) {
     EXPECT_EQ(test::readExtents(*m.source, record->allocation.extents), data);
 }
 
+// L13 (after P20): a deleted folder whose File entry was overwritten is
+// listed from its Stream Extension and File Name entries; its data holds
+// entry sets, so it is a folder, and it is searched like any deleted one.
+TEST(ExFatFilesystemTest, AnOrphanedFolderIsSearched) {
+    ExFatImageBuilder builder;
+    const auto folder = builder.addDirectory(builder.root(), "Old Photos");
+    const auto data = bytesOf(1500, 41);
+    const auto inner = builder.addFile(folder.clusters[0], "beach.jpg", data);
+    builder.deleteEntry(inner);
+    builder.deleteEntry(folder);
+    // A new set took the folder's File entry slot (and is broken itself).
+    const std::span<std::byte> file = builder.slot(folder, 0);
+    file[0] = std::byte{0x85};
+    file[1] = std::byte{0x00};
+    const Mounted m = mount(builder.build());
+
+    const FileScan scan = m.scan();
+    const FileRecord* directory = find(scan, "/Old Photos");
+    ASSERT_NE(directory, nullptr);
+    EXPECT_TRUE(directory->entry.isDirectory);
+    EXPECT_TRUE(directory->entry.hasIssue(EntryIssue::MetadataIncomplete));
+    EXPECT_EQ(directory->entry.state, EntryState::Deleted);
+    const FileRecord* inside = find(scan, "/Old Photos/beach.jpg");
+    ASSERT_NE(inside, nullptr);
+    EXPECT_TRUE(inside->parentDeleted);
+    EXPECT_EQ(inside->entry.state, EntryState::Deleted);
+    EXPECT_EQ(test::readExtents(*m.source, inside->allocation.extents), data);
+}
+
+TEST(ExFatFilesystemTest, AnOrphanedFileOfWholeClustersStaysAFile) {
+    ExFatImageBuilder builder;
+    const auto data = bytesOf(1024, 42);  // two clusters, which hold no entry sets
+    const auto old = builder.addFile(builder.root(), "two clusters.bin", data);
+    builder.deleteEntry(old);
+    const std::span<std::byte> file = builder.slot(old, 0);
+    file[0] = std::byte{0x85};
+    file[1] = std::byte{0x00};
+    const Mounted m = mount(builder.build());
+
+    const FileScan scan = m.scan();
+    const FileRecord* record = find(scan, "/two clusters.bin");
+    ASSERT_NE(record, nullptr);
+    EXPECT_FALSE(record->entry.isDirectory);
+    EXPECT_TRUE(record->entry.hasIssue(EntryIssue::MetadataIncomplete));
+    EXPECT_EQ(test::readExtents(*m.source, record->allocation.extents), data);
+}
+
+TEST(ExFatFilesystemTest, AnOrphanedFolderWhoseClusterWasReusedStaysAFile) {
+    ExFatImageBuilder builder;
+    const auto folder = builder.addDirectory(builder.root(), "Old Photos");
+    (void)builder.addFile(folder.clusters[0], "beach.jpg", bytesOf(1500, 41));
+    builder.deleteEntry(folder);
+    const std::span<std::byte> file = builder.slot(folder, 0);
+    file[0] = std::byte{0x85};
+    file[1] = std::byte{0x00};
+    // A new file took the folder's cluster: what is there now is not the folder.
+    builder.setAllocated(folder.clusters[0], true);
+    const Mounted m = mount(builder.build());
+
+    const FileScan scan = m.scan();
+    const FileRecord* record = find(scan, "/Old Photos");
+    ASSERT_NE(record, nullptr);
+    EXPECT_FALSE(record->entry.isDirectory);
+    EXPECT_EQ(find(scan, "/Old Photos/beach.jpg"), nullptr);
+}
+
 TEST(ExFatFilesystemTest, ExcludingDeletedEntries) {
     ExFatImageBuilder builder;
     const auto file = builder.addFile(builder.root(), "gone.txt", bytesOf(10, 1));

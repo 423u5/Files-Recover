@@ -375,6 +375,68 @@ them images stored in the APK, carved loose because the APK was not verified. Af
 AES-256 PDF `UNVERIFIED`, the others `COMPLETE`; 23 candidates. Each of the 299 images is inside the recovered APK,
 byte for byte, as the user decided for archives (L221).
 
+## After P20: deleted FAT32 starts and folders, orphaned exFAT folders
+
+At the user's request (2026-10-15 and 16), three things deletion takes are found again (L7, L8 and L13 in
+[../limitations.md](../limitations.md); how, in [../architecture/filesystems.md](../architecture/filesystems.md)):
+the top 16 bits of a deleted FAT32 entry's start cluster, a deleted FAT32 folder's clusters after its first, and the
+directory flag of an exFAT folder whose File entry a newer entry set took.
+
+**The corpus.** Two scenarios lay volumes out the way Windows leaves them: `fat32-windows-deleted` (FAT32 of 70,000
+clusters, entries written before their data; deleted photos on both sides of cluster 65,536, a deleted folder of 20
+photos that grew three times, a voice note, a song) and `exfat-orphaned-folder` (a deleted folder whose File entry a
+newer file's four entries took). With the three changes switched off, the deep scan recovered 24 of the FAT32
+scenario's 31 files only as unnamed carves, and the exFAT folder's two photos too. The quick scan was worse: the
+deleted folder's 20 photos and the exFAT photos were missing, and four deleted files beyond cluster 65,536 came back
+under their own names holding other data (CORRUPTED or PARTIAL; one photo held the deleted song's bytes, from the
+cluster its cleared start pointed to). With them, all 33 files come back under their names, complete, in both
+scans. The other 30 scenarios' baselines did not change. Each part was also switched off on its own (nine
+deliberate breaks, the three together among them): every one made a test fail.
+
+**Checks** (2026-10-16, the final sources). msvc-debug, msvc-release and msvc-asan: 1,739 tests each, all passing;
+msvc-analyze without a warning; the fuzz preset's 11 smoke runs and regressions. clang-tidy, both passes, over the changed sources: three
+new findings, fixed (a branch duplicated in the run placement; the FAT32 options, which now hold a `std::function`,
+copied where they could be moved); the rest predate the change and were triaged above.
+
+**A defect found on the way (L245).** The last AddressSanitizer run before the docs were finished crashed once in
+an API test: a worker of the scan's MP4 stage notified a condition variable that the thread waiting on it had
+already destroyed. The order behind it, notifying after unlocking while the waiting thread may destroy the state as
+soon as it takes the lock, was in the parallel runs of the scan and the evaluation since P15, and in the API's
+count of open sessions. Both now notify under the lock. A stress test reproduces the crash on the old code in about
+one AddressSanitizer run in three, and never with the fix (20 runs).
+
+**Fuzzing.** `fuzz_filesystem` now places deleted starts with the formats' start check, as a scan does, and has a
+seed for it (a FAT32 of 70,000 clusters cut short, its files and a folder that grew deleted the Windows way). Ten
+minutes each on the corpora of the earlier campaigns: `fuzz_filesystem` ran 209,895 inputs and its coverage grew
+from 26,608 to 30,582 features (the new code); `fuzz_scan` ran 5,657 whole scans. Nothing failed: no crash, leak,
+timeout or excess memory.
+
+**The test stick.** Its volume is NTFS, so nothing should change, and nothing did: the deep scan of
+`E:\RecoveryTest\sandisk-f-2.img` with the new release build and the scan of the documents build (the last commit's
+behaviour) are identical, all 529 candidates field for field (`tools/regression/compare_reports.py`: none lost,
+worse, better or new), with the same 5,495,720 signature hits and 353 carves. The scan took 32 minutes instead of 13:
+the AddressSanitizer suite ran beside it. The final build, with the fix of L245, scanned it again on its own:
+identical again, in 13:11 minutes.
+
+**Windows-written images** (Windows 10 22H2, 2026-10-16). `tests/reference/make_windows_fat_reference.ps1` had
+Windows format two virtual disks, write files and delete some. Windows 10 clears the top 16 bits of a deleted FAT32
+entry's start, for files and folders: the 21 photos deleted from a camera folder beyond cluster 65,536 kept only the
+low bits, each pointing into another file. The engine placed every one where its data is; 19 match byte for byte,
+and the other 2 had never reached the disk. The camera folder grew the way the L8 search assumes (each new cluster
+after the data written before it), and Windows records a deleted folder's size in its entry (unused yet, L243).
+Every active file of both images was read back byte for byte. The reference tests still failed, on the scenario:
+files deleted seconds after being written, a folder of 125 photos among them, never reached the disk (Windows drops
+what it has not written of a file deleted at once), and on exFAT Windows wrote a newer file's data over the deleted
+folder's own cluster (it takes the lowest free clusters) and its entries at the end of the folder (no orphan,
+L13). The script now flushes before it deletes and its exFAT part was redone. On its next images every reference
+test passes: FAT32, 132 active files and all 147 deleted ones byte for byte, among them a deleted folder of 125
+photos placed by its "." entry (which Windows leaves whole) and read across its three clusters (L8); exFAT, 43
+active files, the six photos of a folder whose File entry Windows reused for a newer file when the folder had no room
+left (the orphan of L13, now seen), and a deleted fragmented file through the FAT chain Windows kept (L12), its
+clusters taken since reported as such. L12, L19 and L21 are resolved. A fourth run, with the script formatting each
+disk before giving it a drive letter (File Explorer no longer offers to format it), made the same images, and every
+reference test passes on them as well.
+
 ## Acceptance
 
 | Criterion | Status |

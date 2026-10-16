@@ -58,13 +58,52 @@ structure breaks, MP4 samples), each validated by its format; the result is COMP
 or UNRECOVERABLE. P7 still reports the guess; the filesystem module is unchanged.
 
 ### L7. Cleared high 16 bits of a deleted entry's start cluster
-**Status:** Open  
+**Status:** Resolved (after P20, the user's request of 2026-10-15): such a start is placed again by the evidence there is; tests `Fat32DeletedStartTest` (`tests/filesystem/fat32_deleted_entry_test.cpp`), corpus scenario `fat32-windows-deleted`  
 Some Windows versions clear the high 16 bits of the start cluster when deleting. On volumes with more
 than 65,535 clusters, such entries point to the wrong cluster. This is not detected or corrected.
 
+After P20: on a FAT32 volume of more than 65,535 clusters, a deleted entry whose start has no top bits may start
+at any of several clusters 65,536 apart. When a directory is listed, the filesystem places each such entry by the
+strongest evidence: a folder by its first cluster ("." names it, ".." the folder listed); a file by its
+neighbours in the listing (it starts where the entry before it ends, or ends where the entry after it starts,
+when the low 16 bits agree; the folder's own clusters are skipped); a run of files that lie one after the other
+by what starts at each place (the scan's formats: the one place where they start files of their names' types).
+A start placed elsewhere is flagged `StartClusterInferred`, and the candidate's layout is `Guessed`. Otherwise the
+start stays as recorded (L242). A recorded start of cluster 1 is now kept as what is left of one 65,536 clusters
+on, not skipped as impossible. On the corpus scenario `fat32-windows-deleted` (70,000 clusters), 24 of its 31
+files were not recovered by name without it, in both deep and quick scans (three camera photos beyond cluster
+65,536, a deleted folder's 20 photos, a voice note), and all 31 are now, complete.
+
+Seen on Windows 10 (2026-10-16, the first image `tests/reference/make_windows_fat_reference.ps1` made, L21):
+Windows 10 clears the top 16 bits when it deletes, for files and folders alike. The 21 photos deleted from a camera
+folder beyond cluster 65,536 kept only the low 16 bits, each pointing into a 260 MB file that holds those clusters
+now; so did a deleted folder and a deleted voice note in the root. The engine placed all 21 photos where their data
+is: 19 match byte for byte, and the data of the other 2 never reached the disk (they were deleted seconds after
+being written, before Windows wrote them, see L21). The voice note was placed by the file after it, where its
+clusters are (also never written). On the script's next image (flushed before the deletions), every deleted file
+is recovered byte for byte: the 21 photos, the voice note, and a deleted folder of 120 photos and a subfolder of 5,
+placed by its "." entry, which Windows leaves whole (with all 32 bits of the folder's cluster) and whose ".." is 0.
+
 ### L8. Only the first cluster of a deleted directory is read
-**Status:** Open  
+**Status:** Resolved (after P20, the user's request of 2026-10-15): the next clusters are found where writers put them; tests `Fat32DeletedFolderTest`, corpus scenario `fat32-windows-deleted`  
 Entries in later clusters of a deleted directory are not found.
+
+After P20: when a deleted folder's cluster is full, the next one is looked for after the data of the last file it
+lists so far (Windows and cameras write a new entry before the new file's data, so a full folder grows there),
+then right after its previous cluster; when that last file's start lost its top bits (L7), at every place it may
+have ended, if only one qualifies. A cluster qualifies when it is free, not yet the folder's, holds directory
+slots only (at least one) and no "." entry. Folders that grew elsewhere still lose their later entries (L243).
+The test builder writes entries before their data when asked (`Fat32BuilderOptions::entriesBeforeData`), and
+deletes a folder's whole chain.
+
+Seen on Windows 10 (2026-10-16, L21): a camera folder of 150 photos grew to four clusters, each new one right after
+the data of the photo written before it (clusters 66,570, 66,718, 66,866 and 67,019), as the search assumes. And
+Windows records a deleted folder's size in its entry, which an active folder's entry leaves 0: 12,288 bytes for a
+folder of three clusters. The search does not use it yet (L243). On the next image, the deleted folder of 120 photos
+and a subfolder grew the same way, and the search found both of its later clusters (67,204 and 67,308): all 125
+photos byte for byte. Its entries were not marked deleted on the disk, and kept their top bits: Windows deleted the
+photos, then the folder at once, and what it had changed in the folder's clusters was never written (as for data,
+L21). Everything in a deleted folder counts as deleted all the same.
 
 ### L9. Orphaned clusters are counted, not listed
 **Status:** Accepted (the user's review of 2026-10-14): carving covers the whole source, so their data is searched all
@@ -82,6 +121,29 @@ from its path as a whole, so such names cannot leave the destination
 (`RecoveryWriterTest.UnsafeNamesStayInsideTheDestination`). A directory name containing `/` still adds a level
 to the recovered tree, and FAT32 still does not flag the name.
 
+### L242. A deleted FAT32 start without evidence stays as recorded
+**Status:** Open (2026-10-15)  
+A deleted entry whose start lost its top 16 bits (L7) is placed again only when a neighbour's end or start, or
+what starts at each place, singles one place out. A file with no such neighbour whose name has no known type
+(text, documents of formats the engine does not carve), or whose possible places all look alike, keeps the start
+recorded, which on a volume of more than 65,535 clusters may be another file's data; a deep scan still carves a
+file of a known type, without its name. Outside a scan (`Fat32Options::startsFile` empty) only the neighbours are
+used.
+
+### L243. A deleted FAT32 folder that grew elsewhere loses its later entries
+**Status:** Open (2026-10-15)  
+A deleted folder's next cluster is looked for at two places only (L8): after the data of the last file it lists so
+far, and right after its previous cluster. A folder that grew while other programs wrote elsewhere, or whose next
+cluster was reused, ends where it cannot be followed: its later entries are not listed, and their files are
+found only by carving. When two places qualify, neither is taken. The place found can be another deleted folder's
+when both grew next to each other: a folder whose last entry so far is a subfolder looks right after the
+subfolder's first cluster, where the subfolder itself may have grown (when its first cluster filled with files
+moved into it, or empty ones, before anything else was written); a subfolder looks right after its first cluster,
+where its parent may have grown. The entries there are then listed in both folders, once under the wrong one:
+duplicates of the same files, nothing lost. A rule telling the two apart would lose a folder's later entries
+whenever it guessed wrong, so none is applied. Windows 10 records a deleted folder's size in bytes in its entry
+(L8): the number of clusters to look for, which the search could use to stop, or to keep looking; it does not yet.
+
 ## exFAT (P5)
 
 ### L11. Deleted fragmented files whose chain was cleared are only a contiguous guess
@@ -92,16 +154,36 @@ P13 reconstructs such files like deleted FAT32 files
 (`FragmentRecoveryTest.ExFatFilesWhoseChainWasClearedAreReconstructed`).
 
 ### L12. Is the chain of a deleted file kept or cleared?
-**Status:** Open (needs a Windows-written image)  
+**Status:** Resolved (2026-10-16): Windows 10 keeps it and clears only the bitmap; seen on an image it wrote (L21)  
 Deletion only has to free clusters in the allocation bitmap. It has not been verified whether Windows
 also clears the FAT chain of deleted fragmented files. The engine handles both cases, but how often
 L11 applies in practice depends on this.
 
+Seen on Windows 10 (2026-10-16): a file made fragmented by appending to it after another file was written (three
+clusters, its FAT chain 9, 11, 12 in use) and then deleted kept its whole chain in the FAT; only its bits in the
+allocation bitmap were cleared. The engine recovered it through that chain (layout `Recorded`, two fragments), and
+reported the two clusters a later file had taken (Windows takes the lowest free clusters for new data) as allocated
+again (`ClustersReallocated`). So on volumes Windows wrote, L11's contiguous guess applies only to chains something
+else has overwritten.
+
 ### L13. Orphaned entries lose the directory flag
-**Status:** Open  
+**Status:** Resolved (after P20, the user's request of 2026-10-15): an orphaned entry whose data holds entry sets is listed as a directory and searched; tests `ExFatFilesystemTest.AnOrphaned*`, corpus scenario `exfat-orphaned-folder`  
 When a deleted File entry was overwritten, the surviving Stream Extension and File Name entries are
 listed (`MetadataIncomplete`), but without attributes or timestamps. A deleted directory found this way
 is reported as a file and not searched.
+
+After P20: such an entry is a directory when its size is whole clusters, its valid data length its size, its first
+cluster free, and the first 4 KiB of its data hold a File entry set, in use or deleted, whose checksum matches,
+and nothing a directory other than the root cannot hold. On the corpus scenario `exfat-orphaned-folder` (a newer
+file's entry set took the folder's File entry), its two photos were not recovered by name without it, and are
+now. Other orphans stay files (L244).
+
+Seen on Windows 10 (2026-10-16, L21): Windows wrote a new entry set at the end of a folder that had room for it, and
+left the deleted entry sets before it whole: no orphan there. In a folder with no room left at the end of its
+cluster, it reused the first deleted entries instead of extending the folder: the newer file's four entries took a
+deleted note's three and a deleted folder's File entry, which left that folder's Stream Extension and File Name
+entries orphaned, the case above. The engine took the orphan for the folder it was and recovered its six photos
+under their paths, byte for byte.
 
 ### L14. Vendor allocation entries are skipped
 **Status:** Accepted (the user's review of 2026-10-14): rare on removable media, and nothing is lost: their clusters
@@ -129,15 +211,26 @@ A boot sector can claim about 2^32 clusters on a tiny image. Every operation sta
 beyond the end of the image is read. Cluster analysis still steps through every FAT page (about
 262,000), which takes about 2 seconds in a debug build.
 
+### L244. An orphaned exFAT directory is recognised by its first entries only
+**Status:** Open (2026-10-15)  
+An orphaned entry (L13) is taken for a directory only when the first 4 KiB of its data hold a File entry set whose
+checksum matches and its first cluster is free. A deleted directory whose first entry sets were orphaned
+themselves, or whose first cluster was reused, stays a file, and the files in it are found only by carving.
+
 ## Cross-checking and test data
 
 ### L19. No exFAT files written by another implementation
-**Status:** Open  
+**Status:** Resolved (2026-10-16): an exFAT volume Windows 10 formatted and filled is read (L21); the builder's up-case table is still partial, which concerns the test images only  
 The exFAT parser has only been checked against empty volumes made by `mkfs.exfat` (exfatprogs), and
 `fsck.exfat` has checked the test builder's images. No image with files written by Windows or Linux has
 been read. `mkfs.exfat` can only format, and writing files needs root (a FUSE or kernel mount), which was
 not available. The builder's up-case table covers ASCII, Latin-1, Greek and Cyrillic, not Windows' full
 table.
+
+After P20 (2026-10-16): `ExFatReferenceImageTest` and `RecoveryReferenceImageTest` pass on an exFAT volume that
+Windows 10 formatted, filled and partly deleted (`tests/reference/make_windows_fat_reference.ps1`, L21): its label,
+cluster size and up-case table, 43 files byte for byte, a deleted folder whose File entry Windows reused (L13), and a
+deleted fragmented file through the chain Windows left (L12).
 
 ### L20. fsck.exfat rejects vendor extension entries
 **Status:** Accepted  
@@ -146,11 +239,38 @@ entries. The images exported for `fsck.exfat` therefore leave them out. The engi
 them.
 
 ### L21. No Windows-written reference images
-**Status:** Open  
+**Status:** Resolved (2026-10-16): `tests/reference/make_windows_fat_reference.ps1` makes a FAT32 and an exFAT image with Windows' own drivers; every reference test passes on them  
 The reference tests (`Fat32ReferenceImageTest`, `ExFatReferenceImageTest`) only run when pointed at a
 directory of images. No image formatted and populated by Windows is in the reference set yet. The FAT32
 cross-check with pyfatfs cannot cover non-ASCII names or deleted files (see
 [testing/testing.md](testing/testing.md)).
+
+After P20 (2026-10-15, with L7 and L8): `tests/reference/make_windows_fat_reference.ps1` makes a FAT32 and an exFAT
+image with Windows' own drivers, deleted files and folders included, and manifests whose `deleted_file` lines the
+reference tests check byte for byte. It needs an elevated PowerShell (it creates and formats virtual disks). Its
+first run (2026-10-16) stopped at its first file, written at the top of the new volume: PowerShell's `New-Item`
+refuses a drive's root folder. Fixed and checked in a dry run (the disk steps replaced by a substituted drive
+letter); a disk the script cannot finish is now detached and its file removed.
+
+Its second run (2026-10-16, Windows 10 22H2) made both images. Every active file was read back byte for byte, and
+19 of the 21 photos deleted from the FAT32 camera folder (L7). What failed was the scenario, not the engine: Windows
+drops what it has not yet written of a file that is deleted at once, so the deleted folder of 125 photos, the voice
+note and the last two photos written before them were zeros on the disk (343 clusters), and the reference tests
+expected their data. On exFAT, Windows put the newer file's entries at the end of the root, which had room (no
+orphan, L13), and its data in the lowest free clusters: the deleted note's and the deleted folder's own, so the
+folder's six names were really gone. The script now flushes the volume before it deletes, and its exFAT part was
+redone around what Windows does (the note made larger than what follows it, a folder filled so that the newer
+entries cannot go at its end, a fragmented file for L12). The test helper that reads a file's extents now reads
+them in pieces the storage layer takes (it failed on the 260 MB file, more than 64 MiB at once).
+
+Its third run (2026-10-16) made the reference set: `Fat32ReferenceImageTest`, `ExFatReferenceImageTest` and both
+`RecoveryReferenceImageTest` cases pass on it. FAT32: 132 active files and all 147 deleted ones byte for byte (L7,
+L8). exFAT: 43 active files, the six photos of a folder whose File entry Windows reused (L13), and a deleted
+fragmented file whose chain Windows kept (L12). The second run's images stay as the record of what Windows does not
+write. During the third run, File Explorer offered to format each new disk, which had a drive letter before its
+filesystem (Cancel was right). The script now gives the letter after the format: its fourth run (2026-10-16) showed
+no such prompt, made the same images (exFAT laid out identically, FAT32 one cluster apart) and every reference test
+passes on them too.
 
 ### L22. exFAT tests borrow helpers from the FAT32 builder
 **Status:** Accepted (tidy-up; the user's review of 2026-10-14): test code only, no effect on the engine  
@@ -2012,3 +2132,27 @@ checks, after each of a scan, a recovery and an imaging, that no handle is open 
 still held its disk), also with only the imaging left unchanged. With the fix, the same 200 ms hold (now after the
 source is closed) leaves both tests passing, six runs of each.
 Whether it was also what failed in CI's debug run of 4497e28 (L197) is still not known: that log was not read.
+
+### L245. A scan's worker could notify a condition variable that no longer existed
+**Status:** Resolved (2026-10-16): workers notify while they hold the lock; test `OrderedWorkTest.AWorkerLeavesTheRunAloneOnceItsResultIsHandedOver`  
+`ApiScanTest.TheEventsTellTheWholeScanInOrder` crashed once in the last AddressSanitizer run of the L7, L8 and L13
+work (`ctest -j 6` on four cores): an access violation in `std::condition_variable::notify_all`, on a worker thread
+of the scan's MP4 stage. It had passed in the run before. The cause, there since P15: `runOrdered`
+(`include/recovery/ordered_work.hpp`, which runs the scan's volume, MP4 and fragment stages and the evaluation in
+parallel) keeps its lock, condition variable and results on the calling thread's stack. A worker stored its result
+and counted itself done under the lock, then notified after unlocking. In between, the calling thread could take the
+lock, find every item done, return and reuse that stack: the worker's notify then used memory that was no longer the
+condition variable. In a release build that is undefined behaviour: mostly harmless, possibly a crash or a corrupted
+stack in the middle of a scan. The API's count of open sessions (`OpenSession::LiveToken`) did the same: the API waits
+for it to reach zero and then destroys the context it shares with the sessions, so closing the API while another
+thread dropped the last reference to a session could meet it too (found by reading every notify in the code; no test
+caught it). The other notifiers were checked: their state is shared (`std::shared_ptr`), or outlives every thread
+that notifies it (a recovery job destroys its worker pool first; an imaging joins its thread first).
+
+Both now notify while they hold the lock: the waiting thread cannot see the change before the lock is released, and
+nothing touches the state after that (destroying a mutex that another thread has just unlocked is allowed). The new
+test hands the last result of a run over, run after run, while the calling thread waits for the lock, and overwrites
+the stack the run used at once. It is a race, so it cannot fail every time: with the old code about one
+AddressSanitizer run of it in three failed with the same access violation (3 of 10 runs; 2 to 5 of 10 in variants of
+it), with the fix none of 20. Whether this was what failed in CI's AddressSanitizer run of 970783b, or its debug run
+of 4497e28 (L197, L241), is not known.

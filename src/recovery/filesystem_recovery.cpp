@@ -149,6 +149,10 @@ std::vector<CandidateWarning> warningsFor(const RecoveryCandidate& candidate) {
         case EntryIssue::DamagedRecord:
             addWarning(warnings, CandidateWarning::MetadataDamaged);
             break;
+        case EntryIssue::StartClusterInferred:
+            // Where the data starts is a conclusion, not a record (the layout says so too).
+            addWarning(warnings, CandidateWarning::LayoutGuessed);
+            break;
         }
     }
     return warnings;
@@ -386,7 +390,9 @@ RecoveryCandidate FilesystemRecovery::buildCandidate(const FileRecord& record, C
 
     if (!located) {
         allocationInfo.layout = LayoutEvidence::None;
-    } else if (allocation.method == AllocationMethod::ContiguousGuess && allocation.clusterCount > 1) {
+    } else if ((allocation.method == AllocationMethod::ContiguousGuess && allocation.clusterCount > 1) ||
+               entry.hasIssue(EntryIssue::StartClusterInferred)) {
+        // A run guessed from its first cluster, or a first cluster inferred (L7).
         allocationInfo.layout = LayoutEvidence::Guessed;
     } else {
         allocationInfo.layout = LayoutEvidence::Recorded;
@@ -444,7 +450,7 @@ Result<std::unique_ptr<Fat32Recovery>> Fat32Recovery::open(storage::IStorageSour
                                                            filesystem::fat32::Fat32Options options,
                                                            diagnostics::Logger* logger) {
     Result<std::unique_ptr<filesystem::fat32::Fat32Filesystem>> fs =
-        filesystem::fat32::Fat32Filesystem::open(volume, options, logger);
+        filesystem::fat32::Fat32Filesystem::open(volume, std::move(options), logger);
     if (!fs.ok()) {
         return fs.error();
     }

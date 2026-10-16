@@ -77,6 +77,8 @@ target_link_libraries(recovery_partition
 # ---------------------------------------------------------------------------
 add_library(recovery_filesystem STATIC
     filesystem/filesystem.cpp
+    filesystem/fat32/deleted_entries.cpp
+    filesystem/fat32/deleted_entries.hpp
     filesystem/fat32/directory_parser.cpp
     filesystem/fat32/directory_parser.hpp
     filesystem/fat32/fat_table.cpp

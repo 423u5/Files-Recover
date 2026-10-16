@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <intrin.h>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -138,6 +139,68 @@ TEST(OrderedWorkTest, AnExceptionInAWorkItemIsAFailure) {
         [&](std::size_t, int&&) -> Status { return success(); });
     RECOVERY_EXPECT_ERROR(status, ErrorCode::InternalError);
     EXPECT_EQ(pool->failedTasks(), 0U);  // caught inside the item, not by the pool
+}
+
+// True on the threads that produce items.
+thread_local bool producing = false;
+
+// A result whose move is slow on the workers only: a worker moves it in while
+// it holds the run's lock, so the calling thread often comes to wait for the
+// lock, and the worker's unlock wakes it.
+struct SlowOnWorkers {
+    int value = 0;
+    SlowOnWorkers() = default;
+    explicit SlowOnWorkers(int v) : value(v) {}
+    SlowOnWorkers(SlowOnWorkers&& other) noexcept : value(other.value) {
+        if (producing) {
+            const auto until = std::chrono::steady_clock::now() + 20us;
+            while (std::chrono::steady_clock::now() < until) {
+            }
+        }
+    }
+    SlowOnWorkers& operator=(SlowOnWorkers&& other) noexcept {
+        value = other.value;
+        return *this;
+    }
+    SlowOnWorkers(const SlowOnWorkers&) = delete;
+    SlowOnWorkers& operator=(const SlowOnWorkers&) = delete;
+    ~SlowOnWorkers() = default;
+};
+
+// Overwrites the stack below the caller, where a run that returned kept its state.
+__declspec(noinline) void overwriteStack() {
+    unsigned char junk[16 * 1024 - 256];
+    __stosb(junk, 0xA5, sizeof junk);
+    const volatile unsigned char kept = junk[sizeof junk - 1];
+    (void)kept;
+}
+
+// After P20 (L245): the calling thread may return, and the run's state with
+// it, the moment the last result is in; a worker must leave that state alone
+// once it has handed its result over. One notified the run's condition
+// variable after unlocking, which AddressSanitizer caught as an access
+// violation in a scan (2026-10-16). Here, run after run, the last result is
+// handed over while the calling thread waits for the lock, and the stack the
+// run used is overwritten at once. It is a race: before the fix, about one
+// AddressSanitizer run of this test in three failed.
+TEST(OrderedWorkTest, AWorkerLeavesTheRunAloneOnceItsResultIsHandedOver) {
+    std::unique_ptr<WorkerPool> pool = makePool(4);
+    ASSERT_NE(pool, nullptr);
+    const auto until = std::chrono::steady_clock::now() + 3s;
+    std::size_t runs = 0;
+    while (std::chrono::steady_clock::now() < until) {
+        const Status status = runOrdered<SlowOnWorkers>(
+            pool.get(), 2, 0, 2,
+            [](std::size_t item) -> Result<SlowOnWorkers> {
+                producing = true;
+                return SlowOnWorkers(static_cast<int>(item));
+            },
+            [](std::size_t, SlowOnWorkers&&) -> Status { return success(); });
+        RECOVERY_EXPECT_OK(status);
+        overwriteStack();
+        ++runs;
+    }
+    EXPECT_GT(runs, 0U);
 }
 
 TEST(OrderedWorkTest, WithoutAPoolItemsRunOneAfterTheOther) {

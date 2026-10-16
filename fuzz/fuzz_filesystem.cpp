@@ -1,8 +1,11 @@
 // Fuzz target: FAT32, exFAT and NTFS volumes and filesystem-based recovery.
 // The input is a volume; it is opened for recovery (each module tried, the
 // backup boot records too), its candidates listed (active and deleted, inside
-// deleted directories), and every candidate's data reconstructed.
+// deleted directories), and every candidate's data reconstructed. Deleted
+// FAT32 starts that lost their top bits are placed as a scan places them,
+// with what starts a file of each format (L7).
 
+#include "carving/format_registry.hpp"
 #include "fuzz_support.hpp"
 #include "recovery/candidate_reader.hpp"
 #include "recovery/cancellation.hpp"
@@ -11,12 +14,18 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
+#include <string_view>
 
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size) {
     using namespace recovery;
     fuzz::FuzzSource source(fuzz::bytesOf(data, size));
     fuzz::require(source.open().ok(), "opening the source");
-    Result<std::unique_ptr<FilesystemRecovery>> opened = openFilesystemRecovery(source, 0);
+    FilesystemRecoveryOptions filesystemOptions;
+    filesystemOptions.fat32.startsFile = [](std::string_view name, std::span<const std::byte> head) {
+        return carving::startsFileNamed(fuzz::allFormats(), name, head);
+    };
+    Result<std::unique_ptr<FilesystemRecovery>> opened = openFilesystemRecovery(source, 0, filesystemOptions);
     if (!opened.ok()) {
         return 0;
     }

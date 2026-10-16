@@ -62,4 +62,14 @@ private:
 [[nodiscard]] std::optional<Timestamp> decodeTimestamp(std::uint16_t date, std::uint16_t time,
                                                        std::uint8_t hundredths, bool& invalid);
 
+// True for a "." or ".." entry: a directory's first cluster starts with them.
+[[nodiscard]] bool isDotSlot(std::span<const std::byte> slot) noexcept;
+
+// True when `slot` (32 bytes, not an end marker) can be a slot of a directory
+// cluster other than a first one: a long-name slot (its type and cluster
+// fields zero, an active one with an ordinal), or an 8.3 entry, active or
+// deleted, with a possible name, attributes, first cluster and size. Tells a
+// deleted directory's later clusters from other data (L8).
+[[nodiscard]] bool isPossibleSlot(std::span<const std::byte> slot, const BootSector& boot) noexcept;
+
 }  // namespace recovery::filesystem::fat32

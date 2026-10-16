@@ -34,6 +34,11 @@ struct Fat32BuilderOptions {
     std::uint16_t rootEntries = 512;
     // The media descriptor, also kept in FAT entry 0 (floppy disks: 0xF0).
     std::uint8_t media = 0xF8;
+    // Write a new entry before its data, as Windows and cameras do: a folder
+    // that fills up then grows before the new file's data is allocated, so
+    // its next cluster follows the data of the file before (L8). Off: the
+    // data is allocated first (the images of the tests before L8).
+    bool entriesBeforeData = false;
 };
 
 // Builds FAT32 volumes in memory the way Windows lays them out: boot sector
@@ -63,14 +68,20 @@ public:
     // Stores the data in exactly these clusters, in this order (fragmentation).
     Entry addFileInClusters(std::uint32_t parent, std::string_view name, std::span<const std::byte> data,
                             const std::vector<std::uint32_t>& clusters);
-    // Deletes like Windows: 0xE5 on every slot of the entry set, chain freed.
-    void deleteEntry(const Entry& entry, bool freeClusters = true);
+    // Deletes like Windows: 0xE5 on every slot of the entry set, chain freed
+    // (a folder's whole chain). `clearHighCluster` also clears the top 16
+    // bits of the start cluster, as Windows does on FAT32 (L7).
+    void deleteEntry(const Entry& entry, bool freeClusters = true, bool clearHighCluster = false);
+    // The clusters of the directory whose first cluster is `directory`.
+    [[nodiscard]] const std::vector<std::uint32_t>& directoryClusters(std::uint32_t directory) const;
 
     void setFat(std::uint32_t cluster, std::uint32_t value);  // all copies
     void setFatInCopy(std::uint32_t copy, std::uint32_t cluster, std::uint32_t value);
     [[nodiscard]] std::uint32_t fat(std::uint32_t cluster, std::uint32_t copy = 0) const;
     // Makes later allocations start `count` clusters further on.
     void skipClusters(std::uint32_t count);
+    // Where the next allocation starts looking for a free cluster.
+    [[nodiscard]] std::uint32_t cursor() const noexcept { return cursor_; }
 
     [[nodiscard]] std::span<std::byte> shortEntry(const Entry& entry);
     [[nodiscard]] std::uint64_t shortEntryOffset(const Entry& entry) const;
@@ -94,6 +105,8 @@ private:
 
     std::uint32_t allocate();
     std::span<std::byte> slot(Directory& directory, std::size_t index);
+    // With entriesBeforeData: grows the parent for the entry set of `name` now.
+    void reserveEntrySet(std::uint32_t parent, std::string_view name);
     std::array<std::byte, 11> shortNameFor(Directory& directory, std::string_view name, bool& needsLongName);
     Entry writeEntrySet(std::uint32_t parent, std::string_view name, std::uint8_t attributes, std::uint32_t cluster,
                         std::uint32_t size);

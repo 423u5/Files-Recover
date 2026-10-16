@@ -25,6 +25,8 @@ constexpr std::uint64_t kMaxDirectoryBytes = 256ULL * 1024 * 1024;
 constexpr std::size_t kDirectoryChunk = 64 * 1024;
 // Clusters counted per step of the cluster analysis (1 MiB of bitmap).
 constexpr std::uint64_t kAnalysisSlice = 8ULL * 1024 * 1024;
+// Bytes of an orphaned entry's data read to tell whether it is a directory.
+constexpr std::uint64_t kOrphanProbeBytes = 4096;
 constexpr std::size_t kBootSectorSize = 512;
 
 std::uint64_t clustersFor(std::uint64_t bytes, std::uint32_t clusterSize) noexcept {
@@ -573,12 +575,39 @@ Result<DirectoryListing> ExFatFilesystem::listDirectory(const DirectoryEntry& di
         listing.issues.push_back(ScanIssue{ScanIssueKind::DirectoryInvalid, {}, std::move(problem)});
     }
     listing.entries = std::move(out.entries);
+    // A deleted directory whose File entry was overwritten lists as a file
+    // without attributes: its data tells (L13).
+    for (DirectoryEntry& entry : listing.entries) {
+        if (!entry.isDirectory && entry.hasIssue(EntryIssue::MetadataIncomplete) && isOrphanedDirectory(entry)) {
+            entry.isDirectory = true;
+        }
+    }
     if (systemEntries != nullptr) {
         systemEntries->bitmaps = std::move(out.bitmaps);
         systemEntries->upcaseTables = std::move(out.upcaseTables);
         systemEntries->label = std::move(out.label);
     }
     return listing;
+}
+
+bool ExFatFilesystem::isOrphanedDirectory(const DirectoryEntry& entry) {
+    const std::uint64_t first = entry.firstCluster.value();
+    // A directory's data is whole clusters, all valid (ValidDataLength = DataLength).
+    if (entry.size == 0 || entry.size % boot_.clusterSize != 0 || entry.validDataLength != entry.size ||
+        !boot_.isValidCluster(first)) {
+        return false;
+    }
+    // Its clusters were freed with it; reused ones hold other data now.
+    if (bitmap_ == nullptr || bitmap_->state(static_cast<std::uint32_t>(first)) != BitState::Free) {
+        return false;
+    }
+    // The first entries suffice: a directory's first entry set starts its data.
+    const std::uint64_t readable = entry.contiguousData ? entry.size : boot_.clusterSize;
+    std::vector<std::byte> head(static_cast<std::size_t>(std::min<std::uint64_t>(kOrphanProbeBytes, readable)));
+    if (!volume_.readExact(ByteOffset{boot_.clusterOffset(static_cast<std::uint32_t>(first))}, head).ok()) {
+        return false;
+    }
+    return holdsEntrySets(head);
 }
 
 Result<FileScan> ExFatFilesystem::scan(const ScanLimits& limits, const CancellationToken& cancel) {

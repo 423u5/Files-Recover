@@ -33,7 +33,7 @@ Run the same suite under AddressSanitizer with `msvc-asan`. Run static analysis 
 | --- | --- | --- |
 | `unit` | `tests/unit` | Memory only (core, storage, imaging metadata, partitions, reconstruction of hand-made candidates and their data as file content, output names), plus temporary files for the destination-guard tests |
 | `integration` | `tests/integration` | Temporary files under `%TEMP%\recovery-tests\<random>`, deleted afterwards; the Windows disk resolver; the Windows disk list (P19: disks opened with desired access 0, nothing read) |
-| `filesystem` | `tests/filesystem` | FAT32 (and FAT16 and FAT12, after P20), exFAT and NTFS volumes generated in memory: normal, deleted, fragmented, contiguous, resident, Unicode, different cluster, sector and record sizes |
+| `filesystem` | `tests/filesystem` | FAT32 (and FAT16 and FAT12, after P20), exFAT and NTFS volumes generated in memory: normal, deleted, fragmented, contiguous, resident, Unicode, different cluster, sector and record sizes; after P20 also deleted FAT32 entries whose starts lost their top 16 bits, deleted folders that grew (`fat32_deleted_entry_test.cpp`, L7, L8) and orphaned exFAT folders (L13) |
 | `corruption` | `tests/corruption` | Damaged FAT32, exFAT and NTFS metadata: loops, cross-links, truncated chains, damaged entry sets, torn and damaged FILE records, invalid run lists, directory cycles, orphans, unreadable sectors, hostile boot sectors and sizes, random mutation (also of recovery candidates and their reconstruction) |
 | `recovery` | `tests/recovery` | Recovery candidates from generated FAT32, exFAT and NTFS volumes (contiguous, fragmented, deleted, partly overwritten, sparse, resident, Unicode and duplicate names, partitioned disks), their reconstructed data compared with the original files, and recovered files written below `%TEMP%\recovery-tests\<random>`. MP4 recovery (P12): FILESYSTEM, HYBRID and CARVING candidates from volumes and virtual sources larger than 4 GiB. Fragment reconstruction (P13): fragmented files on volumes whose free space holds old data, every status, mutation fuzzing |
 | `carving` | `tests/carving` | The carving framework with test-only formats: signatures, registration, scanning, candidate generation, boundaries, bad sectors, cancellation, and virtual images up to 1 TiB (memory only), plus one temporary disk image file |
@@ -45,7 +45,7 @@ Run the same suite under AddressSanitizer with `msvc-asan`. Run static analysis 
 | `metadata` | `tests/metadata` | P17: media metadata of builder files and of files of independent writers checked against exiftool and ffprobe, previews and their bytes, invalid media (garbage, truncation at every position, mutation fuzzing, damaged Exif and ID3), missing metadata; conditions, duplicates under different names, and recovery status, on the scan tests' card and a session written below `%TEMP%\recovery-tests\<random>` |
 | `cli` | `tests/cli`, `tests/CMakeLists.txt` | P18: the command line run in-process on the scan tests' card written as an image file, a disk with three volumes and simulated physical disks: every command, usage errors, invalid paths, errors, Ctrl+C at every stage, journals cut as crashes leave them; files and sessions below `%TEMP%\recovery-tests\<random>`. `recovery.exe` run as a process: exit codes, Unicode paths, a real Ctrl+Break |
 | `api` | `tests/api`, `tests/CMakeLists.txt` | P19: the GUI-facing API on the scan tests' card as an image file and as simulated physical disks, a disk of three volumes, a simulated disk list: a user interface's workflow compiled against the API's public headers alone, scans, events, concurrent queries, cancellation in every stage, pause and resume, recovery, sessions restored after a close and after a crash, reports, details and previews, imaging around bad sectors; files and sessions below `%TEMP%\recovery-tests\<random>` |
-| `corpus` | `tests/corpus`, `tests/support/corpus.cpp` | P20: the corruption corpus (30 generated disks: P20's 26, a FAT16 card, ZIP archives, a FAT12 floppy disk and documents since, covering the plan's 16 categories, each scanned Deep and Quick through the API, recovered, checked against its original files and its recorded baseline), drives of up to 16 TiB as virtual sources, an opt-in sparse image of tens of GiB, and the logging review; images and sessions in memory or below `%TEMP%\recovery-tests\<random>` |
+| `corpus` | `tests/corpus`, `tests/support/corpus.cpp` | P20: the corruption corpus (32 generated disks: P20's 26, a FAT16 card, ZIP archives, a FAT12 floppy disk, documents, a FAT32 volume Windows deleted from and an orphaned exFAT folder since, covering the plan's 16 categories, each scanned Deep and Quick through the API, recovered, checked against its original files and its recorded baseline), drives of up to 16 TiB as virtual sources, an opt-in sparse image of tens of GiB, and the logging review; images and sessions in memory or below `%TEMP%\recovery-tests\<random>` |
 
 ## Test images
 
@@ -115,8 +115,42 @@ nothing more into a folder that holds a deleted entry, so that every deleted nam
 there. On 2026-10-14 (dosfstools 4.2, mtools 4.0.43) `Fat32ReferenceImageTest` and
 `RecoveryReferenceImageTest` passed on all three images.
 
-Images formatted and populated by Windows itself are the preferred reference. Make them on a spare USB
-stick or a VHD, image them, and write a manifest.
+Images formatted and populated by Windows itself are the preferred reference. After P20 (2026-10-15, with L7,
+L8 and L13), `tests/reference/make_windows_fat_reference.ps1` makes two with Windows' own drivers, on virtual
+disks it creates (VHD files; it checks that each attached disk is the empty file-backed disk of its own file
+before it formats it, and detaches it at the end; a disk it cannot finish is detached and its file removed):
+
+- `win_fat32.img`: 600 MB, FAT32 of 4 KiB clusters (about 153,000). A 260 MB file puts what follows beyond cluster
+  65,536; a camera folder of 150 photos with long names grows over several clusters, and every seventh photo is
+  deleted; a folder of 120 photos and a subfolder is deleted whole; a voice note is deleted.
+- `win_exfat.img`: 256 MB, exFAT of 4 KiB clusters: a file made fragmented by appending to it after another file
+  was written, then deleted (whether its chain survives is L12's question, so only its name is listed); a folder
+  filled to 126 of the 128 entries its cluster holds (a note of five clusters, a folder of photos, forty small
+  files), whose note and photos' folder are deleted; then a newer file whose four entries cannot go at the end of
+  the folder's cluster, so that Windows reuses the deleted entries (orphaning the old folder's, L13) or extends the
+  folder.
+
+The photos are JPEG files GDI+ encodes. Each manifest also lists every deleted file with its path, size and CRC-32
+(`deleted_file`), which `Fat32ReferenceImageTest`, `ExFatReferenceImageTest` and `RecoveryReferenceImageTest` check
+byte for byte. What Windows does shaped the scenarios (seen on the first images, 2026-10-16): it drops what it has
+not yet written of a file deleted at once, so the script flushes the volume before it deletes; on exFAT it puts a
+new entry set at the end of a folder that has room, and new data in the lowest free clusters, so what is written
+after the deletions fits where the note was. Run it from an elevated PowerShell (it creates and formats virtual
+disks), into a folder of its own (it never overwrites an image). It formats each new volume before giving it a
+drive letter, so File Explorer does not offer to format it (it did when the letter came first; should it ever, Cancel):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tests\reference\make_windows_fat_reference.ps1 <dir>
+$env:RECOVERY_FAT32_REFERENCE_DIR = "<dir>\fat32"; $env:RECOVERY_EXFAT_REFERENCE_DIR = "<dir>\exfat"
+ctest --preset msvc-debug -R Reference
+```
+
+On 2026-10-16 (Windows 10 22H2), `Fat32ReferenceImageTest`, `ExFatReferenceImageTest` and both
+`RecoveryReferenceImageTest` cases passed on its images: every active file, and every deleted file the manifests
+list, byte for byte. What the images show Windows doing is in [../limitations.md](../limitations.md) (L7, L8, L12,
+L13, L21): it clears the top 16 bits of a deleted FAT32 start, leaves a deleted folder's "." entry whole, grows a
+folder after the data written before, keeps a deleted exFAT file's FAT chain, and reuses deleted exFAT entries
+only when a folder has no room left at its end.
 
 ### Cross-checking exFAT
 
@@ -712,7 +746,7 @@ closed it) and the card's originals, byte for byte. A crash is the session folde
 
 ## Corruption corpus (P20)
 
-`tests/support/corpus.cpp` holds 30 scenarios (P20's 26; since then `fat16-card`, `zip-archives`, `fat12-floppy` and `documents`): disk images built the same, byte for byte, every time, each with the
+`tests/support/corpus.cpp` holds 32 scenarios (P20's 26; since then `fat16-card`, `zip-archives`, `fat12-floppy`, `documents`, `fat32-windows-deleted` and `exfat-orphaned-folder`): disk images built the same, byte for byte, every time, each with the
 original files it holds and what recovery must give back of each (found by the filesystem with its name, found by
 carving only, found but damaged, lost, or stored inside an archive that is recovered: then no file of its own, and
 byte for byte a stored member of a recovered Complete archive, also of an archive stored in one; or an image inside a
@@ -800,7 +834,7 @@ instrumentation without libFuzzer's runtime).
 | Target | What the input is |
 | --- | --- |
 | `fuzz_partition` | The start of a disk (MBR with extended partitions, GPT and its backup, superfloppies); the first byte picks 512 or 4096-byte sectors |
-| `fuzz_filesystem` | A FAT32, exFAT or NTFS volume: opened for recovery (backup boot records too), every candidate listed and its data reconstructed |
+| `fuzz_filesystem` | A FAT12, FAT16, FAT32, exFAT or NTFS volume: opened for recovery (backup boot records too), every candidate listed and its data reconstructed; deleted FAT32 starts that lost their top bits are placed with the formats' start check, as in a scan (L7) |
 | `fuzz_formats` | A file's content for every carving format (ZIP too, since after P20, with the engine's DEFLATE decoder): header check, end detection and structural validation, never past the bytes given |
 | `fuzz_media` | A file for the validation levels and every media decoder (JPEG, PNG inflate, GIF LZW, BMP RLE, VP8/VP8L, ADPCM, AAC, AVC, HEVC) |
 | `fuzz_mp4` | A file for the MP4 parser and analysis: boxes, movie, sample tables, fragments, moov search, sample framing |
@@ -814,7 +848,9 @@ Seeds come from the test builders and samples: `test_image_generator fuzz-seeds 
 volumes, partition tables, every builder file and embedded sample (the ZIP samples and an archive with a PNG stored
 in it too, the document samples, PDFs of every cross-reference layout and compound files of both versions), and real
 session journals below
-`<seeds>\<target>`. From a developer prompt (the targets need AddressSanitizer's runtime DLL):
+`<seeds>\<target>`. One volume is for `fuzz_filesystem` only (after P20, L7 and L8): a FAT32 of 70,000 clusters,
+cut short a little past its last file (326 KiB, more than `fuzz_scan` takes), whose deleted files and deleted
+folder that grew twice were deleted as Windows deletes them. From a developer prompt (the targets need AddressSanitizer's runtime DLL):
 
 ```powershell
 cmake --preset msvc-fuzz

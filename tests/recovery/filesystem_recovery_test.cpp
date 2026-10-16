@@ -122,6 +122,32 @@ TEST(Fat32RecoveryTest, ContiguousFile) {
     expectRecovered(opened, candidate, data);
 }
 
+// L7 (after P20): a deleted file whose start lost its top 16 bits, placed
+// again by the file before it. Where its data lies is a conclusion: the
+// layout is a guess even for one cluster, and the candidate says so.
+TEST(Fat32RecoveryTest, AStartPlacedAgainIsAGuessedLayout) {
+    test::Fat32BuilderOptions options;
+    options.clusterCount = 70'000;
+    test::Fat32ImageBuilder builder(options);
+    builder.skipClusters(0x10000);
+    (void)builder.addFile(test::Fat32ImageBuilder::root(), "before.bin", bytesOf(3000, 1));
+    const auto data = bytesOf(300, 2);  // one cluster
+    const auto entry = builder.addFile(test::Fat32ImageBuilder::root(), "deleted.bin", data);
+    builder.deleteEntry(entry, true, true);
+    const Opened opened = openImage(builder.build());
+
+    const RecoveryCandidate* candidate = candidateAt(opened.scan, "/deleted.bin");
+    ASSERT_NE(candidate, nullptr);
+    const AllocationInfo& allocation = candidate->filesystemEvidence.allocation;
+    EXPECT_EQ(allocation.firstCluster.value(), entry.clusters.front());
+    EXPECT_EQ(allocation.layout, LayoutEvidence::Guessed);
+    EXPECT_TRUE(candidate->filesystemEvidence.hasIssue(filesystem::EntryIssue::StartClusterInferred));
+    EXPECT_TRUE(candidate->hasWarning(CandidateWarning::LayoutGuessed)) << describeCandidate(*candidate);
+    EXPECT_FALSE(candidate->fragmentation.known);
+    EXPECT_EQ(candidate->sourceOffset(), builder.clusterOffset(entry.clusters.front()));
+    expectRecovered(opened, candidate, data);
+}
+
 TEST(Fat32RecoveryTest, FragmentedFileFollowsItsChain) {
     test::Fat32ImageBuilder builder;
     const auto data = bytesOf(5 * kClusterSize - 100, 2);

@@ -76,11 +76,12 @@ template <class T, class Produce, class Consume>
             } catch (...) {
                 result.emplace(makeError(ErrorCode::InternalError, "a work item failed"));
             }
-            {
-                const std::lock_guard lock(shared.mutex);
-                shared.ring[item % window] = std::move(result);
-                --shared.inFlight;
-            }
+            // Notified under the lock: once the last result is in, the
+            // calling thread may return and destroy `shared` as soon as it
+            // takes the lock, so nothing may touch it after the unlock (L245).
+            const std::lock_guard lock(shared.mutex);
+            shared.ring[item % window] = std::move(result);
+            --shared.inFlight;
             shared.changed.notify_all();
         });
         if (!submitted.ok()) {

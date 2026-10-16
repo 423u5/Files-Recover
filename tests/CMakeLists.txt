@@ -122,6 +122,7 @@ add_executable(recovery_filesystem_tests
     filesystem/fat12_filesystem_test.cpp
     filesystem/fat16_filesystem_test.cpp
     filesystem/fat32_boot_sector_test.cpp
+    filesystem/fat32_deleted_entry_test.cpp
     filesystem/fat32_filesystem_test.cpp
     filesystem/fat32_names_test.cpp
     filesystem/fat32_reference_image_test.cpp

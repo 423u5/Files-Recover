@@ -4,10 +4,11 @@
 // directory, each recovered file checked against the manifest's size and
 // CRC-32.
 //
-// Skipped unless RECOVERY_NTFS_REFERENCE_DIR or RECOVERY_FAT32_REFERENCE_DIR
-// names a directory of "<name>.img" / "<name>.manifest" pairs, in the formats
-// documented in tests/filesystem/ntfs_reference_image_test.cpp and
-// fat32_reference_image_test.cpp. See docs/testing/testing.md.
+// Skipped unless RECOVERY_NTFS_REFERENCE_DIR, RECOVERY_FAT32_REFERENCE_DIR or
+// RECOVERY_EXFAT_REFERENCE_DIR names a directory of "<name>.img" /
+// "<name>.manifest" pairs, in the formats documented in
+// tests/filesystem/ntfs_reference_image_test.cpp, fat32_reference_image_test.cpp
+// and exfat_reference_image_test.cpp. See docs/testing/testing.md.
 
 #include "recovery/filesystem_recovery.hpp"
 #include "recovery/recovery_writer.hpp"
@@ -173,12 +174,10 @@ TEST(RecoveryReferenceImageTest, RecoversNtfsManifestFiles) {
     }
 }
 
-TEST(RecoveryReferenceImageTest, RecoversFat32ManifestFiles) {
-    const std::vector<std::filesystem::path> images = imagesIn(L"RECOVERY_FAT32_REFERENCE_DIR");
-    if (images.empty()) {
-        GTEST_SKIP() << "set RECOVERY_FAT32_REFERENCE_DIR to run against externally created images";
-    }
-    for (const std::filesystem::path& imagePath : images) {
+// The FAT32 and exFAT manifests: active files, and deleted files whose data
+// is known ("deleted_file", after P20: what Windows deleted, L7, L8, L13).
+void recoverFatManifestFiles(const wchar_t* variable) {
+    for (const std::filesystem::path& imagePath : imagesIn(variable)) {
         SCOPED_TRACE(imagePath.string());
         storage::DiskImageSource device(imagePath);
         RECOVERY_ASSERT_OK(device.open());
@@ -190,19 +189,36 @@ TEST(RecoveryReferenceImageTest, RecoversFat32ManifestFiles) {
 
         std::size_t recovered = 0;
         for (const std::vector<std::string>& field : manifestOf(imagePath)) {
-            if (field.size() != 3 || field[0] == "deleted") {
-                continue;  // deleted entries are only listed by name
+            const bool deleted = field.size() == 4 && field[0] == "deleted_file";
+            if (field.size() != 3 && !deleted) {
+                continue;  // labels, cluster sizes, deleted entries listed by name
             }
-            const RecoveryCandidate* candidate = find(volumes, field[0], false);
+            const std::string& path = deleted ? field[1] : field[0];
+            const RecoveryCandidate* candidate = find(volumes, path, deleted);
             if (candidate == nullptr) {
-                ADD_FAILURE() << "no candidate for " << field[0];
+                ADD_FAILURE() << "no candidate for " << path;
                 continue;
             }
-            expectRecoveredFile(writer.value(), *candidate, std::stoull(field[1]), field[2]);
+            expectRecoveredFile(writer.value(), *candidate, std::stoull(field[deleted ? 2 : 1]),
+                                field[deleted ? 3 : 2]);
             ++recovered;
         }
         EXPECT_GT(recovered, 0u);
     }
+}
+
+TEST(RecoveryReferenceImageTest, RecoversFat32ManifestFiles) {
+    if (imagesIn(L"RECOVERY_FAT32_REFERENCE_DIR").empty()) {
+        GTEST_SKIP() << "set RECOVERY_FAT32_REFERENCE_DIR to run against externally created images";
+    }
+    recoverFatManifestFiles(L"RECOVERY_FAT32_REFERENCE_DIR");
+}
+
+TEST(RecoveryReferenceImageTest, RecoversExFatManifestFiles) {
+    if (imagesIn(L"RECOVERY_EXFAT_REFERENCE_DIR").empty()) {
+        GTEST_SKIP() << "set RECOVERY_EXFAT_REFERENCE_DIR to run against externally created images";
+    }
+    recoverFatManifestFiles(L"RECOVERY_EXFAT_REFERENCE_DIR");
 }
 
 }  // namespace

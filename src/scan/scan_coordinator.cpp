@@ -2,6 +2,7 @@
 
 #include "carving/content_reader.hpp"
 #include "carving/file_carver.hpp"
+#include "carving/format_registry.hpp"
 #include "evaluation/candidate_evaluation.hpp"
 #include "partition/partition_source.hpp"
 #include "partition/partition_table.hpp"
@@ -365,8 +366,15 @@ Result<ScanCoordinator::Run::VolumeOutcome> ScanCoordinator::Run::openVolume(Vol
         outcome.record = std::move(record);
         return outcome;
     }
+    // What starts a file of a given name tells where a deleted FAT32 file
+    // starts when its start lost its top 16 bits (L7).
+    FilesystemRecoveryOptions filesystemOptions;
+    filesystemOptions.fat32.startsFile = [formats = &owner.formats_](std::string_view name,
+                                                                     std::span<const std::byte> head) {
+        return carving::startsFileNamed(*formats, name, head);
+    };
     Result<std::unique_ptr<FilesystemRecovery>> recovery =
-        openFilesystemRecovery(*outcome.view, record.offset, {}, options.logger);
+        openFilesystemRecovery(*outcome.view, record.offset, filesystemOptions, options.logger);
     if (!recovery.ok()) {
         if (recovery.error().code == ErrorCode::Cancelled) {
             return recovery.error();

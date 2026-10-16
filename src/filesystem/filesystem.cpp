@@ -112,6 +112,8 @@ std::string_view toString(EntryIssue issue) noexcept {
         return "ParentMissing";
     case EntryIssue::DamagedRecord:
         return "DamagedRecord";
+    case EntryIssue::StartClusterInferred:
+        return "StartClusterInferred";
     }
     return "Unknown";
 }

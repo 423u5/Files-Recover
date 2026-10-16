@@ -2195,6 +2195,113 @@ Image documents() {
     return image;
 }
 
+// After P20 (L7, L8): a FAT32 volume of 70,000 clusters (35 MiB, 512-byte
+// clusters, as Windows formats one so small) whose files Windows deleted:
+// each deleted entry lost the top 16 bits of its start cluster, and a deleted
+// folder lost its chain. Entries are written before their data, so a folder
+// that fills up grows after the data written meanwhile. A camera folder whose
+// photos run across cluster 65,536, some of them deleted on either side;
+// beyond it, a folder of photos with long names deleted with its files after
+// it grew three times, and a voice note next to no other file; below it, a
+// song deleted where it was recorded.
+Image fat32WindowsDeleted() {
+    Fat32BuilderOptions options = fatGeometry(1, 70'000, "WINCARD");
+    options.entriesBeforeData = true;
+    FatVolume v(options, 0x1E01);
+    Fat32ImageBuilder& b = v.builder;
+    const std::uint32_t root = Fat32ImageBuilder::root();
+    std::vector<Original> files;
+    std::vector<Fat32ImageBuilder::Entry> deleted;
+
+    const Bytes keep = cameraJpeg(3001, 320, 240);
+    (void)b.addFile(root, "KEEP.JPG", keep);
+    files.push_back(named("/KEEP.JPG", keep));
+    const Bytes song = mp3(3002, 120);
+    deleted.push_back(b.addFile(root, "Old song.mp3", song));
+    files.push_back(named("/Old song.mp3", song, Expected::Complete, "deleted below cluster 65,536: kept where recorded"));
+
+    // Space used and freed long ago: the camera's photos (about 25 clusters
+    // each) start 88 clusters before cluster 65,536.
+    b.skipClusters(65'536 - 90 - b.cursor());
+    const std::uint32_t dcim = v.folder(root, "DCIM");
+    const auto camera = b.addDirectory(dcim, "100CANON");
+    for (int i = 1; i <= 8; ++i) {
+        const Bytes shot = cameraJpeg(3010 + static_cast<std::uint64_t>(i), 256, 192);
+        const std::string name = "IMG_000" + std::to_string(i) + ".JPG";
+        const auto entry = b.addFile(camera.clusters.front(), name, shot);
+        if (i % 3 == 1) {
+            files.push_back(named("/DCIM/100CANON/" + name, shot));
+        } else {
+            deleted.push_back(entry);
+            files.push_back(named("/DCIM/100CANON/_" + name.substr(1), shot, Expected::Complete,
+                                  "deleted: its start lost its top bits, placed after the photo before it"));
+        }
+    }
+    const auto holiday = b.addDirectory(root, "Holiday 2024");
+    for (int i = 1; i <= 20; ++i) {
+        const Bytes photo = jpeg(3030 + static_cast<std::uint64_t>(i), 96, 72);
+        const std::string name = "Holiday photo " + std::string(i < 10 ? "0" : "") + std::to_string(i) + ".jpg";
+        deleted.push_back(b.addFile(holiday.clusters.front(), name, photo));
+        files.push_back(named("/Holiday 2024/" + name, photo, Expected::Complete,
+                              "deleted with its folder, which grew three times"));
+    }
+    deleted.push_back(holiday);
+    b.skipClusters(200);
+    const Bytes voice = wav(3060, 20000);
+    deleted.push_back(b.addFile(root, "Voice note.wav", voice));
+    files.push_back(named("/Voice note.wav", voice, Expected::Complete, "deleted, next to no other file"));
+
+    // Windows deletes a folder's files before the folder.
+    for (const auto& entry : deleted) {
+        b.deleteEntry(entry, true, true);
+    }
+    Image image;
+    image.bytes = b.build();
+    image.originals = std::move(files);
+    return image;
+}
+
+// After P20 (L13): exFAT, a folder deleted with its photos whose File entry
+// the entry set of a newer file took (Windows writes a new set into the first
+// free entries): the folder's Stream Extension and File Name entries are left.
+Image exfatOrphanedFolder() {
+    ExFatVolume v(exfatGeometry(3, 2048, "EXORPHAN"), 0x1F01);  // 4 KiB clusters, 8 MiB
+    ExFatImageBuilder& b = v.builder;
+    const std::uint32_t root = b.root();
+    std::vector<Original> files;
+
+    const auto note = b.addFile(root, "a.txt", text(3101, 300));  // three entries
+    const auto album = b.addDirectory(root, "Old Photos");        // three entries
+    const Bytes beach = jpeg(3102, 240, 180);
+    const auto e1 = b.addFile(album.clusters.front(), "Beach.jpg", beach);
+    const Bytes party = png(3103, 128, 96);
+    const auto e2 = b.addFile(album.clusters.front(), "Party.png", party);
+    const Bytes kept = cameraJpeg(3104, 320, 240);
+    (void)b.addFile(root, "Kept.jpg", kept);
+    files.push_back(named("/Kept.jpg", kept));
+    for (const auto& entry : {note, e1, e2, album}) {
+        b.deleteEntry(entry);
+    }
+    // The newer file's four entries go where a.txt's three and the folder's File entry were.
+    const Bytes newer = png(3105, 96, 72);
+    const auto added = b.addFile(root, "A newer picture.png", newer);
+    for (std::size_t i = 0; i < added.slotCount; ++i) {
+        const std::span<std::byte> from = b.slot(added, i);
+        const std::span<std::byte> to = b.directorySlot(root, note.firstSlot + i);
+        std::copy(from.begin(), from.end(), to.begin());
+        std::fill(from.begin(), from.end(), std::byte{0});  // the directory ends there again
+    }
+    files.push_back(named("/A newer picture.png", newer));
+    files.push_back(named("/Old Photos/Beach.jpg", beach, Expected::Complete,
+                          "deleted with its folder, whose File entry a newer set took"));
+    files.push_back(named("/Old Photos/Party.png", party, Expected::Complete,
+                          "deleted with its folder, whose File entry a newer set took"));
+    Image image;
+    image.bytes = b.build();
+    image.originals = std::move(files);
+    return image;
+}
+
 struct Entry {
     Scenario scenario;
     std::function<Image()> make;
@@ -2266,6 +2373,10 @@ const std::vector<Entry>& entries() {
         add("documents", "FAT32: named, deleted and unnamed PDF, OLE2 (DOC, XLS, PPT, MSG, MSI) and ZIP-based "
             "documents, files real writers made, text named .doc, images in documents",
             {"normal files", "deleted files", "fragmented files", "corrupt media"}, documents);
+        add("fat32-windows-deleted", "FAT32 of 70,000 clusters: files and folders Windows deleted, their starts' top "
+            "16 bits cleared, a deleted folder that grew three times", {"deleted files"}, fat32WindowsDeleted);
+        add("exfat-orphaned-folder", "exFAT: a folder deleted with its photos, its File entry taken by a newer "
+            "file's entry set", {"deleted files", "corrupt filesystem metadata"}, exfatOrphanedFolder);
         return list;
     }();
     return all;

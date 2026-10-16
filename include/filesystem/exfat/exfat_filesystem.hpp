@@ -51,6 +51,9 @@ struct ExFatOptions {
 // is recovered as its exact run; a FAT-chained file uses its old chain when
 // the chain survived deletion intact, and a contiguous guess otherwise.
 // Either way the allocation bitmap tells whether the clusters were reused.
+// When a deleted set's File entry was overwritten, its Stream Extension and
+// File Name entries are listed on their own (MetadataIncomplete): as a
+// directory, searched like any deleted one, when its data holds entry sets.
 class ExFatFilesystem final : public IFilesystem {
 public:
     ~ExFatFilesystem() override;
@@ -107,6 +110,10 @@ private:
                                               std::optional<std::uint64_t> trimTo) const;
     [[nodiscard]] Result<DirectoryListing> listDirectory(const DirectoryEntry& directory, std::uint64_t budget,
                                                          bool& truncated, ParseOutput* systemEntries);
+    // Whether an orphaned entry (its File entry overwritten: no attributes)
+    // is a deleted directory: its data is whole clusters, free now, that
+    // start with entry sets (L13).
+    [[nodiscard]] bool isOrphanedDirectory(const DirectoryEntry& entry);
     [[nodiscard]] std::uint64_t maxDirectoryClusters() const noexcept;
     void log(diagnostics::LogLevel level, std::string_view message,
              std::initializer_list<diagnostics::LogField> fields = {}) const;

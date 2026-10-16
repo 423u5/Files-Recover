@@ -319,6 +319,15 @@ std::span<std::byte> Fat32ImageBuilder::slot(Directory& directory, std::size_t i
     return std::span<std::byte>(image_).subspan(static_cast<std::size_t>(offset), 32);
 }
 
+void Fat32ImageBuilder::reserveEntrySet(std::uint32_t parent, std::string_view name) {
+    if (!options_.entriesBeforeData) {
+        return;
+    }
+    Directory& directory = directories_.at(parent);
+    const std::size_t slots = 1 + (fitsShortName(name) ? 0 : (utf8ToUtf16(name).size() + 12) / 13);
+    (void)slot(directory, directory.nextSlot + slots - 1);
+}
+
 std::array<std::byte, 11> Fat32ImageBuilder::shortNameFor(Directory& directory, std::string_view name,
                                                           bool& needsLongName) {
     std::array<std::byte, 11> result{};
@@ -409,6 +418,7 @@ Fat32ImageBuilder::Entry Fat32ImageBuilder::writeEntrySet(std::uint32_t parent, 
 }
 
 Fat32ImageBuilder::Entry Fat32ImageBuilder::addDirectory(std::uint32_t parent, std::string_view name) {
+    reserveEntrySet(parent, name);
     const std::uint32_t cluster = allocate();
     const auto offset = static_cast<std::ptrdiff_t>(clusterOffset(cluster));
     std::fill(image_.begin() + offset, image_.begin() + offset + clusterSize_, std::byte{0});
@@ -444,6 +454,7 @@ void Fat32ImageBuilder::writeData(const std::vector<std::uint32_t>& clusters, st
 
 Fat32ImageBuilder::Entry Fat32ImageBuilder::addFile(std::uint32_t parent, std::string_view name,
                                                     std::span<const std::byte> data) {
+    reserveEntrySet(parent, name);
     std::vector<std::uint32_t> clusters;
     const std::size_t needed = data.empty() ? 0 : (data.size() - 1) / clusterSize_ + 1;
     for (std::size_t i = 0; i < needed; ++i) {
@@ -472,6 +483,7 @@ Fat32ImageBuilder::Entry Fat32ImageBuilder::addFileInClusters(std::uint32_t pare
         }
         setFat(c, kEndOfChain);
     }
+    reserveEntrySet(parent, name);  // the parent grows elsewhere: these are taken
     for (std::size_t i = 0; i + 1 < clusters.size(); ++i) {
         setFat(clusters[i], clusters[i + 1]);
     }
@@ -482,16 +494,27 @@ Fat32ImageBuilder::Entry Fat32ImageBuilder::addFileInClusters(std::uint32_t pare
     return entry;
 }
 
-void Fat32ImageBuilder::deleteEntry(const Entry& entry, bool freeClusters) {
+void Fat32ImageBuilder::deleteEntry(const Entry& entry, bool freeClusters, bool clearHighCluster) {
     Directory& directory = directories_.at(entry.directory);
     for (std::size_t index = entry.firstSlot; index <= entry.shortSlot; ++index) {
         slot(directory, index)[0] = std::byte{0xE5};
     }
+    if (clearHighCluster) {
+        storeLe16(slot(directory, entry.shortSlot), 20, 0);
+    }
     if (freeClusters) {
-        for (const std::uint32_t c : entry.clusters) {
+        // A folder's chain grew as it filled up.
+        const std::vector<std::uint32_t>& clusters =
+            entry.isDirectory && !entry.clusters.empty() ? directories_.at(entry.clusters.front()).clusters
+                                                         : entry.clusters;
+        for (const std::uint32_t c : clusters) {
             setFat(c, 0);
         }
     }
+}
+
+const std::vector<std::uint32_t>& Fat32ImageBuilder::directoryClusters(std::uint32_t directory) const {
+    return directories_.at(directory).clusters;
 }
 
 std::span<std::byte> Fat32ImageBuilder::shortEntry(const Entry& entry) {
@@ -520,11 +543,16 @@ std::vector<std::byte> Fat32ImageBuilder::build() {
 std::vector<std::byte> readExtents(storage::IStorageSource& volume, const std::vector<filesystem::Extent>& extents) {
     std::vector<std::byte> out;
     for (const filesystem::Extent& extent : extents) {
-        std::vector<std::byte> piece(static_cast<std::size_t>(extent.length));
-        if (!volume.readExact(ByteOffset{extent.offset}, piece).ok()) {
-            throw std::runtime_error("extent unreadable");
+        // In reads a source takes (a file of a reference image can be larger than kMaxReadSize).
+        for (std::uint64_t done = 0; done < extent.length;) {
+            const std::uint64_t length = std::min<std::uint64_t>(extent.length - done, storage::kMaxReadSize);
+            std::vector<std::byte> piece(static_cast<std::size_t>(length));
+            if (!volume.readExact(ByteOffset{extent.offset + done}, piece).ok()) {
+                throw std::runtime_error("extent unreadable");
+            }
+            out.insert(out.end(), piece.begin(), piece.end());
+            done += length;
         }
-        out.insert(out.end(), piece.begin(), piece.end());
     }
     return out;
 }

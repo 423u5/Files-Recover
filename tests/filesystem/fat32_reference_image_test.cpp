@@ -6,6 +6,7 @@
 // of "<name>.img" and "<name>.manifest". Manifest lines, tab-separated:
 //   <absolute path>\t<size>\t<CRC-32 as 8 hex digits>   an active file
 //   deleted\t<file name>                                 a deleted entry
+//   deleted_file\t<absolute path>\t<size>\t<CRC-32>      a deleted file whose data is known
 // See docs/testing/testing.md.
 
 #include "filesystem/fat32/fat32_filesystem.hpp"
@@ -86,6 +87,20 @@ TEST(Fat32ReferenceImageTest, MatchesManifests) {
                     return r.entry.state == EntryState::Deleted && r.entry.name == second;
                 });
                 EXPECT_TRUE(found) << "deleted entry not found: " << second;
+                ++checked;
+                continue;
+            }
+            if (first == "deleted_file") {
+                // A deleted file whose data is known: where its entry places it holds it.
+                std::string fourth;
+                std::getline(fields, fourth, '\t');
+                const auto record = std::find_if(scan->records.begin(), scan->records.end(), [&](const FileRecord& r) {
+                    return r.path == second && r.entry.state == EntryState::Deleted;
+                });
+                ASSERT_NE(record, scan->records.end()) << "missing deleted " << second;
+                EXPECT_EQ(record->entry.size, std::stoull(third)) << second;
+                const std::vector<std::byte> data = test::readExtents(part, record->allocation.extents);
+                EXPECT_EQ(crc32(data), static_cast<std::uint32_t>(std::stoul(fourth, nullptr, 16))) << second;
                 ++checked;
                 continue;
             }
