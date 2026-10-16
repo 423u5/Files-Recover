@@ -24,15 +24,17 @@ namespace recovery::cli {
 
 // What --source names.
 struct SourceSpec {
-    // A physical disk (\\.\PhysicalDriveN), or else an image file.
+    // A physical disk (\\.\PhysicalDriveN); a drive ("F:\"), whose disk is
+    // read whole (L177); or else an image file.
     std::optional<std::uint32_t> disk;
+    std::optional<std::filesystem::path> drive;
     std::filesystem::path image;
 };
 
 // --source, by its spelling alone (a usage error otherwise): a physical disk,
-// or a path taken as an image file. Device paths other than
-// \\.\PhysicalDriveN (volumes, \\.\E:) are refused: the engine reads whole
-// disks and image files.
+// a drive letter ("F:", "F:\"), or a path taken as an image file. Device
+// paths other than \\.\PhysicalDriveN (volumes, \\.\E:) are refused: the
+// engine reads whole disks and image files.
 [[nodiscard]] Result<SourceSpec> parseSource(std::string_view option, std::string_view text);
 
 struct OpenedSource {
@@ -42,22 +44,26 @@ struct OpenedSource {
     std::optional<imaging::ImageMetadata> imageMetadata;
 };
 
-// Opens `spec` read-only. An image's logical sector size is `sectorSize`, else
-// its metadata's, else 512. Warns about an image whose metadata says it is
-// incomplete or cannot be read. The error explains what to do where it can
-// (a drive letter: the disk it is on; access denied: administrator rights).
+// Opens `spec` read-only. A drive's disk is the one Windows says it is on,
+// which a note names; a drive on several disks is refused. An image's
+// logical sector size is `sectorSize`, else its metadata's, else 512. Warns
+// about an image whose metadata says it is incomplete or cannot be read. The
+// error explains what to do where it can (access denied: administrator
+// rights).
 [[nodiscard]] Result<OpenedSource> openSource(const SourceSpec& spec, std::optional<std::uint32_t> sectorSize,
                                               Context& context);
 
-// Opens the source a session records: the same disk, or the same image file
-// with the same sector size. Whether it is unchanged is the session's check.
+// Opens the source a session records: the same image file with the same
+// sector size, or the same disk, under the number it had or another one
+// (session::findSessionDisk, L147; a note says when it has another). Whether
+// it is unchanged is the session's check.
 [[nodiscard]] Result<OpenedSource> openRecordedSource(const session::SessionSource& recorded, Context& context);
 
-// What a destination check needs of a session's source.
-[[nodiscard]] storage::SourceInfo sourceInfoOf(const session::SessionSource& recorded);
-// The same from a source's type and path alone (a session's summary): a
-// physical disk's number is read from its path.
-[[nodiscard]] storage::SourceInfo sourceInfoOf(storage::SourceType type, std::string_view path);
+// What a file the command writes without opening the session's source (a
+// report, a log) must not be on: the session's image file, or every disk
+// attached that may be the session's disk (session::possibleSessionSources).
+[[nodiscard]] std::vector<storage::SourceInfo> protectedSourcesOf(const session::SessionSource& recorded,
+                                                                  Context& context);
 
 // The unreadable regions an image's metadata lists (the image holds zeros
 // there): a scan and recovery treat them as unreadable.

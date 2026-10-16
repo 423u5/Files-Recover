@@ -66,16 +66,47 @@ TEST_F(CliErrorsTest, ASourceThatDoesNotExist) {
     EXPECT_FALSE(std::filesystem::exists(dir.path() / "copy.img"));
 }
 
-TEST_F(CliErrorsTest, ASourceThatIsAFolderOrADrive) {
+TEST_F(CliErrorsTest, ASourceThatIsAFolder) {
     expectError(cli.run({"inspect", "--source", arg(dir.path())}), "inspect", "is a folder, not an image file");
-    // A drive: the disk it is on is named.
-    expectError(cli.run({"inspect", "--source", "C:\\"}), "inspect",
-                "'C:\\' is a drive, not an image file: the engine reads whole disks; use --source "
-                "\\\\.\\PhysicalDrive0 for the disk it is on (as an administrator)");
-    cli.environment().diskResolver = [](const std::filesystem::path&) -> Result<std::vector<std::uint32_t>> {
-        return std::vector<std::uint32_t>{1, 2};
+}
+
+// L177: a drive letter names the disk it is on, read whole; a drive whose
+// disk cannot be told, or that spans several, is refused, naming them.
+TEST_F(CliErrorsTest, ADriveLetterIsTheWholeDiskItIsOn) {
+    const test::SimulatedDisk disk = test::simulatedDisk(test::card());
+    cli.environment().diskOpener = disk.opener;
+    std::vector<std::uint32_t> on = {7};
+    std::optional<Error> unknown;
+    cli.environment().diskResolver = [&](const std::filesystem::path& path) -> Result<std::vector<std::uint32_t>> {
+        if (path.root_name() != std::filesystem::path("F:")) {
+            return std::vector<std::uint32_t>{0};
+        }
+        if (unknown.has_value()) {
+            return *unknown;
+        }
+        return on;
     };
-    expectError(cli.run({"scan", "--source", "C:"}), "scan", "use --source \\\\.\\PhysicalDriveN for the disk");
+    for (const std::string spelled : {"F:", "f:\\", "F:/"}) {
+        SCOPED_TRACE(spelled);
+        const CliResult inspected = cli.run({"inspect", "--source", spelled});
+        ASSERT_EQ(inspected.code, ExitCode::Success) << inspected;
+        EXPECT_NE(inspected.err.find("F: is on \\\\.\\PhysicalDrive7: the whole disk is read, every volume on it"),
+                  std::string::npos)
+            << inspected;
+        EXPECT_NE(inspected.out.find("Device:          \\\\.\\PhysicalDrive7"), std::string::npos) << inspected;
+        ASSERT_FALSE(disk.opener->calls().empty());
+        EXPECT_EQ(disk.opener->calls().back().path, std::filesystem::path(L"\\\\.\\PhysicalDrive7"));
+    }
+    on = {1, 2};
+    expectError(cli.run({"scan", "--source", "F:"}), "scan",
+                "F: spans several disks (\\\\.\\PhysicalDrive1, \\\\.\\PhysicalDrive2): give the one to read with "
+                "--source");
+    on = {};
+    expectError(cli.run({"scan", "--source", "F:"}), "scan", "F: is on no physical disk");
+    unknown = makeError(ErrorCode::IoError, "the device is not ready", 21);
+    expectError(cli.run({"scan", "--source", "F:\\"}), "scan",
+                "cannot tell which disk F: is on (the device is not ready): give the disk itself, --source "
+                "\\\\.\\PhysicalDriveN (recovery disks lists the disks) (system error 21: ");
     EXPECT_FALSE(std::filesystem::exists(sessions));
 }
 

@@ -207,6 +207,7 @@ void jsonSource(JsonWriter& json, const session::SessionSource& source) {
     json.field("vendor", source.vendor);
     json.field("product", source.product);
     json.field("removable", source.removable);
+    json.field("serialNumber", source.serialNumber);
     json.key("fingerprint");
     json.beginObject();
     json.field("sha256", source.fingerprint.digest.hex());
@@ -414,6 +415,9 @@ std::string textReport(const SessionReport& report, bool details) {
 
     out << "\nSource\n";
     out << "  Source:        " << sourceText(info.source) << '\n';
+    if (!info.source.serialNumber.empty()) {
+        out << "  Serial number: " << printable(info.source.serialNumber) << '\n';
+    }
     out << "  Size:          " << formatBytes(info.source.size) << '\n';
     out << "  Sector size:   " << info.source.sectorSize << " bytes\n";
     out << "  Fingerprint:   SHA-256 " << info.source.fingerprint.digest.hex() << " ("

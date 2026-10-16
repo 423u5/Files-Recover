@@ -120,6 +120,7 @@ See [docs/testing/testing.md](docs/testing/testing.md) for how to test safely.
 `build\msvc-release\tools\recovery_cli\recovery.exe` (`recovery help <command>` shows every option):
 
 ```powershell
+recovery disks                                             # the physical disks, as --source names them
 recovery inspect --source card.img                         # size, partitions, filesystems
 recovery image --source \\.\PhysicalDrive2 --output D:\card.img   # as an administrator; --resume goes on
 recovery scan --source D:\card.img --mode deep             # prints the session's id
@@ -128,7 +129,10 @@ recovery report --session <id> --format json --output D:\card-report.json
 recovery report                                            # the sessions
 ```
 
-The source is only read, and nothing is written on its disk. Sessions are kept in
+A source is an image file, a physical disk (`\\.\PhysicalDriveN`), or a drive letter (`F:`) for the whole disk it is
+on. A session finds its disk again if Windows gives it another number (the same device, unchanged), and `recover`
+also writes what an unfinished scan has delivered so far (with a warning). The source is only read, and nothing is
+written on its disk. Sessions are kept in
 `%LOCALAPPDATA%\RecoveryEngine\Sessions` unless `--sessions-dir` names another folder. After Ctrl+C or a crash, run
 the same command again (`recovery scan --session <id>` for a scan) and it goes on where it stopped. Exit codes:
 0 done, 1 wrong command line, 2 failed, 3 stopped, 4 done but not everything could be read or written. See

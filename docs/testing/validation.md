@@ -437,6 +437,37 @@ clusters taken since reported as such. L12, L19 and L21 are resolved. A fourth r
 disk before giving it a drive letter (File Explorer no longer offers to format it), made the same images, and every
 reference test passes on them as well.
 
+## After P20: a session's disk under another number, unfinished scans, the disk list
+
+At the user's request (2026-10-16), three limitations of sessions and the command line are resolved (L147, L172 and
+L177 in [../limitations.md](../limitations.md); how, in [../recovery/sessions.md](../recovery/sessions.md) and
+[../recovery/cli.md](../recovery/cli.md)): a session finds its physical disk when Windows gives it another number,
+`recover` writes what an unfinished scan delivered, and `recovery disks` lists the disks (with `--source F:` for the
+whole disk a drive is on).
+
+**The user's choice.** The disk must be the same device, not only hold the same content: the session's content in
+another device (another serial number: a card moved to another card reader) is refused (L246, accepted). A session
+that recorded no serial number tells its device by vendor and product (L247, open for review).
+
+**A defect found on the way.** The guard that keeps reports and logs off the source (`report --output`, `--log`,
+the API's `exportReport`) used the disk number the session recorded. After a renumbering it protected whichever disk
+had that number, and not the session's own. It now protects every disk that may be the session's.
+
+**Tests.** Simulated disks by number (`tests/support/disk_rack`), moved to other numbers with another card under the
+old one: a session, the CLI and the API each stop a scan in the source pass, resume it on the disk under its new
+number to the uninterrupted result, and recover there; the old number is refused with nothing recorded; the same
+content in another device, a device written to since, and a journal's unusable `SourceFound` record (damage) are
+refused. A scan stopped in its evaluation is recovered from (a warning, exit code 4), then the rest once the scan is
+done: the folder ends as a recovery of a complete scan makes it (run 20 times, stable). On this computer,
+`recovery disks` listed both disks with the serial numbers Windows reports (`Get-Disk`), without administrator rights.
+
+**Checks** (2026-10-16, the final sources). msvc-debug, msvc-release and msvc-asan: 1,753 tests each, all passing;
+msvc-analyze without a warning; the fuzz preset's 11 smoke runs and regressions; `fuzz_journal`, which knows the new
+record type and has a seed of it, 3 minutes on the seeds (334,214 inputs): nothing found. clang-tidy, both passes,
+over the session, API, CLI, storage and checkpoint sources (40 files): no finding on a line this work changed; the
+rest predate it and were triaged above. The test stick was not
+scanned again, with the user's agreement: nothing a scan reads or a recovery writes changed.
+
 ## Acceptance
 
 | Criterion | Status |

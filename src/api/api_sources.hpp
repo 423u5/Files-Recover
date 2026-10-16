@@ -50,12 +50,16 @@ struct OpenedSource {
 // else its metadata's, else 512. The errors say what to do where they can
 // (administrator rights, a drive letter given for a disk).
 [[nodiscard]] Result<OpenedSource> openSource(const SourceRef& source, const Platform& platform);
-// Opens the source a session records (the same disk, or the same image file
-// with the same sector size). Whether it is unchanged is checked apart.
+// Opens the source a session records: the same image file with the same
+// sector size, or the same disk, under the number it had or another one
+// (session::findSessionDisk, L147). Whether it is unchanged is checked apart.
 [[nodiscard]] Result<OpenedSource> openRecordedSource(const session::SessionSource& recorded,
                                                       const Platform& platform);
-// What a destination check needs of a session's source.
-[[nodiscard]] storage::SourceInfo sourceInfoOf(const session::SessionSource& recorded);
+// Whether `file`, written without opening the session's source (a report),
+// is on none of the disks that may be the session's disk now (L147), or is
+// not the session's image file; checked as a recovery destination is.
+[[nodiscard]] Status checkNotOnSessionSource(const session::SessionSource& recorded, const std::filesystem::path& file,
+                                             const Platform& platform);
 
 // The unreadable regions an image's metadata lists.
 [[nodiscard]] std::vector<storage::BadRegion> knownBadRegions(const OpenedSource& source);

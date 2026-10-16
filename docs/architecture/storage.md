@@ -18,9 +18,16 @@ Physical disks and images share `DeviceBackedSource`, so the same request gets t
 `tests/integration/storage/source_contract_test.cpp` runs one test suite against every source type.
 
 `DiskLister` (`include/storage/disk_list.hpp`, P19) lists the physical disks attached, by number, with their
-vendor, product, removability, bus, size and the drive letters of their volumes, for a user interface to choose a
-source from. `makePlatformDiskLister()` asks Windows through handles that cannot read or change anything (desired
-access 0); see `src/storage/windows/windows_disk_list.cpp` for its Windows assumptions.
+vendor, product, removability, serial number, bus, size and the drive letters of their volumes, for a user
+interface to choose a source from, and for a session to find its disk under another number (L147).
+`makePlatformDiskLister()` asks Windows through handles that cannot read or change anything (desired access 0); see
+`src/storage/windows/windows_disk_list.cpp` for its Windows assumptions.
+
+A physical disk's serial number (`DeviceDescription::serialNumber`, `SourceInfo::serialNumber`) is what the device
+reports in `STORAGE_DEVICE_DESCRIPTOR` (`SerialNumberOffset`), as printable ASCII, trimmed; empty when it reports
+none. The disk list's handle and the disk's own read the same descriptor; on the test machine both give what
+Windows' `Get-Disk` shows. It is the device's: a USB stick's or a disk's own, but a card reader's or a USB
+enclosure's for the card or the disk in it.
 
 ## Read contract
 

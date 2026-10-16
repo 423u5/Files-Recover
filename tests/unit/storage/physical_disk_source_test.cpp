@@ -119,7 +119,7 @@ TEST_F(PhysicalDiskSourceTest, ReportsInfo) {
     config->geometry.logicalSectorSize = 512;
     config->geometry.physicalSectorSize = 4096;
     config->geometry.requiredAlignment = 512;
-    config->description = DeviceDescription{"Vendor", "USB Flash", true};
+    config->description = DeviceDescription{"Vendor", "USB Flash", true, "4C530001231108116234"};
     PhysicalDiskSource source(2, std::make_shared<MockDeviceOpener>(config));
     RECOVERY_ASSERT_OK(source.open());
 
@@ -134,6 +134,8 @@ TEST_F(PhysicalDiskSourceTest, ReportsInfo) {
     EXPECT_EQ(info.vendor, "Vendor");
     EXPECT_EQ(info.product, "USB Flash");
     EXPECT_EQ(info.removable, true);
+    // L147: what tells the device apart.
+    EXPECT_EQ(info.serialNumber, "4C530001231108116234");
 }
 
 TEST_F(PhysicalDiskSourceTest, AlignmentIsAtLeastTheSectorSize) {

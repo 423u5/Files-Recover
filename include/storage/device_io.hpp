@@ -37,6 +37,10 @@ struct DeviceDescription {
     std::string vendor;
     std::string product;
     std::optional<bool> removable;
+    // The serial number the device reports (L147): a USB stick's or a disk's
+    // own, but a card reader's or a USB enclosure's rather than the card's or
+    // the disk's in it; empty when it reports none.
+    std::string serialNumber;
 };
 
 struct DeviceReadResult {

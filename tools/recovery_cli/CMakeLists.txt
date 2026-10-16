@@ -9,6 +9,7 @@ add_library(recovery_cli_lib STATIC
     cli/arguments.hpp
     cli/cli.cpp
     cli/cli.hpp
+    cli/command_disks.cpp
     cli/command_image.cpp
     cli/command_inspect.cpp
     cli/command_recover.cpp

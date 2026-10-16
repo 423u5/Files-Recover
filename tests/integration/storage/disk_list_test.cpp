@@ -33,6 +33,12 @@ TEST(DiskListTest, ListsTheDisksOfThisComputerByNumber) {
             ASSERT_EQ(root.size(), 3U);
             EXPECT_EQ(root.substr(1), L":\\");
         }
+        // Printable ASCII, trimmed (L147: it tells a session's disk apart).
+        EXPECT_LE(disk.serialNumber.size(), 256U);
+        for (const char c : disk.serialNumber) {
+            EXPECT_TRUE(c >= 0x20 && c < 0x7F) << "disk " << disk.number;
+        }
+        EXPECT_FALSE(disk.serialNumber.starts_with(' ') || disk.serialNumber.ends_with(' ')) << "disk " << disk.number;
     }
 }
 

@@ -1,13 +1,14 @@
 # Open limitations, ranked
 
-The open items of [limitations.md](limitations.md) as of 2026-10-15, ranked by what each one costs a person trying to
+The open items of [limitations.md](limitations.md) as of 2026-10-16, ranked by what each one costs a person trying to
 get files back. The project's first rule is that no file that could come back is lost, so items that lose files or
 recover them wrong come first. [limitations.md](limitations.md) stays the reference for each item's details and
 status: when an item is solved or decided there, take it off this list.
 
-Of the register's 245 items, the 87 below are open: 83 Open, 3 Partly resolved (L46, L212, L213) and 1 Mitigated
-(L197). The 114 Accepted and 44 Resolved items are not listed (L7, L8 and L13 were resolved on 2026-10-15; on
-2026-10-16 L245, a defect found and fixed, and L12, L19 and L21, by the images Windows wrote).
+Of the register's 247 items, the 85 below are open: 81 Open, 3 Partly resolved (L46, L212, L213) and 1 Mitigated
+(L197). The 115 Accepted and 47 Resolved items are not listed (L7, L8 and L13 were resolved on 2026-10-15; on
+2026-10-16 L245, a defect found and fixed, L12, L19 and L21, by the images Windows wrote, and L147, L172 and
+L177, which left L246, accepted by the user's choice, and L247).
 
 Sizes compare the items with each other: **small** is a contained change, **medium** a new part of an existing
 component with its tests, **large** a new component (a file format, a filesystem structure) with reference samples.
@@ -23,8 +24,6 @@ with `tools/regression/compare_reports.py` (nothing lost or worse); the register
 | --- | --- | --- | --- |
 | L23 | **NTFS.** Attribute lists are not followed. A heavily fragmented file (typically a large video on a full disk) comes back short, a file whose data lies wholly in extension records has none, and a fragmented `$MFT` is read only as far as its first record describes: the files after it are not listed. | Read `$ATTRIBUTE_LIST` and the extension records it names, for files and for the `$MFT` itself. | medium to large |
 | L36, L24 | **NTFS.** Compressed files (LZNT1) are not recovered at all: every byte is missing and the writer refuses them. Encrypted (EFS) data cannot be decrypted without the user's key. | Decompress LZNT1, one compression unit at a time. EFS stays out. | medium |
-| L172 | **CLI.** `recover` refuses a session whose scan did not complete. When a failing drive dies during the scan's last stage, the files already delivered cannot be recovered with the CLI (the API can). | Let `recover` take what was delivered, with a clear warning. | small |
-| L147 | **Sessions.** A physical disk is known by its number (`\\.\PhysicalDriveN`). A card reader that gets another number after a replug or a restart is another source: its scan does not resume and nothing can be recovered from it, so the scan is done again. | Recognise the same disk by its serial number and the session's content fingerprint, and let the session take its new number. | medium |
 
 ## 2. File types carving does not know
 
@@ -60,7 +59,6 @@ once their entries are overwritten, they are lost.
 | ID | What it is | Possible fix | Size |
 | --- | --- | --- | --- |
 | L42 | A recovered file with missing or unreadable bytes carries no mark; only the CLI's output and the session's report say so. | Write the list of incomplete files into the output folder, or mark their names. | small |
-| L177 | The CLI takes disks as `\\.\PhysicalDriveN` only: it has no disk list and takes no drive letter (the API lists disks with their letters). | A `disks` command, and `--source F:` through the API's disk list. | small to medium |
 | L176 | Bidirectional control characters stay in recovered file names: `invoice<U+202E>txt.jpg` shows as `invoicegpj.txt` in Explorer, a disguised extension. | Replace them in `safeFileName`. | small |
 | L171 | An image's known unreadable regions (from its `.imgmeta`) are not counted in the scan's metrics: the scan reports `0 B unreadable`. | Count them. | small |
 | L232 | A PDF with damage that readers repair (offsets elsewhere, `/Length` a few bytes off, a missing `endobj`) is `CORRUPTED`, though it opens. | Accept what readers repair, noting it as an issue. | medium |
@@ -118,6 +116,7 @@ The GUI is set aside for now; these matter when one is built.
 | L183 | The API keeps an index of every candidate and a record per recovery job (the register's text predates the L212 work, which cut the index to 4 bytes per candidate). |
 | L184 | No sorting or text search in `getCandidates`. |
 | L186 | `listSessions` cannot tell an interrupted session from a running one. |
+| L247 | A session that recorded no serial number (journal format 1 or 2, or a device that reports none) tells its disk by vendor and product: a copy of its card in a reader of the same model, attached alone, is taken for the session's disk. |
 | L187 | Imaging has no pause and no list. |
 | L188 | Previews are read one at a time per session, each reopening the content. |
 | L190 | The disk list asks Windows only: some virtual disks are missing, and folders a volume is mounted on are not mapped. |
@@ -156,6 +155,5 @@ The GUI is set aside for now; these matter when one is built.
 
 ## Suggested order
 
-1. L172, L147 and L177: small changes that make the CLI dependable on real and failing drives.
-2. L23 and L36: NTFS.
-3. File types: L226 (raw photos) first, then MTS and AVI from L227, then L79 and L75.
+1. L23 and L36: NTFS.
+2. File types: L226 (raw photos) first, then MTS and AVI from L227, then L79 and L75.

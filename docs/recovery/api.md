@@ -75,8 +75,9 @@ up with changes that break callers. A C interface for other languages (.NET) cou
 
 `listSources()` reads nothing from any disk. The platform's `DiskLister` (`include/storage/disk_list.hpp`,
 `src/storage/windows/windows_disk_list.cpp`) lists the present `GUID_DEVINTERFACE_DISK` interfaces (SetupAPI). It
-opens each with desired access 0, which needs no administrator rights, and asks its number, description, bus and
-size. It then maps the fixed and removable drive letters to disks with the destination guard's resolver. The API
+opens each with desired access 0, which needs no administrator rights, and asks its number, description (vendor,
+product, removability, serial number: `DiskInfo::serialNumber`, a memory card's being its reader's), bus and size.
+It then maps the fixed and removable drive letters to disks with the destination guard's resolver. The API
 marks the disk that holds `%SystemRoot%` (`system`) and the one that holds the sessions folder
 (`holdsSessions`): a session cannot be kept on the disk it scans, so scanning that disk needs another sessions
 folder. `description` is for people: `Disk 7: Generic STORAGE DEVICE, 29.7 GiB, USB (E:)`.
@@ -97,7 +98,12 @@ and only opening it tells an interrupted one (`RunState::Interrupted`).
 
 An operation (a scan, or a recovery of one or more jobs) runs on a thread of the API's. The call that starts it
 returns at once, after checking what it can: settings, the source opens and is the session's (its fingerprint), the
-destination is safe. A session runs one operation at a time. Another request fails with `InvalidInput` (busy) and
+destination is safe. A session's physical disk is looked for under the number the session last found it, then
+among the disks attached (L147, `session::findSessionDisk`, through `PlatformHooks::diskLister`): the same device
+(its serial number; vendor and product for a session that recorded none) with the same content, under the number
+Windows gave it since. The session records where it found it, so `getSession()` shows the disk's number now
+(`SourceDetails::disk`, `path`, `serialNumber`). A report (`exportReport`) is kept off every disk that may be the
+session's now. A session runs one operation at a time. Another request fails with `InvalidInput` (busy) and
 records nothing. Several sessions, and imagings, run at once. Pausing and cancelling go through the session (P16),
 so they are recorded. A pause or cancellation asked before the engine's operation has begun (the session can only
 act on a running one) is applied at the engine's first progress report.
@@ -249,7 +255,7 @@ resolver that puts chosen folders on chosen disks and every other path on disk 0
 | `api_concurrency_test.cpp` | Eight threads query progress, candidates, the session, the session list and details while a scan and then a recovery run: consistent answers, nothing goes back; two sessions scanning at once |
 | `api_cancellation_test.cpp` | A scan cancelled in each of its 7 stages, then resumed, delivers the same candidates; a cancellation before the first report; pause, resume, cancellation while paused; a cancelled recovery finished by asking again, or by `resumeRecovery`, with no file written twice; the API destroyed while a scan runs, and the scan resumed by the next one |
 | `api_recovery_test.cpp` | Every file written and told once, byte for byte; nothing twice in the same folder (also spelt otherwise), `again`, another folder; one candidate, filters; requests refused before anything is recorded (unknown candidates, a file in the way, a changed source, a folder on the source disk); the list's recovery states against the engine's index |
-| `api_session_test.cpp` | A session restored after the program closes; a scan interrupted by a crash (the session folder copied at the source pass) resumed to the same candidates; one program at a time; ids checked; JSON and text reports, never overwriting, never on the source; a session never kept on the disk it scans |
+| `api_session_test.cpp` | A session restored after the program closes; a scan interrupted by a crash (the session folder copied at the source pass) resumed to the same candidates; one program at a time; ids checked; JSON and text reports, never overwriting, never on the source; a session never kept on the disk it scans; a scan stopped on a disk plugged in again under another number (another disk took its number) resumed there, `getSession()` showing the new number, recovered from it, and a report kept off it (L147) |
 | `api_details_test.cpp` | A photo's metadata and its content preview, whole and in pieces; audio and video details; requests out of range; no media read; the source gone and back; what recovery jobs did |
 | `api_sources_test.cpp` | The disk list (by number, letters, system and sessions disks, descriptions); inspecting the card and a disk of three volumes; sources that cannot be read and the hints; a scan, a recovery and an imaging that ended hold their disk no more, though closing it is slow (L241); imaging a disk with bad sectors (zeros, their list, a scan of the image), cancelled and resumed, never overwriting, never on the source |
 
@@ -259,4 +265,4 @@ Also: `RecoverySessionTest.TheUpdateHooksAreToldEachUpdateOnceItIsRecorded` (lab
 ## Known limitations
 
 See [../limitations.md](../limitations.md), section "GUI API (P19)": L181–L196 (and the P19 notes on L168, L172,
-L177, L178 and L179).
+L177, L178 and L179). L147 (a disk known by its number) is resolved after P20 for the API too.

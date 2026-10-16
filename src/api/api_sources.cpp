@@ -6,6 +6,7 @@
 #include "recovery/filesystem_recovery.hpp"
 #include "recovery/text.hpp"
 #include "report/text_format.hpp"
+#include "storage/destination_guard.hpp"
 #include "storage/disk_image_source.hpp"
 #include "storage/physical_disk_source.hpp"
 
@@ -233,17 +234,23 @@ Result<OpenedSource> openSource(const SourceRef& source, const Platform& platfor
 Result<OpenedSource> openRecordedSource(const session::SessionSource& recorded, const Platform& platform) {
     switch (recorded.type) {
     case storage::SourceType::PhysicalDisk: {
-        std::optional<std::uint32_t> disk = recorded.diskNumber;
-        if (!disk.has_value()) {
-            if (Result<std::filesystem::path> path = report::pathFromUtf8(recorded.path); path.ok()) {
-                disk = storage::PhysicalDiskSource::parseDevicePath(path->native());
+        // Under the number it had, or under another (L147).
+        const session::SessionDiskOpener open =
+            [&platform](std::uint32_t number) -> Result<std::unique_ptr<storage::IStorageSource>> {
+            Result<OpenedSource> opened = openDisk(number, platform);
+            if (!opened.ok()) {
+                return opened.error();
             }
+            return std::move(opened->source);
+        };
+        Result<session::FoundSessionDisk> found = session::findSessionDisk(recorded, open, platform.diskLister);
+        if (!found.ok()) {
+            return found.error();
         }
-        if (!disk.has_value()) {
-            return makeError(ErrorCode::InvalidInput,
-                             "the session's disk '" + report::printable(recorded.path) + "' is not a physical disk");
-        }
-        return openDisk(*disk, platform);
+        OpenedSource opened;
+        opened.source = std::move(found->source);
+        opened.info = opened.source->getInfo();
+        return opened;
     }
     case storage::SourceType::DiskImage: {
         Result<std::filesystem::path> path = report::pathFromUtf8(recorded.path);
@@ -259,23 +266,14 @@ Result<OpenedSource> openRecordedSource(const session::SessionSource& recorded, 
                                                   ") is not a disk or an image file");
 }
 
-storage::SourceInfo sourceInfoOf(const session::SessionSource& recorded) {
-    storage::SourceInfo info;
-    info.type = recorded.type;
-    if (Result<std::filesystem::path> path = report::pathFromUtf8(recorded.path); path.ok()) {
-        info.path = std::move(path).value();
+Status checkNotOnSessionSource(const session::SessionSource& recorded, const std::filesystem::path& file,
+                               const Platform& platform) {
+    for (const storage::SourceInfo& source : session::possibleSessionSources(recorded, platform.diskLister)) {
+        if (Status safe = storage::checkDestinationSafety(source, file, platform.diskResolver); !safe.ok()) {
+            return safe;
+        }
     }
-    info.sizeBytes = recorded.size;
-    info.logicalSectorSize = recorded.sectorSize;
-    info.physicalSectorSize = recorded.physicalSectorSize;
-    info.diskNumber = recorded.diskNumber;
-    if (info.type == storage::SourceType::PhysicalDisk && !info.diskNumber.has_value()) {
-        info.diskNumber = storage::PhysicalDiskSource::parseDevicePath(info.path.native());
-    }
-    info.vendor = recorded.vendor;
-    info.product = recorded.product;
-    info.removable = recorded.removable;
-    return info;
+    return success();
 }
 
 std::vector<storage::BadRegion> knownBadRegions(const OpenedSource& source) {
@@ -370,6 +368,7 @@ Result<std::vector<DiskInfo>> listDisks(const Platform& platform, const std::fil
         disk.vendor = entry.vendor;
         disk.product = entry.product;
         disk.removable = entry.removable;
+        disk.serialNumber = entry.serialNumber;
         disk.bus = entry.bus;
         for (const std::filesystem::path& root : entry.volumes) {
             std::string letter = toUtf8(root);

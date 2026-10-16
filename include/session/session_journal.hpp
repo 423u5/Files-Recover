@@ -61,7 +61,8 @@ namespace recovery::session {
 
 // The journal format this engine writes, and the oldest it reads.
 // 2: the source pass's stage stops (PassState::stops, ScanMetrics::limitStops).
-inline constexpr std::uint32_t kJournalFormatVersion = 2;
+// 3: a physical disk's serial number (SessionSource::serialNumber, L147).
+inline constexpr std::uint32_t kJournalFormatVersion = 3;
 inline constexpr std::uint32_t kOldestJournalFormatVersion = 1;
 
 inline constexpr std::size_t kJournalHeaderSize = 16;
@@ -78,6 +79,10 @@ enum class RecordType : std::uint16_t {
     FileStarted = 7,
     // Optional: the session found its journal damaged and dropped a part of it.
     Damage = 8,
+    // Optional (an older engine knows the disk as it was before): the
+    // session's physical disk was found under another number, or describes
+    // itself otherwise (L147). In journals of every format.
+    SourceFound = 9,
 };
 
 [[nodiscard]] std::string_view toString(RecordType type) noexcept;
@@ -157,8 +162,25 @@ struct DamageRecord {
     std::string backup;
 };
 
+// The session's physical disk as an operation found it (checkSameSource),
+// when that differs from what the session held: Windows numbers disks as
+// they are attached (L147), and an older session did not record the serial
+// number. The session's source takes it, and so does its scan's identity, so
+// that the scan resumes on the disk under its new number. Encoded alike in
+// every journal format.
+struct SourceFoundRecord {
+    // UTF-8: "\\.\PhysicalDriveN", and N.
+    std::string path;
+    std::uint32_t diskNumber = 0;
+    std::string vendor;
+    std::string product;
+    std::optional<bool> removable;
+    std::string serialNumber;
+};
+
 using RecordPayload = std::variant<SessionCreatedRecord, ScanStateRecord, scan::ScanUpdate, JobCreatedRecord,
-                                   JobStateRecord, JobUpdateRecord, FileStartedRecord, DamageRecord>;
+                                   JobStateRecord, JobUpdateRecord, FileStartedRecord, DamageRecord,
+                                   SourceFoundRecord>;
 
 [[nodiscard]] RecordType typeOf(const RecordPayload& payload) noexcept;
 // The payload's bytes in journal format `version` (a journal's records all
@@ -181,6 +203,8 @@ using RecordPayload = std::variant<SessionCreatedRecord, ScanStateRecord, scan::
 [[nodiscard]] std::vector<std::byte> encodePayload(const FileStartedRecord& payload,
                                                    std::uint32_t version = kJournalFormatVersion);
 [[nodiscard]] std::vector<std::byte> encodePayload(const DamageRecord& payload,
+                                                   std::uint32_t version = kJournalFormatVersion);
+[[nodiscard]] std::vector<std::byte> encodePayload(const SourceFoundRecord& payload,
                                                    std::uint32_t version = kJournalFormatVersion);
 // Decodes a payload of a known type, encoded in journal format `version`.
 // Fails with InvalidFormat for bytes that do not decode, and with

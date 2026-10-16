@@ -134,6 +134,7 @@ SourceInfo DeviceBackedSource::getInfo() const {
     info.vendor = description_.vendor;
     info.product = description_.product;
     info.removable = description_.removable;
+    info.serialNumber = description_.serialNumber;
     decorateInfo(info);
     return info;
 }

@@ -41,7 +41,7 @@ Run the same suite under AddressSanitizer with `msvc-asan`. Run static analysis 
 | `validation` | `tests/validation` | P14: the validation levels, and every media decoder on builder files, files of independent encoders and generated vectors (PNG zlib streams, libwebp coding tools, fdkaac CRC-protected ADTS, libx264 and libx265 video), data written bit by bit that breaks one rule each, damage the structure cannot see, truncation, limits and fuzzing; the Windows playability checker (WIC, Media Foundation), skipping missing codecs |
 | `evaluation` | `tests/evaluation` | P14: content identity (SHA-256, preliminary hash, duplicates) and candidate evaluation on FAT32 cards with carves, MP4 candidates and reconstructions merged into one candidate per file |
 | `scan` | `tests/scan` | P15: the scan coordinator on a used FAT32 card (against the stages run one after the other, on 1-8 workers, cancelled in every stage and after every update, its sink failing, its source failing, paused), the scan's source, checkpoints, a 6 GiB virtual image and heap measurements, and the recovery job writing to temporary directories |
-| `session` | `tests/session` | P16: the encoding of session records, the journal (torn tails, damage, formats, one writer, appends from many threads), and sessions on the scan tests' card written below `%TEMP%\recovery-tests\<random>`: normal sessions and recovery jobs, pause and resume, journals cut after every record and damaged, other formats and engines, other sources, listing |
+| `session` | `tests/session` | P16: the encoding of session records, the journal (torn tails, damage, formats, one writer, appends from many threads), and sessions on the scan tests' card written below `%TEMP%\recovery-tests\<random>`: normal sessions and recovery jobs, pause and resume, journals cut after every record and damaged, other formats and engines, other sources, listing; a session's disk found under another number, and another device refused (L147, simulated disks) |
 | `metadata` | `tests/metadata` | P17: media metadata of builder files and of files of independent writers checked against exiftool and ffprobe, previews and their bytes, invalid media (garbage, truncation at every position, mutation fuzzing, damaged Exif and ID3), missing metadata; conditions, duplicates under different names, and recovery status, on the scan tests' card and a session written below `%TEMP%\recovery-tests\<random>` |
 | `cli` | `tests/cli`, `tests/CMakeLists.txt` | P18: the command line run in-process on the scan tests' card written as an image file, a disk with three volumes and simulated physical disks: every command, usage errors, invalid paths, errors, Ctrl+C at every stage, journals cut as crashes leave them; files and sessions below `%TEMP%\recovery-tests\<random>`. `recovery.exe` run as a process: exit codes, Unicode paths, a real Ctrl+Break |
 | `api` | `tests/api`, `tests/CMakeLists.txt` | P19: the GUI-facing API on the scan tests' card as an image file and as simulated physical disks, a disk of three volumes, a simulated disk list: a user interface's workflow compiled against the API's public headers alone, scans, events, concurrent queries, cancellation in every stage, pause and resume, recovery, sessions restored after a close and after a crash, reports, details and previews, imaging around bad sectors; files and sessions below `%TEMP%\recovery-tests\<random>` |
@@ -642,6 +642,10 @@ when it writes the candidates one after the other.
 `tests/session` ([../recovery/sessions.md](../recovery/sessions.md)) uses the scan tests' card and reference
 (`scan_test_support.cpp` is built into it too). Sessions are written below `%TEMP%\recovery-tests\<random>`.
 
+`session_disk_test.cpp` (L147) puts the card on simulated physical disks (`DiskRack`, `tests/support/disk_rack.hpp`)
+and moves it to another number between runs, with another card under its old number, as a card reader plugged in
+again after another device took its number.
+
 Crashes are simulated on the journal's bytes:
 - `scanned()` runs one deep scan in a session and keeps its journal and its records (`test::readRecords`);
 - a test writes a prefix of those bytes into a new session folder: the journal cut after a record, or in the
@@ -708,7 +712,10 @@ begins. The disk resolver says every folder is on disk 0. The sources are:
 - `test::threeVolumeDisk()`: an MBR with a FAT32, an exFAT and an NTFS volume;
 - simulated physical disks (`test::simulatedDisk`: `MockDeviceOpener` and `MemoryDeviceIo` from `tests/support`,
   with byte ranges whose reads fail with `ERROR_CRC`), given to the CLI as `\\.\PhysicalDrive7`. Another resolver
-  says a folder is on disk 7 when a test needs a destination on the source disk.
+  says a folder is on disk 7 when a test needs a destination on the source disk;
+- `CliDiskTest` (L147, L177): a `DiskRack` given as the environment's disk opener and disk list
+  (`Environment::diskLister`, new for `disks` and for finding a session's disk), whose disks are moved to other
+  numbers, with a resolver that puts folders on the rack's disks.
 
 Reports are read with `test::json::parse` (`tests/support/json_reader`), a strict reader (UTF-8, escapes, no
 duplicate names, nothing after the value). Sessions are checked through the engine (`RecoverySession::open`, `readSessionSummary`). Crashes are made
@@ -726,12 +733,14 @@ streams. The Ctrl+Break test starts it in a process group of its own (`CREATE_NE
 `ApiWorld`: a temporary folder with the scan tests' card written as `card.img`, a sessions folder, and the API made
 through `createRecoveryApi` with the platform simulated (`PlatformHooks`):
 
-- physical disks are a `DiskRack`: simulated disks by number (from 7), any other number answers "no such disk", and
-  opening one can be made to fail (access denied);
+- physical disks are a `DiskRack` (`tests/support/disk_rack.hpp`, shared with the session and CLI tests since
+  L147): simulated disks by number (from 7, serial number `SIM-0001` unless given), any other number answers "no
+  such disk", opening one can be made to fail (access denied), and a disk can be detached, attached under another
+  number or moved to one (`renumber`), as a card reader plugged in again is;
 - the disk resolver puts the folders a test names (`placeOn`, created first: destination checks ask about the
   nearest folder that exists) on a chosen disk and every other path on disk 0, the "system disk" (`systemFolder`
   is in the test's folder);
-- the disk list is a function the test gives (`diskLister`);
+- the disk list is the rack's (`DiskRack::lister`), or a function the test gives (`diskLister`);
 - `progressInterval` is 0 (every report of the engine is an event), and `onOperationProgress` lets a test pause or
   cancel an operation at a chosen point, on the operation's thread;
 - the events are recorded by an `EventLog` (`waitFor`, `waitForFinished`), whose hook can block the event thread to

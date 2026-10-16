@@ -84,6 +84,8 @@ public:
         description.vendor = boundedString(bytes, valid, header.VendorIdOffset);
         description.product = boundedString(bytes, valid, header.ProductIdOffset);
         description.removable = header.RemovableMedia != FALSE;
+        // (0, or past the descriptor, when the device reports none.)
+        description.serialNumber = boundedString(bytes, valid, header.SerialNumberOffset);
         return description;
     }
 

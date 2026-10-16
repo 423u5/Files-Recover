@@ -170,6 +170,8 @@ void describe(HANDLE handle, AttachedDisk& disk) {
         disk.vendor = boundedString(bytes, valid, header.VendorIdOffset);
         disk.product = boundedString(bytes, valid, header.ProductIdOffset);
         disk.removable = header.RemovableMedia != FALSE;
+        // As the disk's own handle reads it (windows_device_io.cpp).
+        disk.serialNumber = boundedString(bytes, valid, header.SerialNumberOffset);
         disk.bus = busName(header.BusType);
     }
 

@@ -201,6 +201,50 @@ TEST(ApiSessionTest, AReportOfAPhysicalDiskIsNeverWrittenOnIt) {
     RECOVERY_EXPECT_OK(world.api().exportReport(*id, world.folder() / "elsewhere.json"));
 }
 
+// L147: the disk plugged in again under another number (another disk took
+// its number) is still the session's: the scan resumes on it, the session
+// says where it is now, recovery reads it there, and a report stays off it.
+TEST(ApiSessionTest, ASessionsDiskIsFoundUnderItsNewNumber) {
+    std::atomic<bool> cancelled{false};
+    RecoveryApi* api = nullptr;
+    ApiWorld world;
+    world.hooks().onOperationProgress = [&](std::string_view session, const Progress& progress) {
+        if (progress.scan.has_value() && progress.scan->stage == ScanStage::SourcePass && !cancelled.exchange(true)) {
+            EXPECT_TRUE(api->cancelScan(session).ok());
+        }
+    };
+    const std::uint32_t disk = world.addDisk(::recovery::test::readFile(world.cardImage()));
+    api = &world.api();
+    const Result<std::string> id = api->startScan(SourceRef::physicalDisk(disk));
+    RECOVERY_ASSERT_OK(id);
+    ASSERT_EQ(world.waitIdle(*id).state, OperationState::Cancelled);
+
+    const std::uint32_t moved = disk + 5;
+    world.rack().renumber(disk, moved);
+    (void)world.rack().add(disk, ::recovery::test::threeVolumeDisk(), {}, "SER-OTHER");
+    RECOVERY_ASSERT_OK(api->resumeScan(*id));
+    ASSERT_EQ(world.waitIdle(*id).state, OperationState::Completed);
+    EXPECT_EQ(allCandidates(*api, *id).size(), expectedCard().size());
+    const Result<SessionDetails> details = api->getSession(*id);
+    RECOVERY_ASSERT_OK(details);
+    EXPECT_EQ(details->source.disk, moved);
+    EXPECT_EQ(details->source.path, "\\\\.\\PhysicalDrive" + std::to_string(moved));
+    EXPECT_EQ(details->source.serialNumber, "SIM-0001");
+
+    RecoveryOptions options;
+    options.destination = world.folder() / "out";
+    RECOVERY_ASSERT_OK(api->recoverAll(*id, options));
+    ASSERT_EQ(world.waitIdle(*id).state, OperationState::Completed);
+    EXPECT_FALSE(::recovery::test::filesBelow(world.folder() / "out").empty());
+
+    std::filesystem::create_directories(world.folder() / "on-the-disk");
+    world.placeOn(world.folder() / "on-the-disk", moved);
+    RECOVERY_EXPECT_ERROR(api->exportReport(*id, world.folder() / "on-the-disk" / "report.json"),
+                          ErrorCode::DestinationError);
+    EXPECT_FALSE(std::filesystem::exists(world.folder() / "on-the-disk" / "report.json"));
+    RECOVERY_EXPECT_OK(api->exportReport(*id, world.folder() / "elsewhere.json"));
+}
+
 TEST(ApiSessionTest, ASessionCannotBeKeptOnTheDiskItScans) {
     ApiWorld world;
     const std::uint32_t disk = world.addDisk(::recovery::test::readFile(world.cardImage()));

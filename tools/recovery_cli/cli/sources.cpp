@@ -63,6 +63,16 @@ bool isDrive(const std::filesystem::path& path) {
     return path.has_root_name() && path.relative_path().empty();
 }
 
+// "F:", "F:\" or "F:/", an ASCII letter: a drive as --source spells it.
+bool isDriveSpelling(std::string_view text) {
+    if ((text.size() != 2 && text.size() != 3) || text[1] != ':') {
+        return false;
+    }
+    const char letter = text[0];
+    const bool ascii = (letter >= 'A' && letter <= 'Z') || (letter >= 'a' && letter <= 'z');
+    return ascii && (text.size() == 2 || text[2] == '\\' || text[2] == '/');
+}
+
 Result<OpenedSource> openDisk(std::uint32_t disk, Context& context) {
     OpenedSource opened;
     opened.source = std::make_unique<storage::PhysicalDiskSource>(disk, diskOpener(context));
@@ -73,6 +83,33 @@ Result<OpenedSource> openDisk(std::uint32_t disk, Context& context) {
     }
     opened.info = opened.source->getInfo();
     return opened;
+}
+
+// The disk `drive` ("F:\") is on, whole (L177): the engine reads whole disks.
+Result<OpenedSource> openDriveDisk(const std::filesystem::path& drive, Context& context) {
+    const std::string shown = displayPath(drive.root_name());
+    const std::string giveDisk =
+        "give the disk itself, --source \\\\.\\PhysicalDriveN (recovery disks lists the disks)";
+    const Result<std::vector<std::uint32_t>> disks = context.diskResolver()(drive);
+    if (!disks.ok()) {
+        return makeError(ErrorCode::InvalidInput,
+                         "cannot tell which disk " + shown + " is on (" + disks.error().message + "): " + giveDisk,
+                         disks.error().systemErrorCode);
+    }
+    if (disks->empty()) {
+        return makeError(ErrorCode::InvalidInput, shown + " is on no physical disk: " + giveDisk);
+    }
+    if (disks->size() > 1) {
+        std::string numbers;
+        for (const std::uint32_t disk : *disks) {
+            numbers += (numbers.empty() ? "" : ", ") + toUtf8(storage::PhysicalDiskSource::devicePathFor(disk));
+        }
+        return makeError(ErrorCode::InvalidInput,
+                         shown + " spans several disks (" + numbers + "): give the one to read with --source");
+    }
+    context.note(shown + " is on " + toUtf8(storage::PhysicalDiskSource::devicePathFor(disks->front())) +
+                 ": the whole disk is read, every volume on it");
+    return openDisk(disks->front(), context);
 }
 
 Result<OpenedSource> openImage(const std::filesystem::path& path, std::optional<std::uint32_t> sectorSize,
@@ -149,6 +186,11 @@ Result<SourceSpec> parseSource(std::string_view option, std::string_view text) {
         return path.error();
     }
     SourceSpec spec;
+    if (isDriveSpelling(text)) {
+        spec.drive = std::filesystem::path(
+            std::wstring{static_cast<wchar_t>(std::towupper(static_cast<wint_t>(text[0]))), L':', L'\\'});
+        return spec;
+    }
     if (const std::optional<std::uint32_t> disk = storage::PhysicalDiskSource::parseDevicePath(path->native());
         disk.has_value()) {
         spec.disk = disk;
@@ -174,22 +216,39 @@ Result<OpenedSource> openSource(const SourceSpec& spec, std::optional<std::uint3
     if (spec.disk.has_value()) {
         return openDisk(*spec.disk, context);
     }
+    if (spec.drive.has_value()) {
+        return openDriveDisk(*spec.drive, context);
+    }
     return openImage(spec.image, sectorSize, true, context);
 }
 
 Result<OpenedSource> openRecordedSource(const session::SessionSource& recorded, Context& context) {
     switch (recorded.type) {
     case storage::SourceType::PhysicalDisk: {
-        Result<std::filesystem::path> path = pathFromUtf8(recorded.path);
-        std::optional<std::uint32_t> disk = recorded.diskNumber;
-        if (!disk.has_value() && path.ok()) {
-            disk = storage::PhysicalDiskSource::parseDevicePath(path->native());
+        // Under the number it had, or under another (L147).
+        const session::SessionDiskOpener open =
+            [&context](std::uint32_t number) -> Result<std::unique_ptr<storage::IStorageSource>> {
+            Result<OpenedSource> opened = openDisk(number, context);
+            if (!opened.ok()) {
+                return opened.error();
+            }
+            return std::move(opened->source);
+        };
+        Result<session::FoundSessionDisk> found = session::findSessionDisk(recorded, open, context.diskLister());
+        if (!found.ok()) {
+            return found.error();
         }
-        if (!disk.has_value()) {
-            return makeError(ErrorCode::InvalidInput,
-                             "the session's disk '" + printable(recorded.path) + "' is not a physical disk path");
+        OpenedSource opened;
+        opened.source = std::move(found->source);
+        opened.info = opened.source->getInfo();
+        if (found->renumbered) {
+            context.note("The session's disk is " + toUtf8(storage::PhysicalDiskSource::devicePathFor(found->number)) +
+                         " now (" + printable(recorded.path) + " when last used): the same device" +
+                         (opened.info.serialNumber.empty() ? std::string()
+                                                           : " (serial " + printable(opened.info.serialNumber) + ")") +
+                         ", unchanged.");
         }
-        return openDisk(*disk, context);
+        return opened;
     }
     case storage::SourceType::DiskImage: {
         Result<std::filesystem::path> path = pathFromUtf8(recorded.path);
@@ -205,31 +264,8 @@ Result<OpenedSource> openRecordedSource(const session::SessionSource& recorded, 
                                                   ") is not a disk or an image file the CLI can open");
 }
 
-storage::SourceInfo sourceInfoOf(storage::SourceType type, std::string_view path) {
-    storage::SourceInfo info;
-    info.type = type;
-    if (Result<std::filesystem::path> parsed = pathFromUtf8(path); parsed.ok()) {
-        info.path = std::move(parsed).value();
-    }
-    if (type == storage::SourceType::PhysicalDisk) {
-        info.diskNumber = storage::PhysicalDiskSource::parseDevicePath(info.path.native());
-    }
-    return info;
-}
-
-storage::SourceInfo sourceInfoOf(const session::SessionSource& recorded) {
-    storage::SourceInfo info = sourceInfoOf(recorded.type, recorded.path);
-    if (recorded.diskNumber.has_value()) {
-        info.diskNumber = recorded.diskNumber;
-    }
-    info.sizeBytes = recorded.size;
-    info.logicalSectorSize = recorded.sectorSize;
-    info.physicalSectorSize = recorded.physicalSectorSize;
-    info.diskNumber = recorded.diskNumber;
-    info.vendor = recorded.vendor;
-    info.product = recorded.product;
-    info.removable = recorded.removable;
-    return info;
+std::vector<storage::SourceInfo> protectedSourcesOf(const session::SessionSource& recorded, Context& context) {
+    return session::possibleSessionSources(recorded, context.diskLister());
 }
 
 std::vector<storage::BadRegion> knownBadRegions(const OpenedSource& source) {

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <set>
 #include <string>
+#include <utility>
 
 namespace recovery::scan {
 
@@ -233,6 +234,12 @@ Status ScanCheckpoint::check(const ScanUpdate& update) const {
         break;
     }
     return success();
+}
+
+void ScanCheckpoint::moveSource(std::string sourcePath) {
+    if (identity_.has_value()) {
+        identity_->sourcePath = std::move(sourcePath);
+    }
 }
 
 Status ScanCheckpoint::apply(const ScanUpdate& update) {

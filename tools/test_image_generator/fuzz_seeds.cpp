@@ -556,7 +556,8 @@ Status recordSeeds(Seeds& seeds, const std::filesystem::path& journal) {
             break;
         }
         const session::JournalRecord& read = **record;
-        if (read.type < 1 || read.type > 8 || perType[read.type]++ >= 4) {
+        if (read.type < 1 || read.type > static_cast<std::uint16_t>(session::RecordType::SourceFound) ||
+            perType[read.type]++ >= 4) {
             continue;
         }
         const std::string name = "record_" + std::to_string(read.type) + "_" + std::to_string(perType[read.type]);
@@ -565,7 +566,18 @@ Status recordSeeds(Seeds& seeds, const std::filesystem::path& journal) {
             return added;
         }
     }
-    return success();
+    // A session's disk found under another number (L147): a session of an
+    // image file never records it.
+    session::SourceFoundRecord found;
+    found.path = "\\\\.\\PhysicalDrive3";
+    found.diskNumber = 3;
+    found.vendor = "SanDisk";
+    found.product = "Ultra";
+    found.removable = true;
+    found.serialNumber = "4C530001231108116234";
+    return seeds.addWithPrefix("journal", "record_9_1",
+                               static_cast<std::uint8_t>(static_cast<unsigned>(session::RecordType::SourceFound) - 1),
+                               session::encodePayload(found));
 }
 
 Status imageMetadataSeeds(Seeds& seeds) {

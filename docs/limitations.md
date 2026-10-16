@@ -1354,6 +1354,10 @@ P16: a session's scan resumes under the same rule, so a session that another eng
 candidates and recovery jobs work) but its scan does not resume (the user's P16 decision). The session also refuses
 a source whose fingerprint changed (L146), and a physical disk is known by its number (L147).
 
+After P20 (L147, 2026-10-16): a physical disk's path is its number, which Windows gives as disks are attached, so
+a session that finds its disk under another number gives the scan's identity the new path before the scan resumes
+(`ScanCheckpoint::moveSource`). An image file is still known by its path.
+
 ### L142. A Quick scan reads every file the metadata knows
 **Status:** Accepted (the user's P15 decision: Quick = metadata and validation)  
 A Quick scan validates and hashes the filesystem candidates: it reads every byte of every file the filesystems know,
@@ -1399,8 +1403,24 @@ changes elsewhere (files written to a card since, when its boot region and FSInf
 source whose first sectors read differently from one run to the next (sectors that fail now and then) is refused,
 and its session cannot resume until they read as before.
 
+After P20 (L147, 2026-10-16): a session also records its disk's serial number, and a copy in another device (a
+card reader or a stick of another serial number) is refused (L246); copies in readers of one model that report
+no serial number are not told apart (L247).
+
 ### L147. A physical disk is known by its number
-**Status:** Open  
+**Status:** Resolved (after P20, 2026-10-16, the user's "solve L147"; the user chose that the device must be the
+same, not only its content): a session finds its disk under another number. Journal format 3 records a disk's
+serial number (`SessionSource::serialNumber`); `checkSameSource` takes a physical disk under any number when it is
+the same device (the recorded serial number; vendor and product for a session that recorded none,
+`deviceDifference`) with the same content (the fingerprint); `findSessionDisk` tries the recorded number, then
+every disk attached of the session's size and sector size, and says why each is not the session's; a scan or a
+job that begins on it there records an optional `SourceFound` record, and the scan's identity takes the new path
+(`ScanCheckpoint::moveSource`), so the scan resumes. The CLI (`scan --session`, `recover`) and the API
+(`resumeScan`, recovery) use it; the CLI says where the disk is now. Reports and logs written without opening the
+disk are kept off every disk that may be it (`possibleSessionSources`): before, they were kept off the recorded
+number alone, which after a renumbering could be another disk while the session's was not protected. What it
+leaves: L246, L247. Tests: `SessionDiskTest` (5), `SessionCodecTest.TheSerialNumberIsKeptFromTheThirdFormatOn`,
+`CliDiskTest` (4), `ApiSessionTest.ASessionsDiskIsFoundUnderItsNewNumber`  
 The session's source is recorded by its path, as P15's scan identity does (L141): `\\.\PhysicalDriveN` for a
 physical disk. A card reader that gets another number after a restart or after the card is put in again is
 another source for the session: its scan does not resume, and its candidates cannot be recovered from it (the
@@ -1442,6 +1462,25 @@ opens, recovers and scans as before, and keeps its format: what is appended to i
 The journal is in format 1. An engine reads its own format and older ones, but there is no older one yet, so
 reading an older format (a newer engine keeping the readers of every format before its own) is a rule that is not
 tested. Records of an unknown type marked optional are skipped, and that part is tested.
+
+### L246. A card in another card reader is another device
+**Status:** Accepted (the user's choice of 2026-10-16 for L147: the device must be the same, not only the
+content)  
+A session's physical disk is the same device when it reports the serial number the session recorded. A card
+reader and a USB enclosure report their own serial number, not the card's or the disk's: a card moved to another
+reader, or a disk moved to another enclosure or to SATA, holds the session's content but is another device. Its
+scan does not resume and its candidates are not recovered from it; the error says so (its serial number and the
+session's). Put it back in the reader the scan began with, or scan it in a new session. A copy of a card (L146)
+in another device is refused the same way.
+
+### L247. Without a serial number, the model tells the device
+**Status:** Open (a call made for L147, for review)  
+A session of journal format 1 or 2 recorded no serial number, and some devices report none. Their disk is then
+the same device when its vendor and product are the recorded ones: two readers of one model are taken for one
+another, so a copy of the card in a reader of the same model is taken for the session's when it is attached
+alone (two attached at once are refused: "attached 2 times"). An older session records the serial number the
+first time a scan or a job finds its disk, and from then on the serial number decides. Until an operation finds
+the disk again, reports and listings show the number where it was last found.
 
 ## Metadata (P17)
 
@@ -1570,7 +1609,12 @@ and exits with 4, and the report lists them with the scan's settings, but the se
 the metrics leave them out. Recovered files that cover them do count them (`ReconstructionReport`).
 
 ### L172. Recovery needs a complete scan
-**Status:** Open (a P18 call, for review)  
+**Status:** Resolved (after P20, 2026-10-16, the user's "also check L172 and L177", the fix the open list
+proposed): `recover` writes the files a scan that did not complete delivered so far, with a warning, a `Scan:` line
+in its summary and exit code 4; run again once the scan is done, it writes only what the folder lacks. A scan
+that delivered nothing yet is refused, and `scan` says, when a scan stops or fails, how many files can be
+recovered already. Tests: `CliCancellationTest.RecoveryOfAScanThatDidNotFinishWritesWhatItDelivered`,
+`CliCancellationTest.RecoveryRefusesAScanThatDeliveredNothingYet`  
 `recover` refuses a session whose scan is not complete, so that it never writes from a result the scan has not
 finished (the plan: do not promise recovery before the scan is complete). The engine can write the candidates
 delivered so far (`addRecoveryJob`, L151): a scan that cannot complete, on a source that fails for good during
@@ -1603,7 +1647,12 @@ the names of the files it writes: a file recovered as `invoice<U+202E>txt.jpg` s
 Explorer.
 
 ### L177. Disks are named by number only
-**Status:** Open  
+**Status:** Resolved (after P20, 2026-10-16, the fix the open list proposed): `recovery disks` lists the disks
+(`\\.\PhysicalDriveN`, size or no medium, bus, model, drive letters, serial number, removable, holds Windows,
+holds the sessions folder) through the platform's disk lister, as the API's `listSources()` (no administrator
+rights); `--source F:` (or `F:\`, `F:/`) is the whole disk the drive is on, which a note names; a drive whose disk
+cannot be told, that is on no disk or that spans several is refused, saying what to give. Tests:
+`CliDiskTest.DisksAreListedAsTheSourceTakesThem`, `CliErrorsTest.ADriveLetterIsTheWholeDiskItIsOn`  
 `--source` takes `\\.\PhysicalDriveN`. The CLI does not list the disks, and does not take a drive letter for the
 disk it is on; given a drive letter, its error names that disk when Windows can tell (Disk Management shows
 the numbers).

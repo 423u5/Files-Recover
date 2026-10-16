@@ -114,8 +114,13 @@ ExitCode Context::fail(std::string_view what, const Error& error) {
 }
 
 Status Context::prepareFolderFor(const std::filesystem::path& path, const storage::SourceInfo* source) {
-    if (source != nullptr) {
-        if (Status safe = storage::checkDestinationSafety(*source, path, diskResolver()); !safe.ok()) {
+    return prepareFolderFor(path, source != nullptr ? std::span(source, 1) : std::span<const storage::SourceInfo>());
+}
+
+Status Context::prepareFolderFor(const std::filesystem::path& path, std::span<const storage::SourceInfo> sources) {
+    const storage::DiskResolver resolver = sources.empty() ? storage::DiskResolver() : diskResolver();
+    for (const storage::SourceInfo& source : sources) {
+        if (Status safe = storage::checkDestinationSafety(source, path, resolver); !safe.ok()) {
             return safe;
         }
     }
@@ -135,8 +140,8 @@ Status Context::prepareFolderFor(const std::filesystem::path& path, const storag
     return success();
 }
 
-Status Context::openLog(const std::filesystem::path& path, const storage::SourceInfo* source) {
-    if (Status ready = prepareFolderFor(path, source); !ready.ok()) {
+Status Context::openLog(const std::filesystem::path& path, std::span<const storage::SourceInfo> sources) {
+    if (Status ready = prepareFolderFor(path, sources); !ready.ok()) {
         return ready;
     }
     Result<storage::DestinationFile> file =
@@ -170,6 +175,10 @@ bool Context::reportProgress(const ProgressEvent& event) {
 
 storage::DiskResolver Context::diskResolver() const {
     return environment_.diskResolver ? environment_.diskResolver : storage::makePlatformDiskResolver();
+}
+
+storage::DiskLister Context::diskLister() const {
+    return environment_.diskLister ? environment_.diskLister : storage::makePlatformDiskLister();
 }
 
 }  // namespace recovery::cli

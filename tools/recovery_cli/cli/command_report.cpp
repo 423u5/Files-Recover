@@ -34,15 +34,15 @@ constexpr std::array<std::string_view, 2> kFormats = {"text", "json"};
 constexpr std::uint32_t kSharingViolation = 32;
 
 // Writes `text` to the output stream, or to the new file `path` (checked
-// against `source` when there is one; its folder created when missing).
+// against each of `sources`; its folder created when missing).
 ExitCode deliver(const std::string& text, const std::optional<std::filesystem::path>& path,
-                 const storage::SourceInfo* source, Context& context) {
+                 std::span<const storage::SourceInfo> sources, Context& context) {
     if (!path.has_value()) {
         context.out() << text;
         context.out().flush();
         return ExitCode::Success;
     }
-    if (Status ready = context.prepareFolderFor(*path, source); !ready.ok()) {
+    if (Status ready = context.prepareFolderFor(*path, sources); !ready.ok()) {
         return context.fail("cannot write the report to '" + displayPath(*path) + "'", ready.error());
     }
     Result<storage::DestinationFile> file =
@@ -110,7 +110,7 @@ ExitCode runReport(const ParsedOptions& options, Context& context) {
             return context.fail("cannot list the sessions in '" + displayPath(*root) + "'", sessions.error());
         }
         return deliver(json ? report::jsonSessionList(*root, *sessions) : report::textSessionList(*root, *sessions),
-                       output, nullptr, context);
+                       output, {}, context);
     }
 
     Result<std::unique_ptr<session::RecoverySession>> opened = openSession(*root, *id, context);
@@ -128,20 +128,21 @@ ExitCode runReport(const ParsedOptions& options, Context& context) {
         }
         context.warning("session " + printable(*id) +
                         " is in use by another recovery command: only its summary can be read now");
-        const storage::SourceInfo source = sourceInfoOf(summary->sourceType, summary->sourcePath);
-        if (!openLogOption(options, &source, context)) {
+        // The disk may have another number now (L147): every disk that may be it is protected.
+        const std::vector<storage::SourceInfo> sources = protectedSourcesOf(summary->source, context);
+        if (!openLogOption(options, sources, context)) {
             return ExitCode::Error;
         }
-        return deliver(json ? report::jsonSummary(*summary) : report::textSummary(*summary), output, &source,
+        return deliver(json ? report::jsonSummary(*summary) : report::textSummary(*summary), output, sources,
                        context);
     }
-    const storage::SourceInfo source = sourceInfoOf((*opened)->info().source);
-    if (!openLogOption(options, &source, context)) {
+    const std::vector<storage::SourceInfo> sources = protectedSourcesOf((*opened)->info().source, context);
+    if (!openLogOption(options, sources, context)) {
         return ExitCode::Error;
     }
     const report::SessionReport gathered = report::gatherReport(**opened);
     opened->reset();
-    return deliver(json ? report::jsonReport(gathered) : report::textReport(gathered, details), output, &source,
+    return deliver(json ? report::jsonReport(gathered) : report::textReport(gathered, details), output, sources,
                    context);
 }
 

@@ -263,7 +263,6 @@ void OpenSession::joinFinished() {
 void OpenSession::buildIndex() {
     const session::SessionInfo info = session_->info();
     mode_ = info.configuration.mode;
-    source_ = info.source;
     playability_ = info.playability;
     knownBadRegions_ = info.configuration.knownBadRegions;
 
@@ -573,17 +572,19 @@ void OpenSession::applyRequestsLocked() {
 }
 
 Result<OpenedSource> OpenSession::openOwnSource() const {
-    const std::string note = ": the session's source (" + report::describeSource(source_.type, source_.path,
-                                                                                  source_.diskNumber, source_.vendor,
-                                                                                  source_.product) +
+    // As the session last found it: a disk's number may have changed (L147).
+    const session::SessionSource recorded = session_->info().source;
+    const std::string note = ": the session's source (" + report::describeSource(recorded.type, recorded.path,
+                                                                                  recorded.diskNumber,
+                                                                                  recorded.vendor, recorded.product) +
                              ") must be attached and unchanged";
-    Result<OpenedSource> opened = openRecordedSource(source_, context_.platform);
+    Result<OpenedSource> opened = openRecordedSource(recorded, context_.platform);
     if (!opened.ok()) {
         const Error& error = opened.error();
         return makeError(error.code, "cannot read the session's source: " + error.message + note,
                          error.systemErrorCode);
     }
-    if (Status same = session::checkSameSource(source_, *opened->source); !same.ok()) {
+    if (Status same = session::checkSameSource(recorded, *opened->source); !same.ok()) {
         const Error& error = same.error();
         return makeError(error.code, "the source is not the session's: " + error.message + note,
                          error.systemErrorCode);
@@ -1253,8 +1254,8 @@ Status OpenSession::exportReport(const std::filesystem::path& file, const Report
     const report::SessionReport gathered = report::gatherReport(*session_);
     const std::string text = options.format == ReportFormat::Json ? report::jsonReport(gathered)
                                                                   : report::textReport(gathered, options.details);
-    if (Status safe = storage::checkDestinationSafety(sourceInfoOf(source_), file, context_.platform.diskResolver);
-        !safe.ok()) {
+    // Every disk that may be the session's now (L147).
+    if (Status safe = checkNotOnSessionSource(session_->info().source, file, context_.platform); !safe.ok()) {
         return safe;
     }
     Result<storage::DestinationFile> created =

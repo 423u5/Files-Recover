@@ -21,7 +21,8 @@ namespace recovery::cli {
 namespace {
 
 constexpr OptionSpec kSourceOption{"--source", "", "SOURCE",
-                                   "The disk to image (\\\\.\\PhysicalDriveN), or an image file to copy"};
+                                   "The disk to image (\\\\.\\PhysicalDriveN, or a drive letter on it), or an image "
+                                   "file to copy"};
 constexpr OptionSpec kOutputOption{"--output", "", "FILE", "The image file to write (never on the source)"};
 constexpr OptionSpec kResumeOption{"--resume", "", "", "Go on with an image an earlier run did not finish"};
 constexpr OptionSpec kBlockSizeOption{"--block-size", "", "SIZE", "Size of each read (default 1M; up to 64M)"};

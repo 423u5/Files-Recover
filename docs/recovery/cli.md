@@ -11,6 +11,7 @@ include path). It holds no recovery logic of its own. It parses the command line
 runs the engine's operations, and presents what they return.
 
 ```
+recovery disks                                           the physical disks, as --source names them (L177)
 recovery inspect --source SOURCE                         what a source is: size, partitions, filesystems
 recovery image   --source SOURCE --output FILE [--resume] a raw image, around bad sectors (P2)
 recovery scan    --source SOURCE [--mode quick|deep]     a scan in a new session (P15, P16); prints its id
@@ -23,8 +24,8 @@ recovery report  [--session ID] [--format text|json]     the session's report (P
 
 | The plan's item | Where |
 | --- | --- |
-| inspect, image, scan, recover, report | The five commands; `recovery help <command>` shows each one's options |
-| source | `--source`: a disk image file or a physical disk (`\\.\PhysicalDriveN`). A session's commands reopen the source the session records |
+| inspect, image, scan, recover, report | The five commands, and `disks` (L177); `recovery help <command>` shows each one's options |
+| source | `--source`: a disk image file, a physical disk (`\\.\PhysicalDriveN`, as `recovery disks` lists them), or a drive letter for the whole disk it is on. A session's commands reopen the source the session records: a disk under its number, or another one Windows gave it since (L147) |
 | image | `recovery image`; images are sources like disks. Their metadata (`FILE.imgmeta`) gives a scan and recovery the image's sector size and its unreadable regions |
 | output | `--output`: the image file (`image`), the recovery folder (`recover`), the report file (`report`). Never on the source, never an existing file |
 | scan mode | `scan --mode quick` (filesystem metadata) or `deep` (the default: also carving, MP4 recovery, fragments) |
@@ -36,9 +37,11 @@ recovery report  [--session ID] [--format text|json]     the session's report (P
 ## Sources
 
 `--source` takes a disk image file or a physical disk, `\\.\PhysicalDriveN` (case does not matter; N from 0 to
-1023). Reading a physical disk needs administrator rights. Other device paths (`\\.\E:`, `\\?\Volume{...}`) are
-refused: the engine reads whole disks and image files. A drive (`E:` or `E:\`) is refused too, and the message
-names the physical disk it is on when Windows can tell.
+1023), which `recovery disks` lists. Reading a physical disk needs administrator rights. A drive letter (`F:`,
+`F:\` or `F:/`) is the whole disk it is on (L177): the engine reads whole disks, every volume on them, and a note
+says which disk that is (`F: is on \\.\PhysicalDrive2: the whole disk is read, every volume on it`). A drive whose
+disk Windows cannot tell, or that spans several disks (a spanned or striped volume), is refused, and the message
+says what to give instead. Other device paths (`\\.\E:`, `\\?\Volume{...}`) are refused.
 
 An image's logical sector size is `--sector-size` when given, else its metadata's, else 512. When an image has
 metadata (`FILE.imgmeta`, written by `recovery image`), the CLI reads it. The metadata's unreadable regions become
@@ -58,8 +61,19 @@ interrupted.
 
 A session belongs to its source: `scan --session` and `recover` reopen the source it records (the same image file
 or disk). Before anything is recorded, they check that it is the same and unchanged (`checkSameSource`: type,
-path, size, sector size, fingerprint). Settings that decide what a scan finds (`--mode`, `--no-carving`,
-`--alignment`, ...) cannot be given with `--session`: a session keeps the settings its scan began with.
+size, sector size, fingerprint; an image's path, a disk's device). Settings that decide what a scan finds
+(`--mode`, `--no-carving`, `--alignment`, ...) cannot be given with `--session`: a session keeps the settings its
+scan began with.
+
+A physical disk is looked for where it was, then among the disks attached (L147, `session::findSessionDisk`):
+Windows numbers disks as they are attached, so a card reader plugged in again, or found after a restart, may have
+another number. The disk of the session's size and sector size that is the same device (its serial number, or its
+vendor and product for a session that recorded none) with the same content is the session's, and a note says so:
+`The session's disk is \\.\PhysicalDrive3 now (\\.\PhysicalDrive2 when last used): the same device (serial ...),
+unchanged.` The session records where it is (P16's `SourceFound` record). A card in another card reader is
+another device: it is not the session's (the user's choice, L246). When no disk is the session's, the error says
+why each disk of its size is not. A report or a log written by `report` (which does not open the disk) is kept off
+every disk that may be the session's now, not off its old number alone.
 
 A command that finds its session in use (another command has it open) stops: the session's journal is open for
 writing in one place at a time. `report` then shows the session's summary instead (`readSessionSummary`). Opening a
@@ -71,11 +85,22 @@ incomplete`), and damage is cut off after a copy is kept (a warning names the co
 Every command takes `-h`/`--help`, `-q`/`--quiet` (no progress, no notes; results, warnings and errors remain) and
 `--log FILE` (the engine's log records, Info and above, appended to FILE; FILE must not be on the source).
 
+### disks
+
+`recovery disks [--sessions-dir FOLDER]`
+
+Lists the physical disks attached (L177): the name `--source` takes (`\\.\PhysicalDriveN`), the size ("no medium"
+for a card reader without a card), the bus, the model, the drive letters of its volumes, the serial number, and
+notes: removable, holds Windows, holds the sessions folder (a session is never kept on the disk it scans: scanning
+that disk needs `--sessions-dir` on another). Nothing is read from a disk: Windows is asked through handles that can
+neither read nor change anything (`storage::makePlatformDiskLister`, as the API's `listSources()`), so listing
+needs no administrator rights. A memory card's serial number is its reader's.
+
 ### inspect
 
 `recovery inspect --source SOURCE [--sector-size BYTES]`
 
-Shows the source (type, path or disk, model, size, sector sizes, removable, read-only), what an image's metadata
+Shows the source (type, path or disk, model, serial number, size, sector sizes, removable, read-only), what an image's metadata
 says (state, bytes imaged, where from, unreadable regions), the partition table (scheme, GPT disk GUID and header
 validity, partitions with start, size, type, name and flags, issues), and each volume a scan would read (the
 partitions of an MBR or GPT, else the whole source). For each volume it shows the filesystem: type, label,
@@ -130,7 +155,12 @@ narrow that down, and every one given must match:
 | `--condition LIST` | `complete`, `unverified`, `corrupted`, `partial`, `unrecoverable`, `ambiguous` (P17's conditions) |
 | `--skip-duplicates` | Leaves out candidates whose content an earlier candidate has |
 
-The scan must be complete. Files are written by P15's `RecoveryJob` as recovery jobs of the session (P16), with
+A scan that did not complete (stopped, failed, its source failing for good before the end) gives the files it
+delivered so far (L172): they are written, with a warning (`the scan of session ... is not complete (...): only the
+N files it delivered so far can be recovered`), a `Scan:` line in the summary, and exit code 4. Resume the scan,
+then run the same command again: it writes only what the folder lacks. A scan that delivered nothing yet (stopped
+before its evaluation) is refused. `scan` says, when a scan stops or fails, how many files can be recovered already.
+Files are written by P15's `RecoveryJob` as recovery jobs of the session (P16), with
 P7's naming: original names and folders where the filesystem knows them, `recovered_NNNNNN.ext` for carved files,
 `" (1)"`, `" (2)"`, ... for names taken, and nothing overwritten. P20: when the scan found files on more than one
 volume of the source (a disk with several partitions), each volume's files go below a folder of its own,
@@ -156,7 +186,8 @@ L42), files that could not be written and why.
 
 The text report shows:
 
-- the session (folder, creation, engine, journal format, damage repaired) and the source (fingerprint included);
+- the session (folder, creation, engine, journal format, damage repaired) and the source (a disk's serial number
+  and the fingerprint included);
 - the scan: mode, settings, known bad regions, state with its history (each state change with its time and
   engine), updates, bytes, what each stage found, candidates;
 - the volumes (partition, filesystem, label, serial, cluster size, files, why one could not be used);
@@ -182,7 +213,7 @@ names them (`toString`). Times are ISO 8601: UTC with `Z`, and FAT's local times
   "format": "recovery-session-report", "formatVersion": 1, "engine": "RecoveryEngine 0.1.0", "generated": "...",
   "session": {id, folder, journalFormat, engineVersion, created, updated, tornBytesDropped, recordsSkipped, damage[]},
   "source": {type, path, size, sectorSize, physicalSectorSize, diskNumber, vendor, product, removable,
-             fingerprint: {sha256, bytes, unreadableBytes}},
+             serialNumber, fingerprint: {sha256, bytes, unreadableBytes}},
   "scan": {configuration: {mode, carving, mp4, fragments, includeActive, includeDeleted, alignment, maxHits,
                            sectorRetryCount, knownBadRegions[], media, playability, sha256, preliminaryHash},
            state, interrupted, runnable, notRunnable, stage, updates, candidates, history[],
@@ -295,8 +326,8 @@ nor disguise its extension (`invoice<U+202E>txt.jpg`). JSON escapes instead; the
 `tests/cli` (executable `recovery_cli_tests`, label `cli`) runs the CLI in-process through `cli::run`. Its streams
 are captured, and every run gets a fresh interrupt. The sources are the scan tests' card written as an image file,
 an MBR disk with FAT32, exFAT and NTFS volumes, and simulated physical disks (`MockDeviceOpener`, with failing
-byte ranges). A disk resolver says where folders are. No real device is opened. Besides, `CliProcessTest` runs
-`recovery.exe` itself.
+byte ranges; `DiskRack`, disks by number with their list, moved to another number). A disk resolver says where
+folders are. No real device is opened. Besides, `CliProcessTest` runs `recovery.exe` itself.
 
 - `cli_arguments_test.cpp`: the parser (values, flags, short options, `=`, what it refuses), numbers, sizes,
   choices, id lists, session ids, help wrapping; and every usage error through `run()`, none of which creates
@@ -312,13 +343,21 @@ byte ranges). A disk resolver says where folders are. No real device is opened. 
   Text and JSON reports, the JSON checked against the engine's own descriptions; listings; a session in use. A
   recovered file with an unreadable sector says so in `recover`'s summary, the text report and the JSON (L42).
   The log file.
-- `cli_errors_test.cpp`: sources that do not exist, are folders or drives, cannot be opened (access denied, no such
-  disk) or are written by another program. Outputs that exist, are the source, or are on the source disk. Sessions
+- `cli_errors_test.cpp`: sources that do not exist, are folders, cannot be opened (access denied, no such disk) or
+  are written by another program. A drive letter in each spelling is the disk it is on, read whole; a drive whose
+  disk cannot be told, that is on no disk or spans several is refused (L177). Outputs that exist, are the source, or are on the source disk. Sessions
   folders that are files, missing or on the source disk. Sessions that do not exist, are not sessions (left
   untouched) or are in use. Recovery to a file or to the source disk, ids the session does not have. A source gone
   or changed (no job recorded). Reports never overwrite. Names that would control the terminal.
+- `cli_disk_test.cpp`: `disks` (numbers, sizes, no medium, bus, model, serial numbers, notes; a list that cannot be
+  had); a scan stopped on disk 7, its disk plugged in again as disk 9 while another card took 7: resumed to the
+  reference's candidates with the note, recovered and reported there; the same content in another device refused,
+  saying why; reports and logs kept off disk 9 before the session knows of it, and allowed on 7, another device's
+  now (L147).
 - `cli_cancellation_test.cpp`: a scan stopped in each of its seven stages, then resumed to the reference's
-  candidates; Ctrl+C before a scan begins; recovery refused for an unfinished scan; a recovery job stopped after
+  candidates; Ctrl+C before a scan begins; recovery refused for a scan that delivered nothing yet; the files a scan
+  stopped in its evaluation delivered recovered (warning, exit code 4), then the rest once it is done, the folder
+  ending as a recovery of a complete scan makes it (L172); a recovery job stopped after
   every file, then resumed to the same files under the same names; Ctrl+C before recovering (no job recorded);
   imaging stopped and resumed with `--resume` to the same bytes; Ctrl+C before imaging and inspecting.
 - `cli_resume_test.cpp`: the session journal cut after every record and in the middle of every update, as a
@@ -337,4 +376,5 @@ CTest also runs the program directly: `cli.version`, `cli.help`, `cli.no_argumen
 
 ## Known limitations
 
-L168-L180 in [../limitations.md](../limitations.md). L42 and L167 changed with P18.
+L168-L180 in [../limitations.md](../limitations.md). L42 and L167 changed with P18. L172 and L177 are resolved after
+P20 (2026-10-16), and so is L147 (sessions).

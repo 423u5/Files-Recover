@@ -247,6 +247,11 @@ public:
     [[nodiscard]] bool empty() const noexcept { return sequence_ == 0; }
     [[nodiscard]] std::uint64_t sequence() const noexcept { return sequence_; }
     [[nodiscard]] const std::optional<ScanIdentity>& identity() const noexcept { return identity_; }
+    // The scan's source is found under another path: a physical disk the
+    // system numbered anew (L147), which the caller has checked is the same
+    // disk, unchanged. The identity takes the path, so that the scan resumes
+    // there; nothing else changes (nor anything before the first update).
+    void moveSource(std::string sourcePath);
     // The stage to run (or in progress); Completed once the scan is.
     [[nodiscard]] ScanStage stage() const noexcept { return stage_; }
     [[nodiscard]] bool completed() const noexcept { return stage_ == ScanStage::Completed; }

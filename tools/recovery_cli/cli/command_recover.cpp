@@ -224,15 +224,28 @@ ExitCode runRecover(const ParsedOptions& options, Context& context) {
     session::RecoverySession& session = **opened;
     const session::SessionInfo info = session.info();
     const std::string arguments = sessionArguments(info.id, options);
-    if (info.scan.state != session::SessionState::Completed) {
-        context.error("the scan of session " + printable(info.id) + " is not complete (" +
-                      (info.scan.state.has_value() ? std::string(session::toString(*info.scan.state)) + " at stage " +
-                                                         stageName(info.scan.stage)
-                                                   : std::string("not started")) +
-                      "): finish it first with recovery scan " + arguments);
-        return ExitCode::Error;
-    }
     const std::vector<evaluation::EvaluatedCandidate> candidates = session.candidates();
+    // A scan that did not complete (stopped, failed, a source that failed for
+    // good before its end) has the files it delivered so far: they are
+    // recovered, with a warning (L172); the rest come once the scan is done.
+    const bool scanComplete = info.scan.state == session::SessionState::Completed;
+    const std::string scanState =
+        info.scan.state.has_value()
+            ? std::string(session::toString(*info.scan.state)) + " at stage " + std::string(stageName(info.scan.stage))
+            : std::string("not started");
+    if (!scanComplete) {
+        if (candidates.empty()) {
+            context.error("the scan of session " + printable(info.id) + " is not complete (" + scanState +
+                          ") and has delivered no files yet: resume it first with recovery scan " + arguments);
+            return ExitCode::Error;
+        }
+        context.warning("the scan of session " + printable(info.id) + " is not complete (" + scanState +
+                        "): only the " + formatCount(candidates.size()) +
+                        (candidates.size() == 1 ? " file" : " files") +
+                        " it delivered so far can be recovered. Resume it with recovery scan " + arguments +
+                        " to find the rest, then run this command again: it writes only what is not in the folder "
+                        "yet");
+    }
     if (filters.ids.has_value() && filters.ids->last() > candidates.size()) {
         context.error("there is no candidate " + std::to_string(filters.ids->last()) + ": session " +
                       printable(info.id) + " has " + formatCount(candidates.size()));
@@ -439,6 +452,9 @@ ExitCode runRecover(const ParsedOptions& options, Context& context) {
     }
     std::ostream& out = context.out();
     out << "Destination:     " << displayPath(destination) << '\n';
+    if (!scanComplete) {
+        out << "Scan:            not complete (" << scanState << "): what it did not deliver yet is not here\n";
+    }
     out << "Selected:        " << formatCount(selected.size()) << " of " << formatCount(candidates.size())
         << " candidates" << (filters.any() ? " (filtered)" : "") << '\n';
     out << "Recovered:       " << formatCount(written) << (written == 1 ? " file, " : " files, ") << formatSize(bytes)
@@ -481,7 +497,7 @@ ExitCode runRecover(const ParsedOptions& options, Context& context) {
         context.note("Recovery was stopped; what was written is kept. To go on, run the same command again.");
         return ExitCode::Cancelled;
     }
-    if (!failed.empty() || !incomplete.empty()) {
+    if (!failed.empty() || !incomplete.empty() || !scanComplete) {
         return ExitCode::Incomplete;
     }
     return ExitCode::Success;
@@ -502,7 +518,12 @@ const CommandSpec& recoverCommand() {
         "\n"
         "The session records every file written. After Ctrl+C or a crash, run the same command again: it\n"
         "finishes the files that were under way and writes no file twice. Run again later, it only writes\n"
-        "selected files that are not in FOLDER yet.",
+        "selected files that are not in FOLDER yet.\n"
+        "\n"
+        "A scan that did not complete (stopped, or its source failed) gives the files it delivered so far:\n"
+        "they are written, with a warning and exit code 4. Resume the scan, then run the command again\n"
+        "for the rest. The source is found under its disk number, or under another one if Windows\n"
+        "numbered it anew (the same device, unchanged).",
         kOptions,
         &runRecover,
     };

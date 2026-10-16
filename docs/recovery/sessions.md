@@ -24,7 +24,7 @@ checked as a recovery destination is (`checkDestinationSafety`), before anything
 
 | The plan's item | Where |
 | --- | --- |
-| source information, source type | `SessionInfo::source`: what `getInfo()` said (type, path, size, sector sizes, disk number, vendor, product, removable) and the source's fingerprint |
+| source information, source type | `SessionInfo::source`: what `getInfo()` said (type, path, size, sector sizes, disk number, vendor, product, removable; a physical disk's serial number from journal format 3 on) and the source's fingerprint; a physical disk as the session last found it (L147) |
 | filesystem | `SessionInfo::volumes`: each volume's filesystem, label, serial number, cluster size, files, or why it could not be used; the scan's checkpoint holds the volumes' whole `CandidateScan` |
 | configuration | `SessionInfo::configuration`: the scan's `ScanConfiguration` (the playability checker is not stored: `playability` says whether the scan uses one) |
 | progress | `ScanStatus`: the state and its history, the stage, the updates recorded, the metrics (P15's `ScanMetrics`); `progress()` while it runs |
@@ -66,6 +66,7 @@ The journal is append-only. Each record is one thing that happened:
 | `JobUpdate` | for every update a job hands out | the job's number and its `RecoveryJobUpdate` |
 | `FileStarted` | when a job has created a file, before its data | the job, the candidate, the file's path |
 | `Damage` (optional) | when the session found its journal damaged | where, what was dropped, the copy kept |
+| `SourceFound` (optional) | when a scan or a job begins on the session's physical disk under another number, or described otherwise (L147) | the disk's path and number, vendor, product, removability and serial number now |
 
 ```
 header  "RCVSESSN"  version (u32)  CRC-32 (u32)                                                           16 bytes
@@ -150,12 +151,31 @@ the last recorded.
 
 ### The source
 
-The source must be the session's: the same type, path, size and sector size, and the same fingerprint. The
-fingerprint is SHA-256 of the first 64 KiB of the source and the first 64 KiB of every partition its partition table
-lists, each preceded by its offset and length, unreadable sectors as zeros. Two cards of one model and size differ
-there: their volume serial numbers, at least. A card written to since (FAT32's free count, exFAT's percentage in use)
-does too. A scan of another medium in the same reader, or of a changed one, is refused instead of mixing two media
-in one result (L146).
+The source must be the session's (`checkSameSource`): the same type, size and sector size, and the same
+fingerprint. The fingerprint is SHA-256 of the first 64 KiB of the source and the first 64 KiB of every partition
+its partition table lists, each preceded by its offset and length, unreadable sectors as zeros. Two cards of one
+model and size differ there: their volume serial numbers, at least. A card written to since (FAT32's free count,
+exFAT's percentage in use) does too. A scan of another medium in the same reader, or of a changed one, is refused
+instead of mixing two media in one result (L146).
+
+An image file must be under the same path (L141). A physical disk may have any number (L147): Windows numbers disks
+as they are attached, so a card reader plugged in again, or found after a restart, may be another
+`\\.\PhysicalDriveN`, and its old number another disk. It must be the same device, not only hold the same content
+(the user's choice, 2026-10-16): when the session recorded a serial number, the disk must report it; when it
+recorded none (a session of an older format, a device that reports none), the disk's vendor and product must be the
+recorded ones (`deviceDifference`). A card reader and a USB enclosure report their own serial number, so a card in
+another reader, or a disk in another enclosure, is another device (L246).
+
+`findSessionDisk` opens the session's disk for the CLI and the API: the disk under the recorded number first, then
+every disk attached (`storage::DiskLister`) of the session's size and sector size that is the same device, by its
+content. It fails, saying why each disk tried is not the session's, when none is; when several are (copies in readers
+of one model); and at once when the recorded disk cannot be opened for want of administrator rights. A scan or a job
+that begins on the disk under another number, or on a disk that describes itself otherwise (the serial number of
+an older session), records a `SourceFound` record first: the session's source takes the disk as it is now, and so does
+the scan's identity (`ScanCheckpoint::moveSource`), so that the scan resumes there. The record is optional: an older
+engine skips it and knows the disk by its old number. `possibleSessionSources` gives every disk attached that may be
+the session's (its device, its size or no size told; the recorded number when the list does not show it): a report
+or a log written without opening the disk is kept off all of them.
 
 ## Recovery jobs
 
@@ -244,6 +264,8 @@ card (2 MiB, 10 candidates) it is 17.6 KB in 33 records.
     the same bytes, and the candidates explain themselves the same;
   * decoded updates make the same checkpoint;
   * the stage stops come back in format 2, and format 1 encodes and decodes the rest as before;
+  * a disk's serial number comes back in format 3 and is not in older formats' encoding; the record of a disk found
+    again is encoded alike in every format;
   * payloads cut at every byte are refused, and so are values out of range, numbers not in their shortest form,
     lengths beyond the data, broken candidates and paths that are not UTF-8;
   * random damage never crashes the decoder.
@@ -275,8 +297,23 @@ card (2 MiB, 10 candidates) it is 17.6 KB in 33 records.
     * the playability checker;
     * errors and unreadable regions;
     * listing.
+* `session_disk_test.cpp` covers a physical disk under another number (L147), on simulated disks
+  (`tests/support/disk_rack.hpp`):
+  * the same device with the same content is the session's under any number; the same content in another device
+    (another serial number, none, another model for a session that recorded none) and the same device written to
+    since are not; an image file is known by its path;
+  * the disk is found under its number, or under another when another disk took its number; when it is not attached,
+    every disk tried says why; twice the same device and content is refused; without administrator rights, at once;
+    without a disk list, the recorded number alone;
+  * reports stay off every disk that may be the session's, and not off its old number when another device has it;
+  * a scan stopped in the source pass, its disk plugged in again under another number: the old number is refused
+    with nothing recorded, the scan resumes on the new one to the uninterrupted result, recovers there, one optional
+    `SourceFound` record says so, and the session opened again and its listing show the new number;
+  * a session of format 2 learns its disk's serial number (in format 2), and refuses another serial from then on.
 
 ## Known limitations
 
 L144–L152 in [../limitations.md](../limitations.md). L138 and L140 are resolved by P16; L40, L42, L99, L139 and L141
 changed with it. L152 is resolved after P20: journal format 2 (L228), and format-1 sessions are read and kept.
+L147 is resolved after P20 (2026-10-16): journal format 3 records a disk's serial number, and a session finds its
+disk under another number; L246 and L247 are what that leaves.

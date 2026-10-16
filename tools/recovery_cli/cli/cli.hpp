@@ -28,6 +28,7 @@
 #include "scan/scan_coordinator.hpp"
 #include "storage/destination_guard.hpp"
 #include "storage/device_io.hpp"
+#include "storage/disk_list.hpp"
 
 #include <chrono>
 #include <cstddef>
@@ -57,7 +58,8 @@ enum class ExitCode : int {
     Cancelled = 3,
     // Done, but not everything could be read or written: unreadable source
     // sectors (image, scan), files that could not be written or were
-    // written with bytes missing or unreadable (recover).
+    // written with bytes missing or unreadable, or only the files a scan
+    // that did not complete has delivered (recover).
     Incomplete = 4,
 };
 
@@ -97,6 +99,9 @@ struct Environment {
     std::shared_ptr<storage::IDeviceOpener> diskOpener;
     // Tells which physical disks a destination is on (empty: the platform's).
     storage::DiskResolver diskResolver;
+    // Lists the disks attached (empty: the platform's): `disks`, and where a
+    // session's disk is now (L147).
+    storage::DiskLister diskLister;
     // Told every progress report before it is shown (tests interrupt a
     // command at a chosen point from here). On the command's thread.
     std::function<void(const ProgressEvent&)> onProgress;

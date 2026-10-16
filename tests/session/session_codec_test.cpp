@@ -321,6 +321,7 @@ TEST(SessionCodecTest, EverySessionRecordComesBackAsItWas) {
     created.source.vendor = "Vendor";
     created.source.product = "Card reader";
     created.source.removable = true;
+    created.source.serialNumber = "4C530001231108116234";
     created.source.fingerprint.digest = sha256(Bytes(10, std::byte{1}));
     created.source.fingerprint.bytes = 131072;
     created.source.fingerprint.unreadableBytes = 512;
@@ -333,6 +334,7 @@ TEST(SessionCodecTest, EverySessionRecordComesBackAsItWas) {
     EXPECT_EQ(session.source.path, created.source.path);
     EXPECT_EQ(session.source.fingerprint, created.source.fingerprint);
     EXPECT_EQ(session.source.diskNumber, 4U);
+    EXPECT_EQ(session.source.serialNumber, created.source.serialNumber);
     EXPECT_EQ(session.configuration.knownBadRegions, created.configuration.knownBadRegions);
     EXPECT_EQ(session.configuration.playability, nullptr);
     EXPECT_TRUE(session.playability);
@@ -393,6 +395,63 @@ TEST(SessionCodecTest, EverySessionRecordComesBackAsItWas) {
     damage.reason = "a record whose payload does not check";
     damage.backup = "session.journal.damaged-1";
     EXPECT_EQ(roundTrip(damage, RecordType::Damage).recordsDropped, 3U);
+
+    SourceFoundRecord found;
+    found.path = "\\\\.\\PhysicalDrive3";
+    found.diskNumber = 3;
+    found.vendor = "SanDisk";
+    found.product = "Ultra";
+    found.removable = true;
+    found.serialNumber = "4C530001231108116234";
+    const SourceFoundRecord foundBack = roundTrip(found, RecordType::SourceFound);
+    EXPECT_EQ(foundBack.path, found.path);
+    EXPECT_EQ(foundBack.diskNumber, 3U);
+    EXPECT_EQ(foundBack.product, "Ultra");
+    EXPECT_EQ(foundBack.removable, true);
+    EXPECT_EQ(foundBack.serialNumber, found.serialNumber);
+}
+
+// A disk's serial number is a field of format 3 (L147): a journal of an older
+// format keeps its encoding, without it. The record of a disk found again is
+// encoded alike in every format (an older engine skips it).
+TEST(SessionCodecTest, TheSerialNumberIsKeptFromTheThirdFormatOn) {
+    SessionCreatedRecord created;
+    created.id = "20261016-101530-3fa94c2e";
+    created.engineVersion = "0.1.0";
+    created.source.type = storage::SourceType::PhysicalDisk;
+    created.source.path = "\\\\.\\PhysicalDrive2";
+    created.source.size = 30752636928;
+    created.source.sectorSize = 512;
+    created.source.diskNumber = 2;
+    created.source.vendor = "SanDisk";
+    created.source.product = "Ultra";
+    created.source.serialNumber = "4C530001231108116234";
+    SessionCreatedRecord unnumbered = created;
+    unnumbered.source.serialNumber.clear();
+    for (const std::uint32_t version : {1U, 2U}) {
+        SCOPED_TRACE(version);
+        const Bytes bytes = encodePayload(created, version);
+        EXPECT_EQ(bytes, encodePayload(unnumbered, version));
+        Result<RecordPayload> back = decodePayload(RecordType::SessionCreated, bytes, version);
+        RECOVERY_ASSERT_OK(back);
+        EXPECT_TRUE(std::get<SessionCreatedRecord>(*back).source.serialNumber.empty());
+    }
+    Result<RecordPayload> back = decodePayload(RecordType::SessionCreated, encodePayload(created, 3), 3);
+    RECOVERY_ASSERT_OK(back);
+    EXPECT_EQ(std::get<SessionCreatedRecord>(*back).source.serialNumber, created.source.serialNumber);
+
+    SourceFoundRecord found;
+    found.path = "\\\\.\\PhysicalDrive5";
+    found.diskNumber = 5;
+    found.serialNumber = "4C530001231108116234";
+    const Bytes bytes = encodePayload(found, 3);
+    for (const std::uint32_t version : {1U, 2U}) {
+        SCOPED_TRACE(version);
+        EXPECT_EQ(encodePayload(found, version), bytes);
+        Result<RecordPayload> again = decodePayload(RecordType::SourceFound, bytes, version);
+        RECOVERY_ASSERT_OK(again);
+        EXPECT_EQ(std::get<SourceFoundRecord>(*again).serialNumber, found.serialNumber);
+    }
 }
 
 // ===========================================================================

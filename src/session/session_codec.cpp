@@ -1247,6 +1247,9 @@ void fields(A& a, V& v) {
     a(v.vendor);
     a(v.product);
     a(v.removable);
+    if (a.version() >= 3) {
+        a(v.serialNumber);
+    }
     a(v.fingerprint);
 }
 
@@ -1306,6 +1309,17 @@ void fields(A& a, V& v) {
     a(v.backup);
 }
 
+// The same in every format: a newer field needs a newer record type.
+template <class A, Of<SourceFoundRecord> V>
+void fields(A& a, V& v) {
+    a(v.path);
+    a(v.diskNumber);
+    a(v.vendor);
+    a(v.product);
+    a(v.removable);
+    a(v.serialNumber);
+}
+
 // ---------------------------------------------------------------------------
 
 template <class T>
@@ -1349,6 +1363,8 @@ std::string_view toString(RecordType type) noexcept {
         return "file-started";
     case RecordType::Damage:
         return "damage";
+    case RecordType::SourceFound:
+        return "source-found";
     }
     return "unknown";
 }
@@ -1363,6 +1379,7 @@ RecordType typeOf(const RecordPayload& payload) noexcept {
         RecordType operator()(const JobUpdateRecord&) const noexcept { return RecordType::JobUpdate; }
         RecordType operator()(const FileStartedRecord&) const noexcept { return RecordType::FileStarted; }
         RecordType operator()(const DamageRecord&) const noexcept { return RecordType::Damage; }
+        RecordType operator()(const SourceFoundRecord&) const noexcept { return RecordType::SourceFound; }
     };
     return std::visit(Visitor{}, payload);
 }
@@ -1403,6 +1420,10 @@ std::vector<std::byte> encodePayload(const DamageRecord& payload, std::uint32_t 
     return encodeValue(payload, version);
 }
 
+std::vector<std::byte> encodePayload(const SourceFoundRecord& payload, std::uint32_t version) {
+    return encodeValue(payload, version);
+}
+
 Result<RecordPayload> decodePayload(RecordType type, std::span<const std::byte> bytes, std::uint32_t version) {
     if (version < kOldestJournalFormatVersion || version > kJournalFormatVersion) {
         return makeError(ErrorCode::InvalidInput, "session: no journal format " + std::to_string(version));
@@ -1424,6 +1445,8 @@ Result<RecordPayload> decodePayload(RecordType type, std::span<const std::byte> 
         return decodeValue<FileStartedRecord>(type, bytes, version);
     case RecordType::Damage:
         return decodeValue<DamageRecord>(type, bytes, version);
+    case RecordType::SourceFound:
+        return decodeValue<SourceFoundRecord>(type, bytes, version);
     }
     return makeError(ErrorCode::InvalidInput,
                      "session: no record type " + std::to_string(static_cast<unsigned>(type)));

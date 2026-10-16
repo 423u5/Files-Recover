@@ -14,9 +14,9 @@ namespace recovery::cli {
 
 namespace {
 
-std::array<std::reference_wrapper<const CommandSpec>, 5> allCommands() {
-    return {std::cref(inspectCommand()), std::cref(imageCommand()), std::cref(scanCommand()),
-            std::cref(recoverCommand()), std::cref(reportCommand())};
+std::array<std::reference_wrapper<const CommandSpec>, 6> allCommands() {
+    return {std::cref(disksCommand()), std::cref(inspectCommand()),  std::cref(imageCommand()),
+            std::cref(scanCommand()),  std::cref(recoverCommand()), std::cref(reportCommand())};
 }
 
 const CommandSpec* findCommand(std::string_view name) {
@@ -53,14 +53,16 @@ std::string usageText() {
         "  help      Show the help of a command (recovery help scan)\n"
         "  version   Show the engine's version\n"
         "\n"
-        "A SOURCE is a disk image file or a physical disk (\\\\.\\PhysicalDriveN; reading a disk needs\n"
-        "administrator rights). The source is only ever read. Sessions are kept in\n"
+        "A SOURCE is a disk image file, a physical disk (\\\\.\\PhysicalDriveN, as recovery disks lists\n"
+        "them), or a drive letter (F:) for the whole disk it is on; reading a disk needs administrator\n"
+        "rights. The source is only ever read. Sessions are kept in\n"
         "%LOCALAPPDATA%\\RecoveryEngine\\Sessions unless --sessions-dir names another folder.\n"
         "\n"
         "Exit codes: 0 done, 1 wrong command line, 2 failed, 3 stopped (Ctrl+C), 4 done but not\n"
         "everything could be read or written.\n"
         "\n"
         "Example:\n"
+        "  recovery disks\n"
         "  recovery inspect --source card.img\n"
         "  recovery scan --source card.img --mode deep\n"
         "  recovery recover --session <id> --output D:\\Recovered\n"
@@ -96,6 +98,11 @@ ExitCode usageError(Context& context, const Error& error) {
 }
 
 bool openLogOption(const ParsedOptions& options, const storage::SourceInfo* source, Context& context) {
+    return openLogOption(options,
+                         source != nullptr ? std::span(source, 1) : std::span<const storage::SourceInfo>(), context);
+}
+
+bool openLogOption(const ParsedOptions& options, std::span<const storage::SourceInfo> sources, Context& context) {
     const std::optional<std::string_view> path = options.value(kLogOption.name);
     if (!path.has_value()) {
         return true;
@@ -105,7 +112,7 @@ bool openLogOption(const ParsedOptions& options, const storage::SourceInfo* sour
         (void)context.fail("cannot use the log file", file.error());
         return false;
     }
-    if (Status opened = context.openLog(*file, source); !opened.ok()) {
+    if (Status opened = context.openLog(*file, sources); !opened.ok()) {
         (void)context.fail("cannot open the log file '" + displayPath(*file) + "'", opened.error());
         return false;
     }

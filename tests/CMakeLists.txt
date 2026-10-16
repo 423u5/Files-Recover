@@ -22,6 +22,7 @@ add_library(recovery_test_support STATIC
     support/candidate_helpers.cpp
     support/card_fixtures.cpp
     support/carving_formats.cpp
+    support/disk_rack.cpp
     support/document_samples.cpp
     support/exfat_builder.cpp
     support/fake_device.cpp
@@ -363,6 +364,7 @@ add_executable(recovery_session_tests
     scan/scan_test_support.hpp
     session/recovery_session_test.cpp
     session/session_codec_test.cpp
+    session/session_disk_test.cpp
     session/session_journal_test.cpp
     session/session_test_support.cpp
     session/session_test_support.hpp
@@ -420,6 +422,7 @@ add_executable(recovery_cli_tests
     cli/cli_arguments_test.cpp
     cli/cli_cancellation_test.cpp
     cli/cli_commands_test.cpp
+    cli/cli_disk_test.cpp
     cli/cli_errors_test.cpp
     cli/cli_output_test.cpp
     cli/cli_process_test.cpp

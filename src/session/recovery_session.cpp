@@ -3,6 +3,7 @@
 #include "filesystem/filesystem.hpp"
 #include "recovery/text.hpp"
 #include "recovery/version.hpp"
+#include "storage/physical_disk_source.hpp"
 
 #include <algorithm>
 #include <array>
@@ -119,7 +120,39 @@ std::string differences(const scan::ScanIdentity& began, const scan::ScanIdentit
 
 bool knownType(std::uint16_t type) noexcept {
     return type >= static_cast<std::uint16_t>(RecordType::SessionCreated) &&
-           type <= static_cast<std::uint16_t>(RecordType::Damage);
+           type <= static_cast<std::uint16_t>(RecordType::SourceFound);
+}
+
+// What the session holds of its physical disk, as `found` says it is now.
+void takeFound(SessionSource& source, const SourceFoundRecord& found) {
+    source.path = found.path;
+    source.diskNumber = found.diskNumber;
+    source.vendor = found.vendor;
+    source.product = found.product;
+    source.removable = found.removable;
+    source.serialNumber = found.serialNumber;
+}
+
+// Where the session's physical disk is now and what it reports, when that
+// differs from what the session holds (L147); none otherwise, and for other
+// sources. `info` is a source checkSameSource() accepted.
+std::optional<SourceFoundRecord> foundAgain(const SessionSource& recorded, const storage::SourceInfo& info) {
+    if (recorded.type != storage::SourceType::PhysicalDisk || !info.diskNumber.has_value()) {
+        return std::nullopt;
+    }
+    SourceFoundRecord found;
+    found.path = toUtf8(info.path);
+    found.diskNumber = *info.diskNumber;
+    found.vendor = info.vendor;
+    found.product = info.product;
+    found.removable = info.removable;
+    found.serialNumber = info.serialNumber;
+    if (found.path == recorded.path && recorded.diskNumber == found.diskNumber && found.vendor == recorded.vendor &&
+        found.product == recorded.product && found.removable == recorded.removable &&
+        found.serialNumber == recorded.serialNumber) {
+        return std::nullopt;
+    }
+    return found;
 }
 
 }  // namespace
@@ -267,6 +300,10 @@ struct RecoverySession::Impl {
 
     Status removeLeftover(const std::string& path, std::uint64_t expectedSize) const;
     Result<std::string> backupJournal() const;
+    // Records where the session's physical disk is now (`info`, a source
+    // checkSameSource() accepted) when that differs from what the session
+    // holds (L147). By the operation's thread, the only writer of `created`.
+    Status recordSourceFound(const storage::SourceInfo& info);
 };
 
 Status RecoverySession::Impl::apply(RecordPayload&& payload, SessionTime time) {
@@ -339,6 +376,18 @@ Status RecoverySession::Impl::apply(RecordPayload&& payload, SessionTime time) {
     }
     if (auto* found = std::get_if<DamageRecord>(&payload)) {
         damage.push_back(SessionDamage{time, std::move(*found)});
+        return success();
+    }
+    if (auto* found = std::get_if<SourceFoundRecord>(&payload)) {
+        if (created.source.type != storage::SourceType::PhysicalDisk) {
+            return unreadable("a disk found again for a session of a source that is no disk");
+        }
+        if (found->path != toUtf8(storage::PhysicalDiskSource::devicePathFor(found->diskNumber))) {
+            return unreadable("a disk found again whose path is not its number's");
+        }
+        takeFound(created.source, *found);
+        // The scan resumes on the disk under its new number.
+        checkpoint.moveSource(std::move(found->path));
         return success();
     }
     return unreadable("a record of no known kind");
@@ -628,6 +677,17 @@ Status RecoverySession::Impl::removeLeftover(const std::string& path, std::uint6
         log(LogLevel::Info, "removed a file an interrupted recovery job left incomplete", {field("path", path)});
     }
     return success();
+}
+
+Status RecoverySession::Impl::recordSourceFound(const storage::SourceInfo& info) {
+    std::optional<SourceFoundRecord> found = foundAgain(created.source, info);
+    if (!found.has_value()) {
+        return success();
+    }
+    log(LogLevel::Info, found->path == created.source.path ? "the session's disk describes itself otherwise"
+                                                            : "the session's disk is found under another number",
+        {field("was", created.source.path), field("now", found->path), field("serial", found->serialNumber)});
+    return record(RecordPayload{std::move(*found)});
 }
 
 Result<std::string> RecoverySession::Impl::backupJournal() const {
@@ -923,17 +983,27 @@ Result<scan::ScanSummary> RecoverySession::runScan(storage::IStorageSource& sour
         scan::ScanCoordinator coordinator(source, formats, media, std::move(configuration), std::move(options));
         // A scan goes on only with what it began with (P15's identity): a run
         // with other formats or validators is refused before anything is
-        // recorded, not run and recorded as failed.
+        // recorded, not run and recorded as failed. A physical disk accepted
+        // under another number (L147) is the disk the scan began on.
+        const storage::SourceInfo info = source.getInfo();
         std::string different;
         {
             const std::lock_guard lock(s.mutex);
             if (s.checkpoint.identity().has_value()) {
-                different = differences(*s.checkpoint.identity(), coordinator.identity());
+                scan::ScanIdentity began = *s.checkpoint.identity();
+                if (info.type == storage::SourceType::PhysicalDisk) {
+                    began.sourcePath = toUtf8(info.path);
+                }
+                different = differences(began, coordinator.identity());
             }
         }
         if (!different.empty()) {
             s.finish(std::nullopt);
             return refused("the scan goes on only with what it began with: " + different + " differ");
+        }
+        if (Status found = s.recordSourceFound(info); !found.ok()) {
+            s.finish(std::nullopt);
+            return found.error();
         }
         if (Status started = s.markStarted(); !started.ok()) {
             s.finish(std::nullopt);
@@ -1154,6 +1224,9 @@ Result<scan::RecoveryJobSummary> RecoverySession::runRecovery(std::uint32_t job,
         if (Status removed = s.removeLeftover(path, expectedSizes[candidate]); !removed.ok()) {
             return fail(removed.error());
         }
+    }
+    if (Status found = s.recordSourceFound(source.getInfo()); !found.ok()) {
+        return fail(found.error());
     }
     if (Status started = s.markStarted(); !started.ok()) {
         return fail(started.error());
@@ -1463,7 +1536,8 @@ Result<SessionSummary> readSessionSummary(const std::filesystem::path& folder) {
     const auto small = [](std::uint16_t type) {
         return type == static_cast<std::uint16_t>(RecordType::SessionCreated) ||
                type == static_cast<std::uint16_t>(RecordType::ScanState) ||
-               type == static_cast<std::uint16_t>(RecordType::JobCreated);
+               type == static_cast<std::uint16_t>(RecordType::JobCreated) ||
+               type == static_cast<std::uint16_t>(RecordType::SourceFound);
     };
     bool created = false;
     for (;;) {
@@ -1510,6 +1584,7 @@ Result<SessionSummary> readSessionSummary(const std::filesystem::path& folder) {
             summary.sourceType = session->source.type;
             summary.sourcePath = session->source.path;
             summary.sourceSize = session->source.size;
+            summary.source = session->source;
             summary.mode = session->configuration.mode;
         } else if (const auto* state = std::get_if<ScanStateRecord>(&*payload)) {
             summary.state = state->state;
@@ -1517,6 +1592,11 @@ Result<SessionSummary> readSessionSummary(const std::filesystem::path& folder) {
             summary.metrics = state->metrics;
         } else if (std::holds_alternative<JobCreatedRecord>(*payload)) {
             ++summary.jobs;
+        } else if (const auto* found = std::get_if<SourceFoundRecord>(&*payload);
+                   found != nullptr && created && summary.sourceType == storage::SourceType::PhysicalDisk) {
+            // The disk under the number the session last found it (L147).
+            takeFound(summary.source, *found);
+            summary.sourcePath = found->path;
         }
     }
     if (!created) {

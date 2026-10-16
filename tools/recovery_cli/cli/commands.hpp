@@ -27,6 +27,7 @@ inline constexpr OptionSpec kHelpOption{"--help", "-h", "", "Show this help"};
 inline constexpr OptionSpec kQuietOption{"--quiet", "-q", "", "No progress and no notes on the error stream"};
 inline constexpr OptionSpec kLogOption{"--log", "", "FILE", "Append the engine's log to FILE (not on the source)"};
 
+[[nodiscard]] const CommandSpec& disksCommand();
 [[nodiscard]] const CommandSpec& inspectCommand();
 [[nodiscard]] const CommandSpec& imageCommand();
 [[nodiscard]] const CommandSpec& scanCommand();
@@ -40,8 +41,10 @@ inline constexpr OptionSpec kLogOption{"--log", "", "FILE", "Append the engine's
 // A usage error found in an option's value: reported with a pointer to the
 // command's help. Returns ExitCode::Usage.
 [[nodiscard]] ExitCode usageError(Context& context, const Error& error);
-// Opens --log when given, checked against `source` (none: nothing to protect).
-// Reports a failure and returns false.
+// Opens --log when given, checked against `source` (none: nothing to protect),
+// or against every one of `sources`. Reports a failure and returns false.
 [[nodiscard]] bool openLogOption(const ParsedOptions& options, const storage::SourceInfo* source, Context& context);
+[[nodiscard]] bool openLogOption(const ParsedOptions& options, std::span<const storage::SourceInfo> sources,
+                                 Context& context);
 
 }  // namespace recovery::cli

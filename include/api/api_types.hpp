@@ -77,6 +77,9 @@ struct DiskInfo {
     std::string vendor;
     std::string product;
     std::optional<bool> removable;
+    // As the device reports it (a memory card's is its reader's); empty
+    // when it reports none.
+    std::string serialNumber;
     // How it is attached: "USB", "SD", "SATA", "NVMe", ...; empty when not known.
     std::string bus;
     // The drive letters of its volumes ("E:"), in order.
@@ -102,6 +105,9 @@ struct SourceDetails {
     std::string vendor;
     std::string product;
     std::optional<bool> removable;
+    // A physical disk's, as the device reports it (a memory card's is its
+    // reader's); empty when it reports none.
+    std::string serialNumber;
     // For people: "physical disk 2 (Generic STORAGE DEVICE)", "disk image E:\card.img".
     std::string description;
 };

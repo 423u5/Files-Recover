@@ -38,6 +38,9 @@ struct SourceInfo {
     std::string vendor;
     std::string product;
     std::optional<bool> removable;
+    // What the device reports (DeviceDescription::serialNumber); empty when
+    // it reports none.
+    std::string serialNumber;
 };
 
 enum class ReadStatus : std::uint8_t {

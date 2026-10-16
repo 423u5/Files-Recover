@@ -20,7 +20,8 @@ namespace recovery::cli {
 namespace {
 
 constexpr OptionSpec kSourceOption{"--source", "", "SOURCE",
-                                   "A disk image file, or a physical disk (\\\\.\\PhysicalDriveN)"};
+                                   "A disk image file, or a physical disk (\\\\.\\PhysicalDriveN, or a drive letter "
+                                   "on it)"};
 constexpr OptionSpec kSectorSizeOption{"--sector-size", "", "BYTES",
                                        "An image's logical sector size (default: its metadata's, else 512)"};
 
@@ -42,6 +43,9 @@ void printSource(std::ostream& out, const OpenedSource& opened) {
     out << "Source:          " << describeSource(info) << '\n';
     if (info.type == storage::SourceType::PhysicalDisk) {
         out << "Device:          " << displayPath(info.path) << '\n';
+        if (!info.serialNumber.empty()) {
+            out << "Serial number:   " << printable(info.serialNumber) << '\n';
+        }
     }
     out << "Size:            " << formatBytes(info.sizeBytes) << '\n';
     out << "Sector size:     " << info.logicalSectorSize << " bytes";

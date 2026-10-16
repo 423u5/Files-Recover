@@ -149,6 +149,7 @@ struct SessionInfo {
     SessionTime created{};
     // The last record's time.
     SessionTime updated{};
+    // A physical disk as the session last found it (L147).
     SessionSource source;
     // The playability checker is not kept: `playability` says whether the
     // scan runs that level (runScan() needs a checker then).
@@ -243,7 +244,9 @@ public:
     RecoverySession& operator=(RecoverySession&&) = delete;
 
     // Runs the scan, or resumes it from its last update. The source must be
-    // the session's (same type, path, size, sector size and fingerprint);
+    // the session's (checkSameSource: same type, size, sector size and
+    // fingerprint; an image under the same path, a physical disk the same
+    // device under any number, which is recorded when it changed, L147);
     // the formats and validators those of the scan's first run (P15's scan
     // identity); `playability` a checker when the session's scan validates
     // playability, else null. options.control is replaced by the session's
@@ -265,7 +268,7 @@ public:
                                                        std::vector<evaluation::EvaluatedCandidateId> candidates = {});
     // Runs job `job`, or resumes it: the candidates not done yet are written
     // (files an interrupted run left half written are removed first). The
-    // source must be the session's. options.control and
+    // source must be the session's, as for runScan(). options.control and
     // options.onFileCreated are the session's. Fails with InvalidInput when
     // busy, for an unknown or completed job or another source; with the
     // job's errors; and with DestinationError.
@@ -319,8 +322,12 @@ struct SessionSummary {
     SessionTime created{};
     SessionTime updated{};
     storage::SourceType sourceType = storage::SourceType::Synthetic;
+    // A physical disk's under the number the session last found it (L147).
     std::string sourcePath;
     std::uint64_t sourceSize = 0;
+    // All the session records of its source (sourceType, sourcePath and
+    // sourceSize are its own), as the session last found it.
+    SessionSource source;
     ScanMode mode = ScanMode::Deep;
     // The scan's last recorded state, and where it was then.
     std::optional<SessionState> state;

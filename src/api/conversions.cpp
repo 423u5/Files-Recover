@@ -713,6 +713,7 @@ SourceDetails sourceDetailsOf(const storage::SourceInfo& info) {
     out.vendor = info.vendor;
     out.product = info.product;
     out.removable = info.removable;
+    out.serialNumber = info.serialNumber;
     out.description = report::describeSource(info.type, out.path, info.diskNumber, info.vendor, info.product);
     return out;
 }
@@ -728,6 +729,7 @@ SourceDetails sourceDetailsOf(const session::SessionSource& source) {
     out.vendor = source.vendor;
     out.product = source.product;
     out.removable = source.removable;
+    out.serialNumber = source.serialNumber;
     out.description =
         report::describeSource(source.type, source.path, source.diskNumber, source.vendor, source.product);
     return out;

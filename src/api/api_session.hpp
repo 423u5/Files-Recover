@@ -220,7 +220,7 @@ private:
     // Set once the session is open, then not changed.
     std::string id_;
     recovery::ScanMode mode_ = recovery::ScanMode::Deep;
-    session::SessionSource source_;
+    // (The source is the session's own: a disk's number may change, L147.)
     bool playability_ = false;
     std::vector<storage::BadRegion> knownBadRegions_;
 

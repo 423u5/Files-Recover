@@ -36,9 +36,11 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     if (size < 1) {
         return 0;
     }
+    // Every record type this engine knows, 1 to SourceFound.
+    constexpr unsigned kTypes = static_cast<unsigned>(RecordType::SourceFound);
     const std::span<const std::byte> rest = fuzz::bytesOf(data + 1, size - 1);
     if ((data[0] & 0x80) == 0) {
-        const auto type = static_cast<RecordType>(1 + (data[0] & 0x7F) % 8);
+        const auto type = static_cast<RecordType>(1 + (data[0] & 0x7Fu) % kTypes);
         const Result<RecordPayload> decoded = decodePayload(type, rest);
         if (decoded.ok()) {
             const std::vector<std::byte> encoded = encodePayload(*decoded);
@@ -66,7 +68,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         const JournalRecord& read = **record;
         fuzz::require(read.offset >= previousEnd && read.size <= reader->fileSize(), "a record out of place");
         previousEnd = read.offset + read.size;
-        if (read.payloadRead && read.type >= 1 && read.type <= 8) {
+        if (read.payloadRead && read.type >= 1 && read.type <= kTypes) {
             (void)decodePayload(static_cast<RecordType>(read.type), read.payload);
         }
     }

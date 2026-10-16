@@ -26,6 +26,9 @@ struct AttachedDisk {
     std::string vendor;
     std::string product;
     std::optional<bool> removable;
+    // What the device reports (DeviceDescription::serialNumber); empty when
+    // it reports none.
+    std::string serialNumber;
     // How it is attached: "USB", "SATA", "NVMe", "SD", "MMC", "SAS", "SCSI",
     // "ATA", "ATAPI", "1394", "Fibre Channel", "iSCSI", "RAID", "Virtual",
     // "File-backed virtual", "Storage Spaces", "UFS", "SCM"; empty when not

@@ -104,7 +104,8 @@ TEST_F(CliCancellationTest, CtrlCBeforeTheScanBegins) {
     EXPECT_EQ(test::sessionCandidates(sessions, *id), test::expectedCard(ScanMode::Deep));
 }
 
-TEST_F(CliCancellationTest, RecoveryRefusesAScanThatDidNotFinish) {
+// L172: a scan stopped before it delivered any file has nothing to recover.
+TEST_F(CliCancellationTest, RecoveryRefusesAScanThatDeliveredNothingYet) {
     bool asked = false;
     const CliResult stopped = cli.run({"scan", "--source", arg(image)}, [&](const ProgressEvent& event) {
         if (!asked && event.scan.has_value() && event.scan->stage == scan::ScanStage::SourcePass) {
@@ -114,14 +115,61 @@ TEST_F(CliCancellationTest, RecoveryRefusesAScanThatDidNotFinish) {
     });
     ASSERT_EQ(stopped.code, ExitCode::Cancelled) << stopped;
     const std::string id = test::sessionIdOf(stopped.out).value_or("");
+    EXPECT_FALSE(contains(stopped.err, "can be recovered now")) << stopped;
     const CliResult refused = cli.run({"recover", "--session", id, "--output", arg(dir.path() / "out")});
     EXPECT_EQ(refused.code, ExitCode::Error) << refused;
-    EXPECT_TRUE(contains(refused.err, "the scan of session " + id + " is not complete (cancelled at stage source "
-                                                                    "pass): finish it first with recovery scan "
-                                                                    "--session " +
+    EXPECT_TRUE(contains(refused.err, "the scan of session " + id +
+                                          " is not complete (cancelled at stage source pass) and has delivered no "
+                                          "files yet: resume it first with recovery scan --session " +
                                           id))
         << refused;
     EXPECT_FALSE(std::filesystem::exists(dir.path() / "out"));
+}
+
+// L172: what a scan delivered before it stopped (a failing drive that dies
+// in the evaluation) is recovered, with a warning and exit code 4; once the
+// scan is done, the same command writes the rest, none twice: the folder
+// ends as a recovery of a complete scan makes it.
+TEST_F(CliCancellationTest, RecoveryOfAScanThatDidNotFinishWritesWhatItDelivered) {
+    // One worker evaluates a few candidates at a time: stopped after the first.
+    bool asked = false;
+    const CliResult stopped =
+        cli.run({"scan", "--source", arg(image), "--workers", "1"}, [&](const ProgressEvent& event) {
+            if (!asked && event.scan.has_value() && event.scan->stage == scan::ScanStage::Evaluation &&
+                event.scan->stageDone >= 1) {
+                asked = true;
+                (void)cli.interrupt().request();
+            }
+        });
+    ASSERT_EQ(stopped.code, ExitCode::Cancelled) << stopped;
+    const std::string id = test::sessionIdOf(stopped.out).value_or("");
+    const std::size_t delivered = test::sessionCandidates(sessions, id).size();
+    ASSERT_GT(delivered, 0U);
+    ASSERT_LT(delivered, test::expectedCard(ScanMode::Deep).size());
+    EXPECT_TRUE(contains(stopped.err, " it delivered so far can be recovered now: recovery recover --session " + id +
+                                          " --output FOLDER"))
+        << stopped;
+
+    const std::filesystem::path out = dir.path() / "out";
+    const CliResult partial = cli.run({"recover", "--session", id, "--output", arg(out)});
+    EXPECT_EQ(partial.code, ExitCode::Incomplete) << partial;
+    EXPECT_TRUE(contains(partial.err, "warning: the scan of session " + id +
+                                          " is not complete (cancelled at stage evaluation): only the " +
+                                          std::to_string(delivered)))
+        << partial;
+    EXPECT_TRUE(contains(partial.out, "Scan:            not complete (cancelled at stage evaluation)")) << partial;
+    EXPECT_TRUE(contains(partial.out, "Selected:        " + std::to_string(delivered) + " of " +
+                                          std::to_string(delivered) + " candidates"))
+        << partial;
+    EXPECT_FALSE(test::filesBelow(out).empty());
+
+    ASSERT_EQ(cli.run({"scan", "--session", id}).code, ExitCode::Success);
+    const CliResult rest = cli.run({"recover", "--session", id, "--output", arg(out)});
+    EXPECT_EQ(rest.code, ExitCode::Success) << rest;
+    EXPECT_FALSE(contains(rest.out, "Scan:")) << rest;
+    const std::filesystem::path reference = dir.path() / "reference";
+    ASSERT_EQ(cli.run({"recover", "--session", scanned(), "--output", arg(reference)}).code, ExitCode::Success);
+    EXPECT_EQ(test::filesBelow(out), test::filesBelow(reference));
 }
 
 TEST_F(CliCancellationTest, ARecoveryStoppedAfterAnyFileGoesOnWithoutWritingTwice) {

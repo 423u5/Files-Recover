@@ -8,13 +8,17 @@
 #include "recovery/config.hpp"
 #include "recovery/result.hpp"
 #include "recovery/sha256.hpp"
+#include "storage/disk_list.hpp"
 #include "storage/storage_source.hpp"
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace recovery::session {
 
@@ -61,7 +65,9 @@ struct SourceFingerprint {
 };
 
 // The source a session belongs to: what IStorageSource::getInfo() said when
-// the session was created, and its fingerprint.
+// the session was created, and its fingerprint. A physical disk's path,
+// number and description are as the session last found it (L147: Windows
+// numbers disks as they are attached).
 struct SessionSource {
     storage::SourceType type = storage::SourceType::Synthetic;
     // UTF-8.
@@ -74,6 +80,10 @@ struct SessionSource {
     std::string vendor;
     std::string product;
     std::optional<bool> removable;
+    // Physical disks, from journal format 3 on: the device's serial number;
+    // empty when it reports none, and in older sessions until one finds its
+    // disk again.
+    std::string serialNumber;
     SourceFingerprint fingerprint;
 };
 
@@ -88,10 +98,55 @@ struct SessionSource {
 [[nodiscard]] Result<SessionSource> describeSource(storage::IStorageSource& source,
                                                    const CancellationToken& cancel = {});
 
+// What differs between the device a session records and a disk's (L147, the
+// user's choice of 2026-10-16: the device must be the same, not only its
+// content): when the session recorded a serial number, the disk must report
+// it; when it recorded none (sessions before journal format 3, devices that
+// report none), the disk's vendor and product must be the recorded ones.
+// Empty when nothing does. A card reader or a USB enclosure reports its own
+// serial number, so the card or the disk in another one is another device.
+[[nodiscard]] std::string deviceDifference(const SessionSource& recorded, std::string_view vendor,
+                                           std::string_view product, std::string_view serialNumber);
+
 // Whether `source` is the one `recorded` describes, unchanged: the same type,
-// path, size and sector size, and the same fingerprint. Fails with
-// InvalidInput saying what differs, and like fingerprintSource().
+// size and sector size, and the same fingerprint; an image file under the
+// same path; a physical disk the same device (deviceDifference), under any
+// number. Fails with InvalidInput saying what differs, and like
+// fingerprintSource().
 [[nodiscard]] Status checkSameSource(const SessionSource& recorded, storage::IStorageSource& source,
                                      const CancellationToken& cancel = {});
+
+// Opens physical disk `number` read-only: the caller's opener, whose errors
+// say what to do (administrator rights).
+using SessionDiskOpener = std::function<Result<std::unique_ptr<storage::IStorageSource>>(std::uint32_t number)>;
+
+struct FoundSessionDisk {
+    std::unique_ptr<storage::IStorageSource> source;
+    // Its number now; whether the session recorded another.
+    std::uint32_t number = 0;
+    bool renumbered = false;
+};
+
+// Finds the physical disk `recorded` describes among the disks attached
+// (L147): after a restart, or once unplugged and plugged in again, the
+// session's disk may have another number, and its number another disk. The
+// disk under the recorded number is tried first; then every disk `list`
+// gives of the recorded size and sector size (or of a size it does not
+// tell) that is the same device (deviceDifference), by its content
+// (checkSameSource). Fails with
+// InvalidInput when no disk is the session's, saying why each disk tried is
+// not, or when several are; at once with the recorded disk's error when it
+// cannot be opened for want of rights (no other disk could be either).
+[[nodiscard]] Result<FoundSessionDisk> findSessionDisk(const SessionSource& recorded, const SessionDiskOpener& open,
+                                                       const storage::DiskLister& list,
+                                                       const CancellationToken& cancel = {});
+
+// The disks attached that may be the session's physical disk (of its size,
+// sector size and device) and the disk under its recorded number: what a
+// file written outside an operation (a report, a log) must not be on, when
+// the disk is not opened to tell which it is. Nothing is read from a disk.
+// Image files: the recorded source alone.
+[[nodiscard]] std::vector<storage::SourceInfo> possibleSessionSources(const SessionSource& recorded,
+                                                                     const storage::DiskLister& list);
 
 }  // namespace recovery::session

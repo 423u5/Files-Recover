@@ -46,81 +46,7 @@ const Bytes& card() {
     return bytes;
 }
 
-// A handle of a rack's disk: counted while open, closed after the rack's delay.
-class RackHandle final : public storage::IDeviceIo {
-public:
-    RackHandle(std::unique_ptr<storage::IDeviceIo> device, std::shared_ptr<RackHandles> handles)
-        : device_(std::move(device)), handles_(std::move(handles)) {
-        ++handles_->open;
-    }
-    ~RackHandle() override {
-        std::this_thread::sleep_for(std::chrono::milliseconds(handles_->closeDelay.load()));
-        device_.reset();
-        --handles_->open;
-    }
-    RackHandle(const RackHandle&) = delete;
-    RackHandle& operator=(const RackHandle&) = delete;
-    RackHandle(RackHandle&&) = delete;
-    RackHandle& operator=(RackHandle&&) = delete;
-
-    Result<storage::DeviceGeometry> queryGeometry() override { return device_->queryGeometry(); }
-    storage::DeviceDescription describe() override { return device_->describe(); }
-    storage::DeviceReadResult readAt(std::uint64_t offset, std::span<std::byte> buffer) override {
-        return device_->readAt(offset, buffer);
-    }
-    std::optional<bool> mediaPresent() override { return device_->mediaPresent(); }
-
-private:
-    std::unique_ptr<storage::IDeviceIo> device_;
-    std::shared_ptr<RackHandles> handles_;
-};
-
 }  // namespace
-
-// ---------------------------------------------------------------------------
-// DiskRack
-// ---------------------------------------------------------------------------
-
-std::shared_ptr<::recovery::test::FakeDeviceConfig> DiskRack::add(
-    std::uint32_t number, Bytes bytes, std::vector<std::pair<std::uint64_t, std::uint64_t>> failing) {
-    auto config = std::make_shared<::recovery::test::FakeDeviceConfig>();
-    config->geometry = ::recovery::test::diskGeometry(bytes.size());
-    config->data = std::move(bytes);
-    config->description.vendor = "Simulated";
-    config->description.product = "Card Reader";
-    config->description.removable = true;
-    config->failingRanges = std::move(failing);
-    const std::lock_guard lock(mutex_);
-    disks_[number] = config;
-    return config;
-}
-
-void DiskRack::failOpen(std::uint32_t number, Error error) {
-    const std::lock_guard lock(mutex_);
-    failures_[number] = std::move(error);
-}
-
-Result<std::unique_ptr<storage::IDeviceIo>> DiskRack::openReadOnly(const std::filesystem::path& path,
-                                                                   storage::DeviceKind kind) {
-    if (kind != storage::DeviceKind::PhysicalDisk) {
-        return makeError(ErrorCode::InvalidInput, "the rack holds physical disks only");
-    }
-    const std::optional<std::uint32_t> number = storage::PhysicalDiskSource::parseDevicePath(path.native());
-    const std::lock_guard lock(mutex_);
-    if (number.has_value()) {
-        if (const auto failure = failures_.find(*number); failure != failures_.end()) {
-            return failure->second;
-        }
-        if (const auto disk = disks_.find(*number); disk != disks_.end()) {
-            return std::unique_ptr<storage::IDeviceIo>(std::make_unique<RackHandle>(
-                std::make_unique<::recovery::test::MemoryDeviceIo>(
-                    disk->second, std::make_shared<::recovery::test::FakeDeviceStats>()),
-                handles_));
-        }
-    }
-    // ERROR_FILE_NOT_FOUND, as Windows answers for a disk that is not there.
-    return makeError(ErrorCode::IoError, "no such disk", 2);
-}
 
 // ---------------------------------------------------------------------------
 // EventLog
@@ -209,6 +135,7 @@ void EventLog::clear() {
 ApiWorld::ApiWorld() {
     options_.progressInterval = std::chrono::milliseconds(0);
     hooks_.diskOpener = rack_;
+    hooks_.diskLister = rack_->lister();
     hooks_.systemFolder = folder() / "Windows";
     hooks_.diskResolver = [places = places_, mutex = placesMutex_](const std::filesystem::path& path)
         -> Result<std::vector<std::uint32_t>> {

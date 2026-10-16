@@ -28,7 +28,8 @@ namespace recovery::cli {
 namespace {
 
 constexpr OptionSpec kSourceOption{"--source", "", "SOURCE",
-                                   "Scan this disk image file or physical disk in a new session"};
+                                   "Scan this disk image file or physical disk (or the disk of a drive letter) in a "
+                                   "new session"};
 constexpr OptionSpec kSessionOption{"--session", "", "ID", "Resume the scan of this session"};
 constexpr OptionSpec kSessionsDirOption{kSessionsDirName, "", "FOLDER",
                                         "Where sessions are kept (default %LOCALAPPDATA%\\RecoveryEngine\\Sessions)"};
@@ -397,16 +398,26 @@ ExitCode runScan(const ParsedOptions& options, Context& context) {
     context.progress().clear();
     const bool cancelled = summary.ok() ? summary->outcome == scan::ScanOutcome::Cancelled
                                         : summary.error().code == ErrorCode::Cancelled;
+    // What a scan that did not complete delivered can be recovered already (L172).
+    const auto noteDelivered = [&] {
+        if (const std::size_t delivered = session->candidateCount(); delivered != 0) {
+            context.note("The " + formatCount(delivered) + (delivered == 1 ? " file" : " files") +
+                         " it delivered so far can be recovered now: recovery recover " + arguments +
+                         " --output FOLDER");
+        }
+    };
     if (!summary.ok() && !cancelled) {
         const ExitCode code = context.fail("the scan failed", summary.error());
         context.note("What the scan did is kept in the session. Once the cause is fixed: recovery scan " +
                      arguments);
+        noteDelivered();
         return code;
     }
     printScanSummary(context.out(), *session, !cancelled, options);
     context.out().flush();
     if (cancelled) {
         context.note("The scan was stopped; the session keeps what it did. To go on: recovery scan " + arguments);
+        noteDelivered();
         return ExitCode::Cancelled;
     }
     bool incomplete = false;

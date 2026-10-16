@@ -9,11 +9,13 @@
 #include "diagnostics/logger.hpp"
 #include "recovery/error.hpp"
 #include "recovery/result.hpp"
+#include "storage/disk_list.hpp"
 #include "storage/storage_source.hpp"
 
 #include <filesystem>
 #include <iosfwd>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -56,12 +58,16 @@ public:
     // `source` (none: no source to protect), so that nothing is ever created
     // on the source. Fails with DestinationError.
     [[nodiscard]] Status prepareFolderFor(const std::filesystem::path& path, const storage::SourceInfo* source);
+    // The same against every one of `sources` (a session's disk is one of
+    // them, when it is not opened to tell which, L147).
+    [[nodiscard]] Status prepareFolderFor(const std::filesystem::path& path,
+                                          std::span<const storage::SourceInfo> sources);
 
     // --log: the engine's log records (Info and above) appended to `path`,
-    // which must not be on `source` (checked as a recovery destination is;
-    // none: no source to protect); its folder is created when missing. Fails
-    // with the destination's error.
-    [[nodiscard]] Status openLog(const std::filesystem::path& path, const storage::SourceInfo* source);
+    // which must not be on any of `sources` (checked as a recovery
+    // destination is; none: no source to protect); its folder is created
+    // when missing. Fails with the destination's error.
+    [[nodiscard]] Status openLog(const std::filesystem::path& path, std::span<const storage::SourceInfo> sources);
     // The log, or null without --log.
     [[nodiscard]] diagnostics::Logger* logger() noexcept { return logger_.get(); }
 
@@ -75,6 +81,8 @@ public:
     // The disk resolver for destination checks (the environment's, else the
     // platform's).
     [[nodiscard]] storage::DiskResolver diskResolver() const;
+    // The disk lister (the environment's, else the platform's).
+    [[nodiscard]] storage::DiskLister diskLister() const;
 
 private:
     Environment& environment_;
