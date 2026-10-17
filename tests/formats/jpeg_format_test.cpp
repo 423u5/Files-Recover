@@ -1,7 +1,7 @@
 // JPEG: intact files from the builder (baseline and progressive, every
 // sampling, restart intervals, Exif thumbnails, comments, fill bytes, odd
-// sizes) and from real encoders; truncation at every position; header
-// rejection; damaged segments, tables, frames, scans and restart markers;
+// sizes) and from real encoders; empty table segments; truncation at every
+// position; header rejection; damaged segments, tables, frames, scans and restart markers;
 // overwritten and fragmented entropy-coded data; erased media; fuzzing.
 
 #include "formats/jpeg_format.hpp"
@@ -326,6 +326,30 @@ TEST(JpegFormatTest, MissingOrDamagedTablesAreInvalid) {
     EXPECT_TRUE(isInvalid(format(), overwritten(file, table + 17, {40})));
     // Huffman tables are not required: Motion-JPEG frames rely on the standard tables.
     EXPECT_EQ(verdictOf(format(), withoutSegment(file, 0xC4)).status, ValidationStatus::Valid);
+}
+
+TEST(JpegFormatTest, EmptyTableSegmentsAreIntact) {
+    // Some encoders write a DHT before every scan, one that defines no table
+    // when the scan needs no new one: here before libjpeg's DC refinement
+    // scan. libjpeg accepts it, and an empty DQT as well (L252).
+    const Bytes sample = test::samples::named("cjpeg_progressive.jpg").data();
+    const Bytes emptyDht = test::withEmptyHuffmanSegments(sample);
+    ASSERT_EQ(emptyDht.size(), sample.size() + 4);
+    EXPECT_TRUE(isIntact(format(), emptyDht));
+    EXPECT_TRUE(testing::prefixesAreTruncated(format(), emptyDht));
+    JpegOptions options = jpegOptions(64, 48, JpegSampling::Yuv420);
+    options.progressive = true;
+    options.restartInterval = 2;
+    const Bytes builder = test::makeJpeg(options);
+    const Bytes builderEmptyDht = test::withEmptyHuffmanSegments(builder);
+    ASSERT_GT(builderEmptyDht.size(), builder.size());
+    EXPECT_TRUE(isIntact(format(), builderEmptyDht));
+    const Bytes file = test::makeJpeg();
+    const test::JpegMarker dqt = markerOf(file, 0xDB);
+    EXPECT_TRUE(isIntact(format(), inserted(file, dqt.offset, test::jpegSegment(0xDB, {}))));
+    // Fewer bytes than one table are still a table cut short.
+    EXPECT_TRUE(isInvalid(format(), inserted(file, dqt.offset, test::jpegSegment(0xC4, Bytes(16, std::byte{0})))));
+    EXPECT_TRUE(isInvalid(format(), inserted(file, dqt.offset, test::jpegSegment(0xDB, Bytes(1, std::byte{0})))));
 }
 
 TEST(JpegFormatTest, MarkerOrderIsChecked) {

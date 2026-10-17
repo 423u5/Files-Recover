@@ -76,7 +76,10 @@ follow T.81; DQT and DHT tables that run beyond their segment, Huffman code leng
 canonical code, DC symbols beyond 16; a component whose quantization table was never defined; EOI before
 any frame or scan; markers reserved for JPEG extensions.
 
-DHT is **not** required: Motion-JPEG frames rely on the standard tables, and decoders supply them.
+DHT is **not** required: Motion-JPEG frames rely on the standard tables, and decoders supply them. A DQT or DHT
+segment that defines no table (length 2) is no problem either: libjpeg accepts it, and some encoders write a DHT
+before every scan, empty when the scan needs no new table (a progressive DC refinement scan). Until 2026-10-17 it
+was one, and such photos went to fragment reconstruction instead of being recovered whole (L252).
 Arithmetic coding (SOF9–SOF11, DAC), lossless and hierarchical frames are walked, but only their markers
 are checked.
 

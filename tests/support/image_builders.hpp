@@ -83,6 +83,11 @@ struct JpegMarker {
 // (an independent, simple reader for building corruption tests).
 [[nodiscard]] std::vector<JpegMarker> jpegMarkers(std::span<const std::byte> file);
 
+// The file with an empty DHT segment (length 2) before every scan that no DHT
+// segment precedes, as some encoders write one before each scan that needs no
+// new table (L252).
+[[nodiscard]] std::vector<std::byte> withEmptyHuffmanSegments(std::span<const std::byte> file);
+
 // ---------------------------------------------------------------------------
 // PNG
 // ---------------------------------------------------------------------------

@@ -2,7 +2,8 @@
 // and progressive, every sampling, restart intervals, odd sizes, Exif
 // thumbnails, fill bytes) and of independent encoders (libjpeg-turbo's
 // successive approximation, restart markers, optimized tables, GDI+); the
-// standard tables of Annex K.3 for files without DHT; damage the marker walk
+// standard tables of Annex K.3 for files without DHT; empty DHT segments before
+// scans that need no new table; damage the marker walk
 // cannot see (L62): foreign data inside a scan, with and without restart
 // markers; broken tables and progressions; truncation, limits, fuzzing.
 
@@ -125,6 +126,15 @@ TEST(JpegMediaTest, FilesWithoutHuffmanTablesUseTheStandardOnes) {
     stripped.insert(stripped.end(), file.begin() + static_cast<std::ptrdiff_t>(copied), file.end());
     ASSERT_LT(stripped.size(), file.size());
     EXPECT_TRUE(mediaIs("jpeg", stripped, LevelStatus::Passed, "the standard Huffman tables"));
+}
+
+TEST(JpegMediaTest, EmptyHuffmanSegmentsBeforeScansPass) {
+    // Some encoders write a DHT before every scan, empty when the scan needs
+    // no new table: here before libjpeg's DC refinement scan (L252).
+    const Bytes file = test::withEmptyHuffmanSegments(test::samples::named("cjpeg_progressive.jpg").data());
+    EXPECT_TRUE(passesEveryLevel("jpeg", file));
+    EXPECT_TRUE(mediaIs("jpeg", file, LevelStatus::Passed, "10 scans"));
+    EXPECT_TRUE(passesEveryLevel("jpeg", test::withEmptyHuffmanSegments(photo(64, 48, true, 3))));
 }
 
 TEST(JpegMediaTest, ForeignDataInsideAScanIsCaught) {

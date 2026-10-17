@@ -375,9 +375,7 @@ void JpegWalker::scanHeader(const Marker& marker, std::span<const std::byte> pay
 }
 
 void JpegWalker::quantizationTables(const Marker& marker, std::span<const std::byte> payload) {
-    if (payload.empty()) {
-        walk_.noteProblem(marker.start, "DQT defines no table");
-    }
+    // A DQT that defines no table is no problem: libjpeg accepts it (L252).
     std::size_t i = 0;
     while (i < payload.size()) {
         const std::uint8_t info = loadU8(payload, i);
@@ -399,9 +397,9 @@ void JpegWalker::quantizationTables(const Marker& marker, std::span<const std::b
 }
 
 void JpegWalker::huffmanTables(const Marker& marker, std::span<const std::byte> payload) {
-    if (payload.empty()) {
-        walk_.noteProblem(marker.start, "DHT defines no table");
-    }
+    // Nor is a DHT that defines none: some encoders write a DHT before every
+    // scan, empty when the scan needs no new table (a DC refinement scan), and
+    // libjpeg accepts it (L252).
     std::size_t i = 0;
     while (i < payload.size()) {
         const std::uint8_t info = loadU8(payload, i);

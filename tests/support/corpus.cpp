@@ -12,6 +12,7 @@
 #include "support/exfat_builder.hpp"
 #include "support/fat32_builder.hpp"
 #include "support/image_builders.hpp"
+#include "support/image_samples.hpp"
 #include "support/mp4_builders.hpp"
 #include "support/mp4_samples.hpp"
 #include "support/ntfs_builder.hpp"
@@ -2456,6 +2457,46 @@ Image exfatReusedFolder() {
     return image;
 }
 
+// After P20 (L252): a FAT32 stick of 16 KiB clusters formatted after use, as a
+// phone formats one. The encoder of its photos wrote a DHT before every scan,
+// one that defines no table when the scan needs no new one: nothing names the
+// photos any more, and carving must give them back whole.
+Image fat32EmptyDht() {
+    const Fat32BuilderOptions options = fatGeometry(32, 2048, "PHONE");  // 16 KiB clusters, 32 MiB
+    FatVolume old(options, 0x2201);
+    std::vector<Original> files;
+    const std::uint32_t root = Fat32ImageBuilder::root();
+    const std::uint32_t camera = old.folder(old.folder(root, "DCIM"), "Camera");
+    std::uint32_t next = 16;
+    const auto photo = [&](const std::string& name, Bytes bytes, std::string note) {
+        const std::uint32_t clusters = old.clustersFor(bytes.size());
+        (void)old.builder.addFileInClusters(camera, name, bytes, run<std::uint32_t>(next, clusters));
+        next += clusters + 5;
+        files.push_back(with("/DCIM/Camera/" + name, std::move(bytes), Outcome::Carved, std::move(note)));
+    };
+    photo("IMG_0001.JPG", withEmptyHuffmanSegments(progressiveJpeg(3401, 640, 480)),
+          "progressive, an empty DHT before every scan; the format dropped its entry");
+    photo("IMG_0002.JPG", withEmptyHuffmanSegments(progressiveJpeg(3402, 480, 800)),
+          "progressive, an empty DHT before every scan; the format dropped its entry");
+    photo("IMG_0003.JPG", withEmptyHuffmanSegments(samples::named("cjpeg_progressive.jpg").data()),
+          "libjpeg's progression, an empty DHT before its DC refinement scan; the format dropped its entry");
+    const Bytes oldImage = old.builder.build();
+
+    // The format: a new volume whose clusters hold what the old one left; the
+    // phone's folders take the first clusters, the old DCIM's.
+    Fat32ImageBuilder formatted(options);
+    copyInto(formatted.raw(), formatted.clusterOffset(3),
+             std::span<const std::byte>(oldImage).subspan(static_cast<std::size_t>(formatted.clusterOffset(3))));
+    const std::uint32_t android = formatted.addDirectory(root, "Android").clusters.front();
+    const std::uint32_t data = formatted.addDirectory(android, "data").clusters.front();
+    (void)formatted.addFile(data, ".nomedia", {});
+    files.push_back(named("/Android/data/.nomedia", {}, Expected::Unverified, "written after the format"));
+    Image image;
+    image.bytes = formatted.build();
+    image.originals = std::move(files);
+    return image;
+}
+
 struct Entry {
     Scenario scenario;
     std::function<Image()> make;
@@ -2536,6 +2577,9 @@ const std::vector<Entry>& entries() {
             {"deleted files", "partially overwritten files", "corrupt filesystem metadata"}, fat32FolderParts);
         add("exfat-reused-folder", "exFAT: a folder of two clusters deleted with its photos, its File entry and first "
             "cluster taken by a newer file", {"deleted files", "partially overwritten files"}, exfatReusedFolder);
+        add("fat32-empty-dht", "FAT32 of 16 KiB clusters formatted after use: progressive photos with an empty DHT "
+            "before each scan that needs no new table", {"quick-formatted drives", "different cluster sizes"},
+            fat32EmptyDht);
         return list;
     }();
     return all;

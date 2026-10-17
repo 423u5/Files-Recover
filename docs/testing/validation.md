@@ -503,6 +503,43 @@ them identical, candidate by candidate (156, 4, 281, 51, 280 and 51 files), with
 
 **Checks** (2026-10-16, the final sources). msvc-debug: 1,769 tests, all passing (before four small edits: a reserve, a flag taken before a move, the 256-place bound, a constant's type; the filesystem, registry and four FAT and exFAT corpus tests passed again after them). clang-tidy, both passes, over the filesystem, format registry, scan coordinator, writer and job sources: two findings on this work's lines, both fixed (a multiplication in `int`, a vector filled without a reserve); the rest predate it. The full pass of every CI preset (release, AddressSanitizer, analyze, the fuzz preset and a fuzz run of the new seeds) is still to be run, by the user's choice: the next day.
 
+## After P20: progressive JPEGs with an empty Huffman table segment
+
+Found on the user's 32 GB stick and fixed at their request (2026-10-17; L252 in [../limitations.md](../limitations.md),
+the JPEG checks in [../formats/images.md](../formats/images.md)): a DQT or DHT segment that defines no table no longer
+makes a JPEG invalid.
+
+**What was wrong.** The stick (FAT32 of 16 KiB clusters a phone formatted: three files named) holds photos whose
+encoder writes a DHT segment before every scan, an empty one (length 2) before the progressive DC refinement scans,
+which need no table. libjpeg accepts it; the JPEG walker counted it as a structure problem. Each such photo failed the
+structural level, and fragment reconstruction took its carve over: it delivered the first clusters with zeros after
+them, `PARTIAL` or as up to 8 `AMBIGUOUS` layouts, which is why many recovered photos lacked the same number of bytes.
+
+**Tests.** `JpegFormatTest.EmptyTableSegmentsAreIntact` (libjpeg's progressive sample with an empty DHT before its DC
+refinement scan, a builder file with one before every scan, an empty DQT; a table segment shorter than one table still
+fails) and `JpegMediaTest.EmptyHuffmanSegmentsBeforeScansPass` (every level passes, the 10 scans decoded). Corpus
+scenario `fat32-empty-dht` (4 candidates deep, 1 quick): a FAT32 card of 16 KiB clusters formatted after use, whose
+three such photos must come back whole and `COMPLETE`; the old code gave 7 `AMBIGUOUS` and `PARTIAL` pieces of them.
+Every earlier corpus baseline is unchanged. A mutation check put each of the two checks back in turn: the DHT check
+was caught by all three tests, the DQT check by the format test.
+
+**Real data, before and after.** The user's image (`E:\images\stick.img`, 28.6 GiB, read only), scanned deep by the
+build the user ran (session 20261017-054255-88d7e17f: the last commit less its final edits to deleted FAT32 entries)
+and by this one: 10,372 candidates before, 4,275 after; `COMPLETE` 3,113 and 4,127, `AMBIGUOUS` 7,056 and 21,
+`PARTIAL` 144 and 68; 1,024 reconstructions and 10; 1,395 failed validations and 52; the scan took 8:26 instead of
+12:53. `compare_reports.py`: 1,654 files LOST, none WORSE, 999 NEW, each reviewed. 1,653 of the LOST files are partial
+and ambiguous versions (1,577 `AMBIGUOUS`, 76 `PARTIAL`) of 1,009 photos that are `COMPLETE` now, each byte for byte
+the carve the image holds there, and each with an empty DHT segment (none had an empty DQT); 998 of the NEW files are
+those photos. The last LOST and NEW file are one baseline JPEG whose carve is broken for other reasons: `AMBIGUOUS`
+before and after, with its first 49,152 bytes now instead of 32,768 (read from the image), as the photos that
+validate now claim their clusters (L111). Nothing was lost or got worse. A first count, from the candidates whose
+structural failure named the empty DHT, found 194 photos: a layout reports its own failure, not its carve's. The
+test stick's image (`sandisk-f-2.img`) was not scanned again: no candidate of its last report failed on an empty
+table segment. The review showed L253 (a carve taken over by reconstruction is not delivered itself).
+
+**Checks** (2026-10-17, the final sources). msvc-debug and msvc-release: 1,774 tests each, all passing. clang-tidy on
+the changed engine source: no finding. Not run: analyze, AddressSanitizer and fuzzing (the CI presets).
+
 ## Acceptance
 
 | Criterion | Status |

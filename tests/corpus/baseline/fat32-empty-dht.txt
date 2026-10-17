@@ -1,0 +1,9 @@
+# corpus scenario fat32-empty-dht: FAT32 of 16 KiB clusters formatted after use: progressive photos with an empty DHT before each scan that needs no new table
+# image 33588224 bytes, sha256 9d01c12245e9ea4b, 4 originals
+# deep scan: 4 candidates
+#1 filesystem unverified(not-validated) other/- "/Android/data/.nomedia" size=0/0 valid=not-validated:unsupported/not-run sha=e3b0c44298fc1c14 recovery=recovered "Android/data/.nomedia" => /Android/data/.nomedia
+#2 carving complete image/jpeg "recovered_000002.jpg" size=77565/77565 valid=valid:passed/passed sha=0383d53c68da9e0e recovery=recovered "recovered_000002.jpg" => /DCIM/Camera/IMG_0001.JPG
+#3 carving complete image/jpeg "recovered_000003.jpg" size=96453/96453 valid=valid:passed/passed sha=656d8ff2249b80c1 recovery=recovered "recovered_000003.jpg" => /DCIM/Camera/IMG_0002.JPG
+#4 carving complete image/jpeg "recovered_000004.jpg" size=760/760 valid=valid:passed/passed sha=250e490127400204 recovery=recovered "recovered_000004.jpg" => /DCIM/Camera/IMG_0003.JPG
+# quick scan: 1 candidates
+#1 filesystem unverified(not-validated) other/- "/Android/data/.nomedia" size=0/0 valid=not-validated:unsupported/not-run sha=e3b0c44298fc1c14 recovery=recovered "Android/data/.nomedia" => /Android/data/.nomedia

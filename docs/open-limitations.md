@@ -1,15 +1,15 @@
 # Open limitations, ranked
 
-The open items of [limitations.md](limitations.md) as of 2026-10-16, ranked by what each one costs a person trying to
+The open items of [limitations.md](limitations.md) as of 2026-10-17, ranked by what each one costs a person trying to
 get files back. The project's first rule is that no file that could come back is lost, so items that lose files or
 recover them wrong come first. [limitations.md](limitations.md) stays the reference for each item's details and
 status: when an item is solved or decided there, take it off this list.
 
-Of the register's 250 items, the 84 below are open: 80 Open, 3 Partly resolved (L46, L212, L213) and 1 Mitigated
-(L197). The 115 Accepted and 51 Resolved items are not listed (L7, L8 and L13 were resolved on 2026-10-15; on
+Of the register's 253 items, the 86 below are open: 82 Open, 3 Partly resolved (L46, L212, L213) and 1 Mitigated
+(L197). The 115 Accepted and 52 Resolved items are not listed (L7, L8 and L13 were resolved on 2026-10-15; on
 2026-10-16 L245, a defect found and fixed, L12, L19 and L21, by the images Windows wrote, L147, L172 and L177,
 which left L246, accepted by the user's choice, and L247, and L10, L242, L243 and L244, which left L248, L249 and
-L250).
+L250; on 2026-10-17 L252, a defect found on the user's stick and fixed, which showed L253, and L251 was found).
 
 Sizes compare the items with each other: **small** is a contained change, **medium** a new part of an existing
 component with its tests, **large** a new component (a file format, a filesystem structure) with reference samples.
@@ -42,6 +42,7 @@ once their entries are overwritten, they are lost.
 
 | ID | What is lost | Possible fix | Size |
 | --- | --- | --- | --- |
+| L253 | A carve that does not validate and whose fragment reconstruction ends `PARTIAL` or `AMBIGUOUS` is not delivered itself, only its layouts, which may hold far less: on the user's stick a 480 KB JPEG carve comes back as 48 KB layouts. MP4 carves are delivered next to their layouts. | Deliver the carve too, with its own condition, when its layouts place fewer of its bytes than it holds. | small |
 | L220 | A `CORRUPTED` archive is written whole: its intact members are not delivered as files of their own (only the stored images, audio and video that carving finds inside it). | Deliver the members whose checksum passes. A design question: the engine does not extract archives today. | medium |
 | L219 | When an archive's start is overwritten or lost, a carve from a later member ends before the central directory (`PARTIAL`); repair tools could read its members from that directory. | Carve on to the central directory even though it places the start earlier (still `PARTIAL`). | medium |
 | L233 | A PDF stream whose `/Length` is far off ends the carve at that object: the rest of the document is left out (`PARTIAL`). | Search for `endstream` as readers do, within a bound, instead of stopping. | small to medium |
@@ -68,6 +69,7 @@ once their entries are overwritten, they are lost.
 | L198 | A carve inside another file's overlong allocation is linked to that file as its container: the report's "inside" evidence is wrong, though the carve is recovered whole. | Link only to what the file's data covers. | small |
 | L239 | Naming by content guesses for some files: templates are named as documents (`.dotx` as `docx`), OpenXPS as `xps`, encrypted Office files `.ole`, JARs and ZIPs by their first member. | Refine the rules where content tells more. | small |
 | L180 | `--log` always writes Info and above, and a scan always uses every format (they are part of its identity). | Add a log level option. | small |
+| L251 | `--log FILE` appends to a file that exists and is refused only on the source image itself: given the image's `.imgmeta`, it appends log lines to it, the metadata is no longer read, and a later scan takes the zeros of the unreadable regions for data. | Refuse the image's metadata as a log too. | small |
 
 ## 5. Checking against real Windows
 

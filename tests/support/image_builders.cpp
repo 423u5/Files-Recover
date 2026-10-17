@@ -946,6 +946,25 @@ std::vector<JpegMarker> jpegMarkers(std::span<const std::byte> file) {
     return markers;
 }
 
+std::vector<std::byte> withEmptyHuffmanSegments(std::span<const std::byte> file) {
+    std::vector<std::byte> out;
+    std::size_t copied = 0;
+    std::uint8_t previous = 0;
+    for (const JpegMarker& marker : jpegMarkers(file)) {
+        if (marker.code == 0xDA && previous != 0xC4) {
+            append(out, file.subspan(copied, marker.offset - copied));
+            append(out, jpegSegment(0xC4, {}));
+            copied = marker.offset;
+        }
+        // Restart markers are inside a scan's data.
+        if (marker.code < 0xD0 || marker.code > 0xD7) {
+            previous = marker.code;
+        }
+    }
+    append(out, file.subspan(copied));
+    return out;
+}
+
 std::vector<std::byte> pngChunk(std::string_view type, std::span<const std::byte> data) {
     std::vector<std::byte> out;
     putBe32(out, static_cast<std::uint32_t>(data.size()));

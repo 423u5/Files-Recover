@@ -751,6 +751,23 @@ Nikon NEF, Sony ARW, Adobe DNG and others), AVIF and JPEG 2000 images are recove
 names them, and then unverified (`FORMAT_UNKNOWN`, L128). The JPEG previews most raw files hold may still be carved,
 as JPEG files of their own (a deep scan looks for files at every byte); that was not tried on a raw file.
 
+### L252. Progressive JPEGs with an empty DHT segment were taken for broken
+**Status:** Resolved (2026-10-17, the user's request): a DQT or DHT segment that defines no table is no problem any
+more. Tests `JpegFormatTest.EmptyTableSegmentsAreIntact`, `JpegMediaTest.EmptyHuffmanSegmentsBeforeScansPass`, corpus
+scenario `fat32-empty-dht`  
+The JPEG walker counted a DHT segment that defines no table (length 2) as a structure problem
+(`JpegWalker::huffmanTables`, `src/formats/jpeg_format.cpp`; DQT the same way). libjpeg accepts it, and some encoders
+write one before each progressive scan that needs no new table (the DC refinement scans). Such a JPEG failed the
+structural level, so fragment reconstruction took it over and delivered its first clusters with zeros to where it
+thought the structure broke, as PARTIAL or as up to 8 AMBIGUOUS layouts, instead of the complete carve (L253). The
+media level's decoder accepted empty segments already.
+
+Found on the user's 32 GB stick (FAT32 of 16 KiB clusters a phone formatted): its scan of 2026-10-17 gave 10,372
+candidates, 3,113 COMPLETE and 7,056 AMBIGUOUS. With the fix the same image gives 4,275, 4,127 COMPLETE and 21
+AMBIGUOUS: 1,009 photos are COMPLETE, each byte for byte the carve the image holds and each with an empty DHT
+segment, in place of 1,653 partial and ambiguous versions of them; nothing was lost or got worse (`compare_reports.py`,
+[testing/validation.md](testing/validation.md)).
+
 ## Audio formats (P10)
 
 ### L68. A stream without length information is complete at every frame boundary
@@ -1193,6 +1210,17 @@ makes are the carving stage's own (made once). `FragmentRecovery::run` on its ow
 The claims of every file (interval maps over clusters), the carve seeds and the moov anchors are kept for the whole
 run, on top of the volumes' candidates (L40); cluster states are cached per volume (at most 16 MiB); each seed's
 layouts until it is delivered.
+
+### L253. A carve that fragment reconstruction takes over is not delivered itself
+**Status:** Open (found on the user's stick, 2026-10-17)  
+A carve that does not validate is a seed of fragment reconstruction. When the search ends PARTIAL or AMBIGUOUS, only
+its layouts are delivered (`Run::takeFragments`), and they may hold far less than the carve: on the user's stick a
+baseline JPEG carve of 480,123 bytes (EOI found, structure invalid) comes back as 8 AMBIGUOUS layouts of 49,152
+bytes, the rest missing, and before L252 was fixed 1,009 complete photos came back that way. A damaged carve whole
+may show more of a photo than its first clusters. MP4 carves were delivered next to their layouts there (four videos
+of 218 MB to 1.25 GB, whose layouts stop at 256 MiB, `maxUnknownLength`), and the layouts of five PDFs held nearly all
+of their carves. Possible fix: deliver the carve too, with its own condition, when its layouts place fewer of its
+bytes than it holds.
 
 ## Validation and candidate evaluation (P14)
 
@@ -1764,6 +1792,14 @@ P19: the API's `exportReport` writes the same report, so the same holds; its can
 **Status:** Open  
 `--log` writes the engine's records of level Info and above, and `scan` always uses every format and validator the
 engine has (they are the scan's identity: a resumed scan must have them all the same). Neither can be chosen.
+
+### L251. `--log` may append to an image's metadata
+**Status:** Open (2026-10-17)  
+`--log FILE` appends to FILE when it exists (`Context::openLog`). The destination check refuses the source image
+itself (`checkDestinationSafety`; the image is also open without write sharing while a command reads it), but not
+the image's metadata: `--log D:\images\stick.img.imgmeta` would append log lines to it. Metadata that cannot be
+read is then not used (with a warning), so a later scan would take the zeros of the unreadable regions for data.
+The image's bytes are not touched. Setting the image and its metadata read-only (`attrib +r`) prevents it.
 
 ## GUI API (P19)
 

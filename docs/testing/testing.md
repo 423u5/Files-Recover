@@ -755,7 +755,7 @@ closed it) and the card's originals, byte for byte. A crash is the session folde
 
 ## Corruption corpus (P20)
 
-`tests/support/corpus.cpp` holds 34 scenarios (P20's 26; since then `fat16-card`, `zip-archives`, `fat12-floppy`, `documents`, `fat32-windows-deleted`, `exfat-orphaned-folder`, `fat32-folder-parts` and `exfat-reused-folder`): disk images built the same, byte for byte, every time, each with the
+`tests/support/corpus.cpp` holds 35 scenarios (P20's 26; since then `fat16-card`, `zip-archives`, `fat12-floppy`, `documents`, `fat32-windows-deleted`, `exfat-orphaned-folder`, `fat32-folder-parts`, `exfat-reused-folder` and `fat32-empty-dht`): disk images built the same, byte for byte, every time, each with the
 original files it holds and what recovery must give back of each (found by the filesystem with its name, found by
 carving only, found but damaged, lost, or stored inside an archive that is recovered: then no file of its own, and
 byte for byte a stored member of a recovered Complete archive, also of an archive stored in one; or an image inside a
