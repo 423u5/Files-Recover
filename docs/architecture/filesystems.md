@@ -23,7 +23,8 @@ After P20 (L10): every module builds `FileRecord::path` from `pathComponent()` o
 of a `/` (only a damaged name holds one, and it is flagged `InvalidName`): every `/` of a path separates two names,
 and a damaged folder name is one level of the path. The entry keeps its name. `kOrphanDirectory` (`$OrphanFiles`)
 names the virtual folder under the root that lists entries whose folder is gone: NTFS records whose parent is gone,
-and parts of deleted FAT32 folders whose folder is not known (L243).
+parts of deleted FAT32 folders whose folder is not known (L243), and FAT32 folders found in the free space that no
+folder found holds (L249).
 
 ## FAT32 (`filesystem::fat32::Fat32Filesystem`)
 
@@ -162,6 +163,32 @@ in a listing of that folder (the first one's data right after the part's first c
 folder's path. A part that no folder leads to, or that several do, is listed under `/$OrphanFiles`, its entries
 flagged `ParentMissing`. Only `scan()` looks for parts: `readDirectory` lists a folder alone.
 
+**Folders nothing leads to (after P20, L249).** A format writes a new root folder and new FATs, and leaves the old
+folders where they were, in clusters now free: nothing names them any more. With
+`Fat32Options::searchFreeSpaceForFolders` (a deep scan sets it), once the listings are done and before the parts above
+are looked for, a scan reads every free cluster that no listing reached, 4 MiB at a time, and takes as a folder's
+first cluster one that starts with a `.` entry naming that very cluster and a `..` entry (a copy of a folder's
+cluster elsewhere names another cluster, and is not taken). Each folder found is listed as a deleted folder is
+(its files' data from their first clusters on, as their chains are gone), in this order:
+
+- a folder that another one found holds is listed with it, under its name in that folder's entry;
+- one that no folder found holds is listed as `Folder <cluster>`, as its name was in the folder that held it: inside
+  the deleted folder its `..` names, when the scan listed that one; otherwise under `/$OrphanFiles`, and the entries
+  directly in it are flagged `ParentMissing`. An active folder its `..` names is not taken: after a format, a folder
+  written since may be in the old folder's cluster.
+
+On a card a phone used and then formatted, the top folders (`Android`, `DCIM`, ...) were in the old root and are
+listed as `/$OrphanFiles/Folder <cluster>`, with everything below them under their names. It costs one more read of
+the free space, in the volume stage.
+
+Such folders also hold entries whose data was written over before the format (a file deleted then, whose clusters
+another file took), and their sizes say nothing about what is there now. Every entry listed in a folder found, or
+below one, is flagged `EntryIssue::FolderFound`: it names what carving, MP4 recovery and fragment reconstruction find
+where it starts when the sizes agree, and is delivered on its own only where they find nothing
+([../recovery/candidate_evaluation.md](../recovery/candidate_evaluation.md)). On the user's stick, letting these
+entries take carves over made complete photos partial and complete videos unrecoverable (the entry's size or format
+misled fragment reconstruction).
+
 ### Traversal limits
 
 The traversal is depth-first and limited by `ScanLimits`: maximum depth (64), maximum number of entries
@@ -210,7 +237,9 @@ All known limitations, with IDs for discussion, are listed in [../limitations.md
   (L248; L7 and L242 are resolved).
 - The parts of deleted folders found apart from them are looked for only right after data or folder clusters the
   scan listed; a part no folder alone leads to is listed under `/$OrphanFiles`; of two deleted folders that grew
-  next to each other, one may list the other's entries as well (duplicates; L249; L8 and L243 are resolved).
+  next to each other, one may list the other's entries as well (duplicates; L249; L8 and L243 are resolved). Whole
+  folders nothing leads to (a formatted volume's) are found by their first cluster in a deep scan; those no folder
+  found holds keep no name (L249).
 - Orphaned clusters (allocated, but not referenced by any entry) can be counted as
   `ClusterUsage::allocated - FileScan::referencedClusters`, but the orphaned chains are not listed yet.
 - The engine's own tests use volumes built by `tests/support/fat32_builder`. Independent checks are

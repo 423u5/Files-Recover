@@ -81,7 +81,7 @@ to be intact. The same regions of a guessed layout show where a guess ran into a
 | `AllocationDamaged` | Loops, invalid, free or bad clusters in a chain, a malformed run list, an invalid start cluster, a size larger than the volume, a chain longer than the size, an active entry whose clusters are free, a missing data attribute, or more stored bytes than the volume holds |
 | `AllocationUnknown` | The allocation table or bitmap is unreadable where the data is |
 | `NameUncertain` | Name rebuilt (FAT32 deleted 8.3 names lose their first character), unverified, not matching its hash or checksum, or containing forbidden characters (on FAT too since L10) |
-| `LocationUnknown` | The original folder is unknown, the path is under `/$OrphanFiles`: an NTFS record whose parent directory is gone, or an entry of a part of a deleted FAT32 folder whose folder no evidence names (L243) |
+| `LocationUnknown` | The original folder is unknown, the path is under `/$OrphanFiles`: an NTFS record whose parent directory is gone, an entry of a part of a deleted FAT32 folder whose folder no evidence names (L243), or an entry directly in a FAT32 folder found in the free space that no folder found holds (L249) |
 | `MetadataDamaged` | Checksum mismatch, damaged or incomplete record, invalid timestamps or attribute bits, valid data length larger than the size |
 
 The allocation and entry issues from the filesystem are kept alongside the warnings, as evidence.

@@ -5,7 +5,8 @@
 // by what the place recorded and the other places hold (L242); and a deleted
 // folder's clusters after the first, whose chain is gone (L8), found where
 // writers put them when the folder grew, or over the volume after a scan,
-// in their folder or under "/$OrphanFiles" (L243).
+// in their folder or under "/$OrphanFiles" (L243); and the folders nothing
+// leads to, as a format leaves them, found in the free space (L249).
 
 #include "filesystem/fat32/fat32_filesystem.hpp"
 
@@ -20,6 +21,8 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <set>
+#include <string>
 
 namespace recovery::filesystem::fat32 {
 namespace {
@@ -100,13 +103,16 @@ struct Mounted {
 };
 
 // `checkEnds`: stands for the scan's formats as to where files end too: a
-// file named ".jpg" ends with FF D9 at its size.
-Mounted mount(std::vector<std::byte> image, StartCheck startsFile = {}, bool checkEnds = false) {
+// file named ".jpg" ends with FF D9 at its size. `searchFolders`: as a deep
+// scan, the free space is searched for folders no listing reaches (L249).
+Mounted mount(std::vector<std::byte> image, StartCheck startsFile = {}, bool checkEnds = false,
+              bool searchFolders = false) {
     Mounted m;
     m.source = std::make_unique<test::MemoryStorageSource>(std::move(image), 512);
     EXPECT_TRUE(m.source->open().ok());
     Fat32Options options;
     options.startsFile = std::move(startsFile);
+    options.searchFreeSpaceForFolders = searchFolders;
     if (checkEnds) {
         options.endsFile = [source = m.source.get()](std::string_view name, std::uint64_t offset, std::uint64_t size) {
             std::array<std::byte, 2> end{};
@@ -701,6 +707,172 @@ TEST(Fat32DeletedFolderTest, NoPartsAreLookedForWhenDeletedFoldersAreNotSearched
     RECOVERY_ASSERT_OK(scan);
     EXPECT_FALSE(listsOrphans(*scan));
     EXPECT_EQ(find(*scan, grown.paths[4]), nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// L249: folders no listing reaches, as a format leaves them, found in the
+// free space
+// ---------------------------------------------------------------------------
+
+// What a quick format leaves of `old`: a new boot sector, FATs and root folder
+// (cluster 2), and in every other cluster what the old volume held there.
+Fat32ImageBuilder formatOf(Fat32ImageBuilder& old, const test::Fat32BuilderOptions& options) {
+    const Bytes image = old.build();
+    Fat32ImageBuilder fresh(options);
+    const auto from = static_cast<std::ptrdiff_t>(fresh.clusterOffset(3));
+    std::copy(image.begin() + from, image.end(), fresh.raw().begin() + from);
+    return fresh;
+}
+
+// A card used, then quick-formatted, then written to: its old folders are in
+// its free space, with nothing leading to them, the folder of a camera's
+// photos in its own folder, and a folder of songs.
+struct FormattedCard {
+    test::Fat32BuilderOptions options{.entriesBeforeData = true};
+    Fat32ImageBuilder old{options};
+    Fat32ImageBuilder::Entry dcim;
+    Fat32ImageBuilder::Entry camera;
+    Fat32ImageBuilder::Entry photo;
+    Fat32ImageBuilder::Entry music;
+    Fat32ImageBuilder::Entry song;
+    Bytes photoData = bytesOf(5000, 120);
+    Bytes songData = bytesOf(4000, 121);
+
+    FormattedCard() {
+        // Written first: the file written after the format takes its clusters only.
+        (void)old.addFile(old.root(), "FIRST.BIN", bytesOf(3000, 122));
+        dcim = old.addDirectory(old.root(), "DCIM");
+        camera = old.addDirectory(dcim.clusters.front(), "Camera");
+        photo = old.addFile(camera.clusters.front(), "IMG_20240517_134530.jpg", photoData);
+        music = old.addDirectory(old.root(), "Music");
+        song = old.addFile(music.clusters.front(), "Song of the day.mp3", songData);
+    }
+
+    [[nodiscard]] Bytes image() {
+        Fat32ImageBuilder fresh = formatOf(old, options);
+        (void)fresh.addFile(fresh.root(), "NEW.BIN", bytesOf(1000, 123));
+        return fresh.build();
+    }
+
+    [[nodiscard]] static std::string folder(const Fat32ImageBuilder::Entry& entry) {
+        return "/$OrphanFiles/Folder " + std::to_string(entry.clusters.front());
+    }
+};
+
+TEST(Fat32FoundFolderTest, TheFoldersOfAFormattedVolumeAreFoundWithTheirNamesAndFiles) {
+    FormattedCard card;
+    const Mounted m = mount(card.image(), {}, false, true);
+    const FileScan scan = m.scan();
+
+    // The top folders' names were in the old root folder: they are named by
+    // their clusters. What they hold has its names.
+    const FileRecord* camera = find(scan, FormattedCard::folder(card.dcim) + "/Camera");
+    ASSERT_NE(camera, nullptr);
+    EXPECT_TRUE(camera->entry.isDirectory);
+    EXPECT_TRUE(camera->entry.hasIssue(EntryIssue::ParentMissing));
+    const std::string photoPath = FormattedCard::folder(card.dcim) + "/Camera/IMG_20240517_134530.jpg";
+    expectDeletedFile(m, scan, photoPath, card.photo.clusters.front(), card.photoData, false);
+    EXPECT_FALSE(find(scan, photoPath)->entry.hasIssue(EntryIssue::ParentMissing));
+    EXPECT_TRUE(find(scan, photoPath)->parentDeleted);
+    EXPECT_EQ(find(scan, photoPath)->allocation.method, AllocationMethod::ContiguousGuess);
+    // Every entry below a folder found says so; the file written since does not.
+    EXPECT_TRUE(find(scan, photoPath)->entry.hasIssue(EntryIssue::FolderFound));
+    EXPECT_TRUE(camera->entry.hasIssue(EntryIssue::FolderFound));
+    EXPECT_FALSE(find(scan, "/NEW.BIN")->entry.hasIssue(EntryIssue::FolderFound));
+    const std::string songPath = FormattedCard::folder(card.music) + "/Song of the day.mp3";
+    expectDeletedFile(m, scan, songPath, card.song.clusters.front(), card.songData, false);
+    EXPECT_TRUE(find(scan, songPath)->entry.hasIssue(EntryIssue::ParentMissing));
+    // Nothing else: the new file, and what the folders found hold, once each.
+    std::set<std::string> paths;
+    for (const FileRecord& record : scan.records) {
+        EXPECT_TRUE(record.path == "/NEW.BIN" || record.path.starts_with("/$OrphanFiles/Folder ")) << record.path;
+        EXPECT_TRUE(paths.insert(record.path).second) << record.path;
+    }
+    EXPECT_EQ(paths.size(), 4u);
+}
+
+TEST(Fat32FoundFolderTest, TheFreeSpaceIsSearchedOnlyWhenAsked) {
+    FormattedCard card;
+    const Mounted m = mount(card.image());
+    const FileScan scan = m.scan();
+    EXPECT_FALSE(listsOrphans(scan));
+    ASSERT_EQ(scan.records.size(), 1u);
+    EXPECT_EQ(scan.records.front().path, "/NEW.BIN");
+}
+
+TEST(Fat32FoundFolderTest, NoFolderIsSearchedForWhenDeletedFilesAreLeftOut) {
+    FormattedCard card;
+    const Mounted m = mount(card.image(), {}, false, true);
+    ScanLimits limits;
+    limits.includeDeleted = false;
+    limits.recurseIntoDeletedDirectories = false;
+    Result<FileScan> scan = m.fs->scan(limits, {});
+    RECOVERY_ASSERT_OK(scan);
+    EXPECT_FALSE(listsOrphans(*scan));
+}
+
+TEST(Fat32FoundFolderTest, AFolderTheListingReachesIsNotListedAgain) {
+    // A deleted folder its parent's entry leads to, and the parts of it found apart (L243).
+    FolderGrownAfterAnother grown;
+    const Mounted m = mount(grown.builder.build(), {}, false, true);
+    const FileScan scan = m.scan();
+    for (std::size_t i = 0; i < grown.files.size(); ++i) {
+        expectDeletedFile(m, scan, grown.paths[i], grown.files[i].clusters.front(), grown.data[i], false);
+    }
+    EXPECT_FALSE(listsOrphans(scan));
+}
+
+TEST(Fat32FoundFolderTest, AFolderWhoseEntryIsLostGoesIntoTheFolderItsDotDotNames) {
+    FormattedCard card;
+    // The Camera entry in DCIM no longer names Camera's cluster.
+    const std::span<std::byte> entry = card.old.shortEntry(card.camera);
+    storeLe16(entry, 20, 0);
+    storeLe16(entry, 26, 0);
+    const Mounted m = mount(card.image(), {}, false, true);
+    const FileScan scan = m.scan();
+    const std::string folder =
+        FormattedCard::folder(card.dcim) + "/Folder " + std::to_string(card.camera.clusters.front());
+    expectDeletedFile(m, scan, folder + "/IMG_20240517_134530.jpg", card.photo.clusters.front(), card.photoData,
+                      false);
+    EXPECT_FALSE(find(scan, folder + "/IMG_20240517_134530.jpg")->entry.hasIssue(EntryIssue::ParentMissing));
+}
+
+TEST(Fat32FoundFolderTest, AFolderIsNotPutIntoAFolderWrittenWhereItsParentWas) {
+    FormattedCard card;
+    Fat32ImageBuilder fresh = formatOf(card.old, card.options);
+    (void)fresh.addFile(fresh.root(), "NEW.BIN", bytesOf(1000, 123));
+    // A folder written after the format takes the old DCIM's cluster, which Camera's ".." names.
+    fresh.skipClusters(card.dcim.clusters.front() - fresh.cursor());
+    const auto pictures = fresh.addDirectory(fresh.root(), "Pictures");
+    ASSERT_EQ(pictures.clusters.front(), card.dcim.clusters.front());
+    const Mounted m = mount(fresh.build(), {}, false, true);
+    const FileScan scan = m.scan();
+    const std::string path = FormattedCard::folder(card.camera) + "/IMG_20240517_134530.jpg";
+    expectDeletedFile(m, scan, path, card.photo.clusters.front(), card.photoData, false);
+    EXPECT_TRUE(find(scan, path)->entry.hasIssue(EntryIssue::ParentMissing));
+    for (const FileRecord& record : scan.records) {
+        EXPECT_FALSE(record.path.starts_with("/Pictures/")) << record.path;
+    }
+}
+
+TEST(Fat32FoundFolderTest, AClusterWhoseDotEntryNamesAnotherClusterIsNoFolder) {
+    FormattedCard card;
+    // A copy of DCIM's first cluster elsewhere: its "." entry names DCIM's cluster.
+    const std::uint32_t copy = card.old.lastCluster() - 10;
+    const auto from = static_cast<std::ptrdiff_t>(card.old.clusterOffset(card.dcim.clusters.front()));
+    std::copy_n(card.old.raw().begin() + from, card.old.clusterSize(),
+                card.old.raw().begin() + static_cast<std::ptrdiff_t>(card.old.clusterOffset(copy)));
+    const Mounted m = mount(card.image(), {}, false, true);
+    const FileScan scan = m.scan();
+    EXPECT_NE(find(scan, FormattedCard::folder(card.dcim) + "/Camera"), nullptr);
+    // Not taken for a folder at all: neither listed nor tried.
+    const std::string copied = "/$OrphanFiles/Folder " + std::to_string(copy);
+    for (const FileRecord& record : scan.records) {
+        EXPECT_FALSE(record.path.starts_with(copied)) << record.path;
+    }
+    for (const ScanIssue& issue : scan.issues) {
+        EXPECT_FALSE(issue.path.starts_with(copied)) << issue.path << ": " << issue.detail;
+    }
 }
 
 }  // namespace

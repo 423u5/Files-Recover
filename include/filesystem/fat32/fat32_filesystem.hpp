@@ -46,6 +46,10 @@ struct Fat32Options {
     // places that each start a file of its type, the one where that file
     // ends at its size (L242). Empty: not used.
     EndCheck endsFile;
+    // Search every free cluster no listing reached for the first cluster of
+    // a folder, as a format leaves a volume's folders (L249). It reads all of
+    // the free space once more: a deep scan asks for it.
+    bool searchFreeSpaceForFolders = false;
 };
 
 // Read-only FAT32 implementation of IFilesystem.
@@ -73,6 +77,16 @@ struct Fat32Options {
 // any file and after any folder's clusters: those that hold folder entries
 // no listing reached are listed in the deleted folder that leads to them, or
 // under "/$OrphanFiles" when none does alone (L243).
+//
+// Folders no listing reaches at all, such as those of a formatted volume,
+// whose root the format replaced: with searchFreeSpaceForFolders, a scan
+// looks at every free cluster for a folder's first one, which starts with its
+// "." entry naming that cluster and its ".." entry. A folder found is listed
+// in the folder found whose entry names it, as a deleted folder is; one that
+// no folder found lists is listed as "Folder <cluster>" (its name was in the
+// folder that held it) inside the deleted folder its ".." names, if the scan
+// listed that, or else under "/$OrphanFiles" (L249). Their entries are
+// flagged EntryIssue::FolderFound: they may name data written over since.
 class Fat32Filesystem final : public IFilesystem {
 public:
     ~Fat32Filesystem() override;
@@ -119,6 +133,12 @@ private:
     // go on somewhere (L243). Defined with scan().
     struct Seen;
     struct LostPart;
+    // A folder's first cluster found in the free space (L249).
+    struct FoundFolder {
+        std::uint32_t cluster = 0;
+        // What its ".." entry names: the folder that held it (0: the root).
+        std::uint64_t parent = 0;
+    };
 
     Fat32Filesystem(storage::IStorageSource& volume, BootSector boot, Fat32Options options,
                     diagnostics::Logger* logger);
@@ -143,6 +163,10 @@ private:
     // The parts of deleted folders no listing reached, each with the folder
     // that leads to it if one does alone (L243).
     [[nodiscard]] Result<std::vector<LostPart>> findLostParts(const Seen& seen, const CancellationToken& cancel);
+    // The first clusters of folders among the free clusters, none of
+    // `listed` (L249), in cluster order.
+    [[nodiscard]] Result<std::vector<FoundFolder>> findFolders(const std::unordered_set<std::uint64_t>& listed,
+                                                               const CancellationToken& cancel);
     [[nodiscard]] std::uint64_t maxDirectoryClusters() const noexcept;
     void log(diagnostics::LogLevel level, std::string_view message,
              std::initializer_list<diagnostics::LogField> fields = {}) const;
@@ -154,6 +178,7 @@ private:
     std::optional<std::string> rootLabel_;
     std::unique_ptr<FatTable> fat_;
     std::unique_ptr<DeletedEntries> deleted_;
+    bool searchFolders_ = false;
     diagnostics::Logger* logger_;
 };
 

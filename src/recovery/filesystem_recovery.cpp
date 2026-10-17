@@ -138,6 +138,7 @@ std::vector<CandidateWarning> warningsFor(const RecoveryCandidate& candidate) {
             addWarning(warnings, CandidateWarning::NameUncertain);
             break;
         case EntryIssue::ParentMissing:
+        case EntryIssue::FolderFound:
             addWarning(warnings, CandidateWarning::LocationUnknown);
             break;
         case EntryIssue::InvalidTimestamp:

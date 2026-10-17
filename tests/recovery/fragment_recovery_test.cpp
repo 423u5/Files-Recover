@@ -418,6 +418,29 @@ TEST(FragmentRecoveryTest, DeletedFragmentedFilesAreReconstructed) {
     EXPECT_EQ(recovered.report.carvingSeeds, 0u);
 }
 
+TEST(FragmentRecoveryTest, AnEntryOfAFoundFolderIsNoSeed) {
+    // After P20 (L249): the entries of folders found in the free space may
+    // name data written over since; they only name what is found, and the
+    // carve at the file's start is the seed, as if no entry named it.
+    const carving::FormatRegistry registry = allFormats();
+    Card card;
+    const Bytes jpeg = photo(2);
+    const std::uint32_t n = clustersFor(jpeg.size());
+    card.addDeleted("OLD1.BIN", test::makePattern(6 * kClusterSize, 21), run(2008, 6));
+    card.addDeleted("Beach photo 02.jpg", jpeg, pieces(n, {{2000, 8}, {2014, n}}));
+    test::MemoryStorageSource source(card.image());
+    RECOVERY_ASSERT_OK(source.open());
+    Volume volume = openVolume(source);
+    ASSERT_NE(volume.recovery, nullptr);
+    for (RecoveryCandidate& candidate : volume.scan.candidates) {
+        candidate.filesystemEvidence.entryIssues.push_back(filesystem::EntryIssue::FolderFound);
+    }
+    const Recovered recovered = reconstructAll(source, registry, {&volume});
+    EXPECT_EQ(recovered.report.filesystemSeeds, 0u);
+    EXPECT_EQ(recovered.named("Beach photo 02.jpg"), nullptr);
+    EXPECT_EQ(recovered.report.carvingSeeds, 1u);
+}
+
 TEST(FragmentRecoveryTest, AContiguousDeletedFileIsConfirmedInOnePiece) {
     const carving::FormatRegistry registry = allFormats();
     Card card;

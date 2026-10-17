@@ -103,6 +103,8 @@ std::vector<std::pair<std::string, Bytes>> mediaFiles() {
         progressive.progressive = true;
         progressive.restartInterval = 2;
         add("jpeg_progressive", makeJpeg(progressive));
+        // After P20 (L252): an empty DHT before each scan, as some encoders write.
+        add("jpeg_empty_dht", withEmptyHuffmanSegments(makeJpeg(progressive)));
         JpegOptions exif = baseline;
         exif.exifThumbnail = true;
         exif.exifOrientation = 6;
@@ -443,6 +445,36 @@ Bytes folderPartsFat32() {
     return image;
 }
 
+// After P20 (L249): a small FAT32 volume quick-formatted after use, then
+// written to: its old folders (a camera's photos in their own folder, a voice
+// note) are in its free space, and nothing leads to them. A deep scan finds
+// them there. Kept up to a little past the old volume's last file.
+Bytes formattedFat32() {
+    Fat32BuilderOptions options;
+    options.label = "SEEDL249";
+    options.entriesBeforeData = true;
+    Fat32ImageBuilder old(options);
+    const std::uint32_t root = Fat32ImageBuilder::root();
+    JpegOptions jpeg;
+    jpeg.width = 16;
+    jpeg.height = 16;
+    (void)old.addFile(root, "FIRST.BIN", Bytes(1500, std::byte{'f'}));
+    const auto dcim = old.addDirectory(root, "DCIM");
+    const auto camera = old.addDirectory(dcim.clusters.front(), "Camera");
+    (void)old.addFile(camera.clusters.front(), "IMG_20240517_134530.jpg", makeJpeg(jpeg));
+    const auto voice = old.addDirectory(root, "Voice Notes");
+    (void)old.addFile(voice.clusters.front(), "PTT-20240517-WA0001.opus", Bytes(900, std::byte{'o'}));
+    const std::uint64_t end = old.clusterOffset(old.cursor() + 8);
+    const Bytes previous = old.build();
+    Fat32ImageBuilder fresh(options);
+    const auto from = static_cast<std::ptrdiff_t>(fresh.clusterOffset(3));
+    std::copy(previous.begin() + from, previous.end(), fresh.raw().begin() + from);
+    (void)fresh.addFile(root, "NEW.BIN", Bytes(600, std::byte{'n'}));
+    Bytes image = fresh.build();
+    image.resize(std::min<std::size_t>(image.size(), static_cast<std::size_t>(end)));
+    return image;
+}
+
 // After P20 (L244): exFAT, a deleted folder of two clusters in one run whose
 // File entry a newer note's entry set took and whose first cluster its data
 // took: the folder's second cluster is read where it is free.
@@ -725,6 +757,7 @@ Status writeFuzzSeeds(const std::filesystem::path& folder) {
     const Bytes ntfs = smallNtfs();
     const Bytes parts = folderPartsFat32();
     const Bytes reused = reusedFolderExFat();
+    const Bytes formatted = formattedFat32();
     for (const auto& [name, bytes] : std::vector<std::pair<std::string, const Bytes*>>{
              {"fat32", &fat32},
              {"fat16", &fat16},
@@ -732,7 +765,8 @@ Status writeFuzzSeeds(const std::filesystem::path& folder) {
              {"exfat", &exfat},
              {"ntfs", &ntfs},
              {"fat32_folder_parts", &parts},
-             {"exfat_reused_folder", &reused}}) {
+             {"exfat_reused_folder", &reused},
+             {"fat32_formatted", &formatted}}) {
         for (const std::string target : {"filesystem", "scan"}) {
             if (Status added = seeds.add(target, name, *bytes); !added.ok()) {
                 return added;

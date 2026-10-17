@@ -48,6 +48,11 @@
 
 namespace recovery::filesystem::fat32 {
 
+// When `head` (the first two slots of `cluster`) starts with a folder's "."
+// entry, which names `cluster`, and its ".." entry: what ".." names (0 for
+// the root).
+[[nodiscard]] std::optional<std::uint64_t> folderParentOf(std::span<const std::byte> head, std::uint64_t cluster);
+
 class DeletedEntries {
 public:
     // The directory whose listing inferStarts() places.

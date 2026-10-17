@@ -996,6 +996,10 @@ Result<Mp4Examination> Mp4RecoverySteps::examine(std::size_t volume, std::size_t
     Mp4Examination examination;
     examination.volume = volume;
     examination.index = index;
+    if (candidate.filesystemEvidence.hasIssue(filesystem::EntryIssue::FolderFound)) {
+        // Its folder may name data written over since: it names what carving finds (L249).
+        return examination;
+    }
     const bool named = isVideoExtension(candidate.extension);
     const std::optional<std::uint64_t> start = impl.startOf(candidate, volume);
     const bool located = candidate.bytes(RegionKind::Stored) + candidate.bytes(RegionKind::Embedded) > 0;

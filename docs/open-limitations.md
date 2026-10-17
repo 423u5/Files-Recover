@@ -5,11 +5,12 @@ get files back. The project's first rule is that no file that could come back is
 recover them wrong come first. [limitations.md](limitations.md) stays the reference for each item's details and
 status: when an item is solved or decided there, take it off this list.
 
-Of the register's 253 items, the 86 below are open: 82 Open, 3 Partly resolved (L46, L212, L213) and 1 Mitigated
-(L197). The 115 Accepted and 52 Resolved items are not listed (L7, L8 and L13 were resolved on 2026-10-15; on
-2026-10-16 L245, a defect found and fixed, L12, L19 and L21, by the images Windows wrote, L147, L172 and L177,
+Of the register's 258 items, the 91 below are open: 86 Open, 4 Partly resolved (L46, L212, L213, L249) and 1
+Mitigated (L197). The 115 Accepted and 52 Resolved items are not listed (L7, L8 and L13 were resolved on 2026-10-15;
+on 2026-10-16 L245, a defect found and fixed, L12, L19 and L21, by the images Windows wrote, L147, L172 and L177,
 which left L246, accepted by the user's choice, and L247, and L10, L242, L243 and L244, which left L248, L249 and
-L250; on 2026-10-17 L252, a defect found on the user's stick and fixed, which showed L253, and L251 was found).
+L250; on 2026-10-17 L252, a defect found on the user's stick and fixed, which showed L253, L249 partly, which showed
+L254 to L258, and L251 was found).
 
 Sizes compare the items with each other: **small** is a contained change, **medium** a new part of an existing
 component with its tests, **large** a new component (a file format, a filesystem structure) with reference samples.
@@ -23,6 +24,9 @@ with `tools/regression/compare_reports.py` (nothing lost or worse); the register
 
 | ID | What goes wrong | Possible fix | Size |
 | --- | --- | --- | --- |
+| L256 | A deleted file whose entry's size is not the file's (one byte more, or another file took its clusters since) is reconstructed to that size, and its partial layouts take the place of a carve that validated where it starts: on the user's stick, complete photos came back as their first 64 KiB. | A carve that validates where a seed starts is delivered as it is, with the entry's name, and the seed is not reconstructed (with L253). | small |
+| L258 | A failed reconstruction calls a candidate `UNRECOVERABLE` although the layout it delivers (a carve's) validates: complete videos of 64 to 89 MB were called so on the stick. | Judge the condition by the layout delivered; keep the failed reconstruction as evidence. | small |
+| L257 | A reconstruction seed whose name says no format gets the first format its content fits: an MP4 video kept as `.db` was tried as M4A, and nothing validated. | Choose the format as the evaluation does, or try every one that fits. | small |
 | L23 | **NTFS.** Attribute lists are not followed. A heavily fragmented file (typically a large video on a full disk) comes back short, a file whose data lies wholly in extension records has none, and a fragmented `$MFT` is read only as far as its first record describes: the files after it are not listed. | Read `$ATTRIBUTE_LIST` and the extension records it names, for files and for the `$MFT` itself. | medium to large |
 | L36, L24 | **NTFS.** Compressed files (LZNT1) are not recovered at all: every byte is missing and the writer refuses them. Encrypted (EFS) data cannot be decrypted without the user's key. | Decompress LZNT1, one compression unit at a time. EFS stays out. | medium |
 
@@ -53,7 +57,8 @@ once their entries are overwritten, they are lost.
 | L60 | A JPEG ends at its first end marker: a second image appended after it (Multi-Picture Format previews, depth maps) is carved as a separate JPEG, and a vendor trailer that is not a JPEG is lost. | Read the MPF index in APP2 to carve the whole file. | medium |
 | L229 | Carving skips every hit inside a verified archive, also in the archive's own records (names, comments, an APK signing block), which are not files of it. None was seen in practice. | Skip only inside the members' data. | small to medium |
 | L248 | A deleted FAT32 file whose start lost its top 16 bits stays where its start records when the places it may start at all look alike: several start a file of its type and none or several end at its size, or several free places hold data that may start it (L242's remainder). | Check the whole file at each place left, as candidate evaluation does, or offer each place as a candidate. | medium |
-| L249 | A part of a deleted FAT32 folder found apart from it is looked for only right after data the scan listed: one after data nothing lists is not found (its files are only carved). A part that no folder, or several, lead to is listed under `/$OrphanFiles`. Of two deleted folders that grew next to each other, one may list the other's entries too (duplicates, nothing lost). L243's remainder. | Search every free cluster for folder entries (one more read of the free space); use the size Windows records for a deleted folder. | medium |
+| L249 | Partly resolved: a deep scan finds a formatted volume's folders by their first clusters (on the user's stick 4,069 files got their names back). Left: a part of a folder found apart from it (a cluster after its first) is looked for only right after data the scan listed; a folder that no folder found holds keeps no name; an entry whose size disagrees with what was found names nothing. Of two deleted folders that grew next to each other, one may list the other's entries too (duplicates, nothing lost). | Search every free cluster for folder slots, as for first clusters; use the size Windows records for a deleted folder. | medium |
+| L254 | The folders of a formatted exFAT volume (cards of 64 GB and more) are not searched for in its free space: their files come back carved, without names. | Look at every free cluster for entry sets whose checksums and name hashes hold (as L244 does), in the same read. | medium |
 | L250 | A deleted exFAT directory linked by a FAT chain whose first cluster was reused cannot be followed (it is read as one run instead); an orphan whose first free clusters hold no entries stays a file (L244's remainder). | Look for its clusters by their entries, as L243 does on FAT32. | medium |
 
 ## 4. What the user sees (no file is lost)
@@ -97,6 +102,7 @@ for: recovery comes before speed (the decision of 2026-10-14).
 | L144 | A session's journal is never compacted: opening a session replays all of it. |
 | L145 | An open session holds its whole checkpoint and every candidate in memory. |
 | L223 | A deep scan reads its source about eight times (252.5 GB for the 28.6 GiB stick). On hold by the rule above. |
+| L255 | A deep scan reads a FAT volume's free space once more to find the folders nothing leads to (L249): the user's formatted stick took 12:30 instead of 8:26. The source pass could find them. |
 | L49 | A carved file's bytes are read at least twice (seeks on hard disks). |
 | L97 | MP4 recovery reads each file two to four times. |
 | L121 | Validation and hashing read every candidate's data twice. |

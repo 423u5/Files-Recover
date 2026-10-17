@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <set>
 #include <unordered_map>
@@ -24,6 +25,8 @@ constexpr std::string_view kComponent = "fat32";
 // FAT directories hold at most 65,536 entries of 32 bytes.
 constexpr std::uint64_t kMaxDirectoryBytes = 65536ULL * kDirectoryEntrySize;
 constexpr std::uint32_t kAnalysisChunk = 256 * 1024;  // FAT entries per read during analysis
+// Free clusters read at a time when searching them for folders (L249).
+constexpr std::uint64_t kFolderSearchBytes = 4 * kMiB;
 
 std::uint64_t clustersFor(std::uint64_t bytes, std::uint32_t clusterSize) noexcept {
     return bytes == 0 ? 0 : (bytes - 1) / clusterSize + 1;
@@ -100,7 +103,7 @@ Fat32Filesystem::~Fat32Filesystem() = default;
 
 Fat32Filesystem::Fat32Filesystem(storage::IStorageSource& volume, BootSector boot, Fat32Options options,
                                  diagnostics::Logger* logger)
-    : volume_(volume), boot_(std::move(boot)), logger_(logger) {
+    : volume_(volume), boot_(std::move(boot)), searchFolders_(options.searchFreeSpaceForFolders), logger_(logger) {
     // FatTable keeps a reference to boot_; this object is heap-allocated and never moved.
     fat_ = std::make_unique<FatTable>(volume_, boot_, options.fatCacheBytes);
     deleted_ = std::make_unique<DeletedEntries>(volume_, boot_, *fat_, std::move(options.startsFile),
@@ -501,6 +504,8 @@ struct Fat32Filesystem::Seen {
         std::vector<std::uint64_t> from;
         std::string path;
         std::uint32_t depth = 0;
+        // A folder found in the free space, or one below it (L249).
+        bool found = false;
     };
 
     // The data runs of the entries listed, [first cluster, cluster after).
@@ -626,6 +631,74 @@ Result<std::vector<Fat32Filesystem::LostPart>> Fat32Filesystem::findLostParts(co
     return parts;
 }
 
+Result<std::vector<Fat32Filesystem::FoundFolder>> Fat32Filesystem::findFolders(
+    const std::unordered_set<std::uint64_t>& listed, const CancellationToken& cancel) {
+    std::vector<FoundFolder> found;
+    const std::uint32_t last = boot_.lastCluster();
+    const auto perRead =
+        static_cast<std::uint32_t>(std::max<std::uint64_t>(1, kFolderSearchBytes / boot_.clusterSize));
+    std::vector<std::byte> buffer(static_cast<std::size_t>(perRead) * boot_.clusterSize);
+    std::uint64_t searched = 0;
+    bool cancelled = false;
+    // The free clusters [first, first + count): a folder's first cluster
+    // starts with its "." entry, which names that cluster, and its "..".
+    const auto search = [&](std::uint32_t first, std::uint32_t count) {
+        if (cancel.isCancellationRequested()) {
+            cancelled = true;
+            return;
+        }
+        searched += count;
+        const std::span<std::byte> bytes(buffer.data(), static_cast<std::size_t>(count) * boot_.clusterSize);
+        const bool read = volume_.readExact(ByteOffset{boot_.clusterOffset(first)}, bytes).ok();
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const std::uint32_t cluster = first + i;
+            // Around what cannot be read, cluster by cluster.
+            const std::optional<std::uint64_t> parent =
+                read ? folderParentOf(bytes.subspan(static_cast<std::size_t>(i) * boot_.clusterSize), cluster)
+                     : deleted_->folderParentAt(cluster);
+            if (parent.has_value()) {
+                found.push_back(FoundFolder{cluster, *parent});
+            }
+        }
+    };
+
+    std::vector<std::uint32_t> raw(kAnalysisChunk);
+    std::uint32_t runFirst = 0;
+    std::uint32_t runCount = 0;
+    for (std::uint32_t first = 2; first <= last && !cancelled;) {
+        const std::uint32_t count = std::min<std::uint32_t>(kAnalysisChunk, last - first + 1);
+        const std::span<std::uint32_t> chunk(raw.data(), count);
+        const bool bulk = fat_->readRaw(boot_.activeFat, first, chunk);
+        for (std::uint32_t i = 0; i < count && !cancelled; ++i) {
+            const std::uint32_t cluster = first + i;
+            // Unreadable chunks go through the table, which falls back to other FAT copies.
+            const FatEntryKind kind = bulk ? fat_->classify(chunk[i]).kind : fat_->entry(cluster).kind;
+            if (kind == FatEntryKind::Free && !listed.contains(cluster)) {
+                if (runCount == 0) {
+                    runFirst = cluster;
+                }
+                if (++runCount == perRead) {
+                    search(runFirst, runCount);
+                    runCount = 0;
+                }
+            } else if (runCount > 0) {
+                search(runFirst, runCount);
+                runCount = 0;
+            }
+        }
+        first += count;
+    }
+    if (runCount > 0 && !cancelled) {
+        search(runFirst, runCount);
+    }
+    if (cancelled || cancel.isCancellationRequested()) {
+        return makeError(ErrorCode::Cancelled, std::string(toString(info_.type)) + " scan cancelled");
+    }
+    log(LogLevel::Info, std::string(toString(info_.type)) + " searched the free space for folders",
+        {field("clusters", searched), field("folders", found.size())});
+    return found;
+}
+
 Result<FileScan> Fat32Filesystem::scan(const ScanLimits& limits, const CancellationToken& cancel) {
     struct Work {
         DirectoryEntry directory;
@@ -636,6 +709,8 @@ Result<FileScan> Fat32Filesystem::scan(const ScanLimits& limits, const Cancellat
         // (L243); `orphaned` when the folder it belongs to is not known.
         std::optional<Listed> part;
         bool orphaned = false;
+        // In a folder found in the free space, or below one (L249).
+        bool found = false;
     };
 
     FileScan result;
@@ -650,12 +725,24 @@ Result<FileScan> Fat32Filesystem::scan(const ScanLimits& limits, const Cancellat
     };
     const auto clusterAt = [&](std::uint64_t offset) { return (offset - boot_.dataOffset) / boot_.clusterSize + 2; };
 
-    // The parts of deleted folders no listing reaches are looked for once the
-    // folders have all been listed (L243).
+    // Once the folders the listings reach have all been listed: the folders
+    // no listing reaches, when the free space is searched for them (L249),
+    // then the parts of deleted folders found apart from them (L243).
     const bool lookForParts = limits.includeDeleted && limits.recurseIntoDeletedDirectories;
+    const bool lookForFolders = lookForParts && searchFolders_;
     Seen seen;
+    bool foldersLookedFor = false;
     bool partsLookedFor = false;
     bool stopped = false;
+    // The folders found in the free space that no listing has reached yet.
+    std::vector<FoundFolder> found;
+    // Where each folder listed is, by its first cluster.
+    struct Place {
+        std::string path;
+        std::uint32_t depth = 0;
+        bool deleted = false;
+    };
+    std::unordered_map<std::uint64_t, Place> places;
 
     std::unordered_set<std::uint64_t> visited{boot_.rootCluster};
     std::vector<Work> stack{Work{rootDirectory(), "", 0, false, std::nullopt, false}};
@@ -663,7 +750,69 @@ Result<FileScan> Fat32Filesystem::scan(const ScanLimits& limits, const Cancellat
 
     while (true) {
         if (stack.empty()) {
-            if (!lookForParts || partsLookedFor || stopped) {
+            if (stopped) {
+                break;
+            }
+            if (lookForFolders && !foldersLookedFor) {
+                foldersLookedFor = true;
+                std::unordered_set<std::uint64_t> listed = seen.folders;
+                listed.insert(visited.begin(), visited.end());
+                Result<std::vector<FoundFolder>> searched = findFolders(listed, cancel);
+                if (!searched.ok()) {
+                    return searched.error();
+                }
+                found = std::move(searched).value();
+            }
+            // The folders found that no listing reached: first those that no
+            // other of them held (each lists those it holds), or all of them
+            // when they only hold each other.
+            std::erase_if(found, [&](const FoundFolder& folder) { return visited.contains(folder.cluster); });
+            if (!found.empty()) {
+                std::unordered_set<std::uint64_t> left;
+                for (const FoundFolder& folder : found) {
+                    left.insert(folder.cluster);
+                }
+                std::vector<FoundFolder> tops;
+                std::copy_if(found.begin(), found.end(), std::back_inserter(tops),
+                             [&](const FoundFolder& folder) { return !left.contains(folder.parent); });
+                if (tops.empty()) {
+                    tops = found;
+                }
+                for (const FoundFolder& folder : tops) {
+                    visited.insert(folder.cluster);
+                    Work work;
+                    work.directory.isDirectory = true;
+                    work.directory.state = EntryState::Deleted;
+                    work.directory.firstCluster = ClusterNumber{folder.cluster};
+                    work.deleted = true;
+                    work.found = true;
+                    // Its name was in the folder that held it.
+                    const std::string name = "Folder " + std::to_string(folder.cluster);
+                    if (const auto parent = places.find(folder.parent);
+                        parent != places.end() && parent->second.deleted) {
+                        work.path = parent->second.path + "/" + name;
+                        work.depth = parent->second.depth + 1;
+                    } else {
+                        work.path = "/" + std::string(kOrphanDirectory) + "/" + name;
+                        work.depth = 2;
+                        work.orphaned = true;
+                    }
+                    if (work.depth > limits.maxDepth) {
+                        result.issues.push_back(ScanIssue{ScanIssueKind::DepthLimit, work.path,
+                                                          "maximum depth " + std::to_string(limits.maxDepth)});
+                        result.complete = false;
+                        continue;
+                    }
+                    stack.push_back(std::move(work));
+                }
+                std::reverse(stack.begin(), stack.end());  // in cluster order
+                if (!stack.empty()) {
+                    log(LogLevel::Info, std::string(toString(info_.type)) + " found folders no listing reached",
+                        {field("folders", stack.size())});
+                }
+                continue;
+            }
+            if (!lookForParts || partsLookedFor) {
                 break;
             }
             partsLookedFor = true;
@@ -677,6 +826,7 @@ Result<FileScan> Fat32Filesystem::scan(const ScanLimits& limits, const Cancellat
                 if (part.folder.has_value()) {
                     work.path = seen.open[*part.folder].path;
                     work.depth = seen.open[*part.folder].depth;
+                    work.found = seen.open[*part.folder].found;
                 } else {
                     work.path = "/" + std::string(kOrphanDirectory);
                     work.depth = 1;
@@ -707,6 +857,9 @@ Result<FileScan> Fat32Filesystem::scan(const ScanLimits& limits, const Cancellat
             result.issues.push_back(ScanIssue{kind, shownPath, listed.error().message});
             continue;
         }
+        if (!part) {
+            places.emplace(work.directory.firstCluster.value(), Place{work.path, work.depth, work.deleted});
+        }
         if (!work.deleted) {
             claimAll(listed->clusters);
         }
@@ -734,6 +887,7 @@ Result<FileScan> Fat32Filesystem::scan(const ScanLimits& limits, const Cancellat
             }
             open.path = work.path;
             open.depth = work.depth;
+            open.found = work.found;
             seen.open.push_back(std::move(open));
         }
 
@@ -761,6 +915,9 @@ Result<FileScan> Fat32Filesystem::scan(const ScanLimits& limits, const Cancellat
             }
             if (work.orphaned) {
                 record.entry.issues.push_back(EntryIssue::ParentMissing);
+            }
+            if (work.found) {
+                record.entry.issues.push_back(EntryIssue::FolderFound);
             }
             Resolved resolved = resolve(record.entry);
             const bool active = record.entry.state == EntryState::Active;
@@ -793,7 +950,7 @@ Result<FileScan> Fat32Filesystem::scan(const ScanLimits& limits, const Cancellat
                     } else {
                         visited.insert(cluster);
                         subdirectories.push_back(
-                            Work{record.entry, record.path, work.depth + 1, !active, std::nullopt, false});
+                            Work{record.entry, record.path, work.depth + 1, !active, std::nullopt, false, work.found});
                     }
                 }
             }

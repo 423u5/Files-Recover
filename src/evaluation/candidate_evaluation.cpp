@@ -320,6 +320,13 @@ private:
     void takeFragments(std::vector<FragmentCandidate>& fragments);
     void takeMp4(std::vector<Mp4Candidate>& mp4);
     void takeCarves(std::vector<FileCandidate>& carves);
+    // The entries of folders found in the free space (L249) name the first
+    // proposal of its own that starts where they start (a carve, an MP4
+    // candidate or a reconstruction), whose layout and verdict stand. An
+    // entry whose start another filesystem candidate holds, or an earlier
+    // entry's, is stale or the same: none of these is delivered. The other
+    // entries are delivered as filesystem candidates.
+    void nameFound();
     // Thread-safe once planned, for different items: the item's Proposal;
     // what the plan held for it goes.
     [[nodiscard]] Proposal takeProposal(const Item& item);
@@ -363,6 +370,8 @@ private:
     std::map<std::pair<std::uint64_t, std::string>, FragmentEvidence> failedCarves_;
     // Carves that an MP4 candidate or a reconstruction already holds: (start, format).
     std::set<std::pair<std::uint64_t, std::string>> consumed_;
+    // Entries of folders found in the free space that are not delivered (nameFound).
+    std::set<SlotRef> dropped_;
     std::map<std::size_t, std::vector<ActiveData>> active_;
     // The candidates to deliver, in delivery order: first the filesystem
     // candidates' (slotItems_ of them, in slot order), then the loose ones.
@@ -623,8 +632,9 @@ void Run::takeCarves(std::vector<FileCandidate>& carves) {
             const SlotRef ref = at->second;
             const RecoveryCandidate& candidate = volumes_[ref.volume].second->candidates[ref.index];
             const auto extra = extras_.find(ref);
+            // An entry of a folder found in the free space only names the carve (nameFound, L249).
             if ((extra != extras_.end() && (!extra->second.replacements.empty() || extra->second.carve.has_value())) ||
-                startReallocated(candidate)) {
+                startReallocated(candidate) || candidate.filesystemEvidence.hasIssue(filesystem::EntryIssue::FolderFound)) {
                 continue;
             }
             if (!owner.has_value() || (candidate.filesystemEvidence.state == filesystem::EntryState::Active &&
@@ -1093,11 +1103,91 @@ Status Run::replay(const EvaluationRecord& record) {
     return success();
 }
 
+void Run::nameFound() {
+    // The entries by where they start, in scan order.
+    std::map<std::uint64_t, std::vector<SlotRef>> entries;
+    for (std::size_t v = 0; v < volumes_.size(); ++v) {
+        FilesystemRecovery& volume = *volumes_[v].first;
+        const CandidateScan& scan = *volumes_[v].second;
+        for (std::size_t i = 0; i < scan.candidates.size(); ++i) {
+            const RecoveryCandidate& entry = scan.candidates[i];
+            if (entry.filesystemEvidence.hasIssue(filesystem::EntryIssue::FolderFound)) {
+                // One that locates nothing is delivered as it is.
+                if (const std::optional<std::uint64_t> start = startOf(entry, volume)) {
+                    entries[*start].push_back(SlotRef{v, i});
+                }
+            }
+        }
+    }
+    if (entries.empty()) {
+        return;
+    }
+    std::vector<std::pair<std::uint64_t, std::size_t>> looseStarts;
+    for (std::size_t j = 0; j < loose_.size(); ++j) {
+        if (const std::optional<std::uint64_t> start = loose_[j]->data.sourceOffset()) {
+            looseStarts.emplace_back(*start, j);
+        }
+    }
+    std::sort(looseStarts.begin(), looseStarts.end());
+    const std::vector<std::pair<std::uint64_t, SlotRef>>& starts = byStart();
+    const auto candidateAt = [&](const SlotRef& ref) -> const RecoveryCandidate& {
+        return volumes_[ref.volume].second->candidates[ref.index];
+    };
+    for (const auto& [start, refs] : entries) {
+        // Another filesystem candidate holds the start, or a replacement of one does.
+        bool held = false;
+        for (auto at = std::lower_bound(starts.begin(), starts.end(), start,
+                                        [](const auto& item, std::uint64_t value) { return item.first < value; });
+             !held && at != starts.end() && at->first == start; ++at) {
+            held = !candidateAt(at->second).filesystemEvidence.hasIssue(filesystem::EntryIssue::FolderFound);
+        }
+        if (const auto claimed = claimed_.find(start); claimed != claimed_.end() && claimed->second.first) {
+            held = true;
+        }
+        auto loose = std::lower_bound(looseStarts.begin(), looseStarts.end(), std::pair{start, std::size_t{0}});
+        if (!held && (loose == looseStarts.end() || loose->first != start)) {
+            // Nothing else found there: the first entry is delivered (the others say the same).
+            dropped_.insert(refs.begin() + 1, refs.end());
+            continue;
+        }
+        dropped_.insert(refs.begin(), refs.end());
+        if (held) {
+            continue;
+        }
+        // What was found there gets the name of an entry whose size agrees
+        // with it, within a cluster; a different size is another file's,
+        // whose clusters took the place of the entry's file since.
+        const std::uint64_t cluster = volumes_[refs.front().volume].first->filesystem().info().clusterSize;
+        std::set<std::size_t> used;
+        for (; loose != looseStarts.end() && loose->first == start; ++loose) {
+            Proposal& proposal = *loose_[loose->second];
+            for (std::size_t k = 0; k < refs.size(); ++k) {
+                const RecoveryCandidate& entry = candidateAt(refs[k]);
+                const std::uint64_t a = entry.expectedSize;
+                const std::uint64_t b = proposal.data.expectedSize;
+                if (used.contains(k) || (a > b ? a - b : b - a) >= std::max<std::uint64_t>(cluster, 1)) {
+                    continue;
+                }
+                used.insert(k);
+                proposal.data.filename = entry.filename;
+                proposal.data.extension = entry.extension;
+                proposal.data.filesystemEvidence = entry.filesystemEvidence;
+                if (proposal.data.method == RecoveryMethod::Carving) {
+                    proposal.data.method = RecoveryMethod::Hybrid;
+                }
+                proposal.filesystemCandidate = entry.id;
+                break;
+            }
+        }
+    }
+}
+
 void Run::plan(std::vector<FileCandidate>& carves, std::vector<Mp4Candidate>& mp4,
                std::vector<FragmentCandidate>& fragments) {
     takeFragments(fragments);
     takeMp4(mp4);
     takeCarves(carves);
+    nameFound();
     std::size_t items = loose_.size();
     for (const auto& [recovery, scan] : volumes_) {
         items += scan->candidates.size();
@@ -1118,7 +1208,7 @@ void Run::plan(std::vector<FileCandidate>& carves, std::vector<Mp4Candidate>& mp
             }
             const std::size_t replacements =
                 extra != extras_.end() && extra->first == ref ? extra->second.replacements.size() : 0;
-            if (replacements == 0) {
+            if (replacements == 0 && !dropped_.contains(ref)) {
                 order_.push_back(Item{ItemKind::Filesystem, ref, 0});
             }
             for (std::size_t k = 0; k < replacements; ++k) {

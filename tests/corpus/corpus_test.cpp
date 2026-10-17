@@ -488,6 +488,15 @@ void checkOriginals(const ScanRun& run, const std::vector<Original>& originals, 
                     EXPECT_TRUE(holdsWhole(run, original, {})) << "no candidate holds its bytes whole";
                 }
                 break;
+            case Outcome::NamedFound:
+                if (deep) {
+                    EXPECT_TRUE(holdsWhole(run, original, original.path))
+                        << "no candidate at its path holds its bytes in condition " << toString(original.condition)
+                        << "; at its path:" << listOf(named);
+                } else {
+                    EXPECT_TRUE(named.empty()) << "a quick scan names it:" << listOf(named);
+                }
+                break;
             case Outcome::NamedDamaged:
                 EXPECT_FALSE(named.empty()) << "no candidate at its path";
                 EXPECT_FALSE(anyCompleteAtPath) << "a candidate at its path is called Complete:" << listOf(named);

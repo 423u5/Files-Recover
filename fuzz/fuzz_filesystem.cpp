@@ -3,7 +3,9 @@
 // backup boot records too), its candidates listed (active and deleted, inside
 // deleted directories), and every candidate's data reconstructed. Deleted
 // FAT32 starts that lost their top bits are placed as a scan places them,
-// with what starts and ends a file of each format (L7, L242).
+// with what starts and ends a file of each format (L7, L242), and the free
+// space is searched for the folders nothing leads to, as a deep scan does
+// (L249).
 
 #include "carving/format_registry.hpp"
 #include "fuzz_support.hpp"
@@ -28,6 +30,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     filesystemOptions.fat32.endsFile = [&source](std::string_view name, std::uint64_t offset, std::uint64_t size) {
         return carving::endsFileNamed(fuzz::allFormats(), source, name, offset, size);
     };
+    filesystemOptions.fat32.searchFreeSpaceForFolders = true;
     Result<std::unique_ptr<FilesystemRecovery>> opened = openFilesystemRecovery(source, 0, filesystemOptions);
     if (!opened.ok()) {
         return 0;

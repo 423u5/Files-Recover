@@ -114,6 +114,8 @@ std::string_view toString(EntryIssue issue) noexcept {
         return "DamagedRecord";
     case EntryIssue::StartClusterInferred:
         return "StartClusterInferred";
+    case EntryIssue::FolderFound:
+        return "FolderFound";
     }
     return "Unknown";
 }

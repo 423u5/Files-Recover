@@ -458,7 +458,8 @@ const CommandSpec& scanCommand() {
         "Scans a source for files to recover and keeps what it finds in a new session (--source), whose id\n"
         "it prints. A quick scan reads filesystem metadata (FAT12, FAT16, FAT32, exFAT, NTFS), deleted\n"
         "entries included; a deep scan (the default) also carves files by their content, recovers MP4\n"
-        "files and reconstructs fragmented ones. Every file found is validated and identified by SHA-256.\n"
+        "files, reconstructs fragmented ones and finds the folders a format left in a FAT volume's free\n"
+        "space. Every file found is validated and identified by SHA-256.\n"
         "\n"
         "The session records the scan as it goes. After Ctrl+C or a crash, --session ID resumes the scan\n"
         "where it stopped, with the settings it began with. The source is only read.",

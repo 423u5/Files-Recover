@@ -175,21 +175,30 @@ std::uint64_t DeletedEntries::endOf(const Item& item, const DirectoryEntry& entr
     return start + item.clusters;
 }
 
-std::optional<std::uint64_t> DeletedEntries::folderParentAt(std::uint64_t cluster) {
-    if (!boot_.isValidCluster(cluster)) {
+std::optional<std::uint64_t> folderParentOf(std::span<const std::byte> head, std::uint64_t cluster) {
+    if (head.size() < 2 * kDirectoryEntrySize) {
         return std::nullopt;
     }
-    std::array<std::byte, 2 * kDirectoryEntrySize> head{};
-    if (!volume_.readExact(ByteOffset{boot_.clusterOffset(static_cast<std::uint32_t>(cluster))}, head).ok()) {
-        return std::nullopt;
-    }
-    const std::span<const std::byte> dot = std::span<const std::byte>(head).first(kDirectoryEntrySize);
-    const std::span<const std::byte> dotDot = std::span<const std::byte>(head).subspan(kDirectoryEntrySize);
+    const std::span<const std::byte> dot = head.first(kDirectoryEntrySize);
+    const std::span<const std::byte> dotDot = head.subspan(kDirectoryEntrySize, kDirectoryEntrySize);
     if (!isDotSlot(dot) || loadU8(dot, 1) != ' ' || !isDotSlot(dotDot) || loadU8(dotDot, 1) != '.' ||
         slotCluster(dot) != cluster) {
         return std::nullopt;
     }
     return slotCluster(dotDot);
+}
+
+std::optional<std::uint64_t> DeletedEntries::folderParentAt(std::uint64_t cluster) {
+    if (!boot_.isValidCluster(cluster)) {
+        return std::nullopt;
+    }
+    // Its first sector whole: a scan counts a sector it cannot read as
+    // unreadable as far as the read asked (L249).
+    std::vector<std::byte> head(std::min<std::uint32_t>(boot_.bytesPerSector, boot_.clusterSize));
+    if (!volume_.readExact(ByteOffset{boot_.clusterOffset(static_cast<std::uint32_t>(cluster))}, head).ok()) {
+        return std::nullopt;
+    }
+    return folderParentOf(head, cluster);
 }
 
 bool DeletedEntries::isFolderAt(std::uint64_t cluster, const Listing& listing) {

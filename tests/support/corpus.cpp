@@ -328,7 +328,8 @@ Original with(std::string path, Bytes bytes, Outcome outcome, std::string note, 
     original.bytes = std::move(bytes);
     original.outcome = outcome;
     original.deepOnly = deepOnly || outcome == Outcome::Carved || outcome == Outcome::NamedDamagedCarved ||
-                        outcome == Outcome::InsideArchive || outcome == Outcome::InsideDocument;
+                        outcome == Outcome::InsideArchive || outcome == Outcome::InsideDocument ||
+                        outcome == Outcome::NamedFound;
     original.note = std::move(note);
     return original;
 }
@@ -942,8 +943,13 @@ Image fat32QuickFormatted() {
 
     files.push_back(named("/NEW.GIF", newer, Expected::Complete, "written after the format"));
     files.push_back(with("/FIRST.PNG", first, Outcome::Lost, "NEW.GIF took its clusters after the format"));
-    files.push_back(with("/DCIM/IMG_0001.JPG", photo1, Outcome::Carved, "the format dropped its entry"));
-    files.push_back(with("/DCIM/IMG_0002.JPG", photo2, Outcome::Carved, "the format dropped its entry"));
+    // DCIM's folder survives the format in the free space, where a deep scan
+    // finds it; its name was in the old root (L249).
+    const std::string dcimFound = "/$OrphanFiles/Folder " + std::to_string(dcim);
+    files.push_back(with(dcimFound + "/IMG_0001.JPG", photo1, Outcome::NamedFound,
+                         "the format dropped DCIM's entry; its folder is found in the free space"));
+    files.push_back(with(dcimFound + "/IMG_0002.JPG", photo2, Outcome::NamedFound,
+                         "the format dropped DCIM's entry; its folder is found in the free space"));
     files.push_back(with("/CLIP.MP4", clip, Outcome::Carved, "the format dropped its entry"));
     files.push_back(with("/SONG.MP3", song, Outcome::Carved, "the format dropped its entry"));
     files.push_back(with("/SPLIT.JPG", split, Outcome::Lost,
@@ -2497,6 +2503,76 @@ Image fat32EmptyDht() {
     return image;
 }
 
+// After P20 (L249): a FAT32 card of 16 KiB clusters a phone used, then
+// formatted, as the user's stick was. After the format the phone wrote its
+// folders again, over the first clusters of the old Android folders. The
+// folders below them and the camera's and the downloads' are found in the
+// free space: their files come back with their names, those of types carving
+// does not know too (a voice note, a chat backup, a text file).
+Image fat32FormattedPhone() {
+    Fat32BuilderOptions options = fatGeometry(32, 2048, "PHONE");  // 16 KiB clusters, 32 MiB
+    options.entriesBeforeData = true;
+    FatVolume old(options, 0x2301);
+    const std::uint32_t root = Fat32ImageBuilder::root();
+    const std::uint32_t android = old.folder(root, "Android");
+    const std::uint32_t media = old.folder(android, "media");
+    const std::uint32_t app = old.folder(media, "com.whatsapp");
+    const std::uint32_t whatsapp = old.folder(app, "WhatsApp");
+    const std::uint32_t chatMedia = old.folder(whatsapp, "Media");
+    const std::uint32_t images = old.folder(chatMedia, "WhatsApp Images");
+    const std::uint32_t sent = old.folder(images, "Sent");
+    const std::uint32_t voiceNotes = old.folder(chatMedia, "WhatsApp Voice Notes");
+    const std::uint32_t month = old.folder(voiceNotes, "202105");
+    const std::uint32_t databases = old.folder(whatsapp, "Databases");
+    const std::uint32_t dcim = old.folder(root, "DCIM");
+    const std::uint32_t camera = old.folder(dcim, "Camera");
+    const std::uint32_t download = old.folder(root, "Download");
+
+    std::vector<Original> files;
+    const std::string appFound = "/$OrphanFiles/Folder " + std::to_string(app);
+    const auto add = [&](std::uint32_t folder, std::string path, std::string_view name, Bytes bytes,
+                         Expected condition, std::string note) {
+        (void)old.builder.addFile(folder, name, bytes);
+        Original original = with(std::move(path), std::move(bytes), Outcome::NamedFound, std::move(note));
+        original.condition = condition;
+        files.push_back(std::move(original));
+    };
+    add(images, appFound + "/WhatsApp/Media/WhatsApp Images/IMG-20210512-WA0001.jpg", "IMG-20210512-WA0001.jpg",
+        withEmptyHuffmanSegments(progressiveJpeg(3501, 640, 480)), Expected::Complete,
+        "a photo of a messaging app, with an empty DHT before each scan (L252)");
+    add(sent, appFound + "/WhatsApp/Media/WhatsApp Images/Sent/IMG-20210512-WA0002.jpg", "IMG-20210512-WA0002.jpg",
+        progressiveJpeg(3502, 480, 640), Expected::Complete, "a photo sent");
+    Bytes voice = makePattern(9000, 3503);
+    std::memcpy(voice.data(), "OggS", 4);
+    add(month, appFound + "/WhatsApp/Media/WhatsApp Voice Notes/202105/PTT-20210512-WA0003.opus",
+        "PTT-20210512-WA0003.opus", std::move(voice), Expected::Unverified,
+        "a voice note: Ogg is not carved (L79), only its folder gives it back");
+    add(databases, appFound + "/WhatsApp/Databases/msgstore.db.crypt14", "msgstore.db.crypt14",
+        makePattern(40000, 3504), Expected::Unverified, "an encrypted chat backup: only its folder gives it back");
+    add(camera, "/$OrphanFiles/Folder " + std::to_string(dcim) + "/Camera/IMG_20210512_143022.jpg",
+        "IMG_20210512_143022.jpg", cameraJpeg(3505, 320, 240), Expected::Complete, "a camera photo");
+    add(download, "/$OrphanFiles/Folder " + std::to_string(download) + "/Shopping list.txt", "Shopping list.txt",
+        text(3506, 2500), Expected::Unverified, "text is not carved (L213): only its folder gives it back");
+    const Bytes oldImage = old.builder.build();
+
+    // The format, then the folders the phone writes, in the first clusters:
+    // the old Android and media folders'. Nothing names the folders below.
+    Fat32ImageBuilder formatted(options);
+    copyInto(formatted.raw(), formatted.clusterOffset(3),
+             std::span<const std::byte>(oldImage).subspan(static_cast<std::size_t>(formatted.clusterOffset(3))));
+    const std::uint32_t newAndroid = formatted.addDirectory(root, "Android").clusters.front();
+    const std::uint32_t data = formatted.addDirectory(newAndroid, "data").clusters.front();
+    if (newAndroid != android || data != media) {
+        throw std::runtime_error("corpus: the phone's new folders must take the old ones' clusters");
+    }
+    (void)formatted.addFile(data, ".nomedia", {});
+    files.push_back(named("/Android/data/.nomedia", {}, Expected::Unverified, "written after the format"));
+    Image image;
+    image.bytes = formatted.build();
+    image.originals = std::move(files);
+    return image;
+}
+
 struct Entry {
     Scenario scenario;
     std::function<Image()> make;
@@ -2580,6 +2656,9 @@ const std::vector<Entry>& entries() {
         add("fat32-empty-dht", "FAT32 of 16 KiB clusters formatted after use: progressive photos with an empty DHT "
             "before each scan that needs no new table", {"quick-formatted drives", "different cluster sizes"},
             fat32EmptyDht);
+        add("fat32-formatted-phone", "FAT32 of 16 KiB clusters a phone used, then formatted: its folders found in "
+            "the free space, with a voice note, a chat backup and a text file carving cannot find",
+            {"quick-formatted drives", "deleted files"}, fat32FormattedPhone);
         return list;
     }();
     return all;
@@ -2607,6 +2686,8 @@ std::string_view toString(Outcome outcome) noexcept {
             return "inside-archive";
         case Outcome::InsideDocument:
             return "inside-document";
+        case Outcome::NamedFound:
+            return "named-found";
     }
     return "?";
 }

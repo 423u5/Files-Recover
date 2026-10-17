@@ -159,6 +159,10 @@ std::vector<std::string> explain(const EvaluatedCandidate& candidate) {
             line += "; entry issues: " + listOf(fs.entryIssues);
         }
         lines.push_back(line);
+        if (fs.hasIssue(filesystem::EntryIssue::FolderFound) && data.method != RecoveryMethod::Filesystem) {
+            lines.push_back("Named: an entry of a folder found in the free space names what was found where it "
+                            "starts, which gives the layout (L249)");
+        }
     }
     if (!data.warnings.empty()) {
         lines.push_back("Layout warnings: " + listOf(data.warnings));
@@ -183,7 +187,8 @@ std::vector<std::string> explain(const EvaluatedCandidate& candidate) {
         // A filesystem candidate's own layout, decided with the carve (an MP4
         // candidate's or a reconstruction's carve is their evidence).
         const bool reconstructed = candidate.fragments.has_value() && candidate.fragments->source.has_value();
-        if (candidate.hasFilesystemEvidence() && !candidate.mp4Candidate.has_value() && !reconstructed) {
+        if (candidate.hasFilesystemEvidence() && !candidate.mp4Candidate.has_value() && !reconstructed &&
+            !data.filesystemEvidence.hasIssue(filesystem::EntryIssue::FolderFound)) {
             lines.push_back(data.method == RecoveryMethod::Hybrid
                                 ? "Merged: the carve that starts where the metadata's file starts gives the layout "
                                   "(the metadata's own layout did not validate)"

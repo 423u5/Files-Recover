@@ -49,10 +49,14 @@ enum class Outcome : std::uint8_t {
     // holds its bytes on their own, and a recovered Complete PDF holds them,
     // byte for byte, as a stream's data. Always deep only.
     InsideDocument,
+    // Only a deep scan names it: the folder that holds it is found in the
+    // free space, as a format leaves it (L249). A deep scan's candidate at
+    // its path holds its bytes, whole; a quick scan has none at its path.
+    NamedFound,
 };
 
 // The condition the candidate holding the bytes (Named, Carved,
-// NamedDamagedCarved) must have.
+// NamedDamagedCarved, NamedFound) must have.
 enum class Expected : std::uint8_t {
     Complete,
     // Nothing can check the content (a text file).

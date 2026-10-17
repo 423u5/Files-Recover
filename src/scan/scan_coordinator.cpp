@@ -379,6 +379,9 @@ Result<ScanCoordinator::Run::VolumeOutcome> ScanCoordinator::Run::openVolume(Vol
                                            std::string_view name, std::uint64_t offset, std::uint64_t size) {
         return carving::endsFileNamed(*formats, *volume, name, offset, size);
     };
+    // A deep scan reads everything: the folders of a formatted FAT volume,
+    // which nothing leads to, are searched for in its free space too (L249).
+    filesystemOptions.fat32.searchFreeSpaceForFolders = configuration.mode == ScanMode::Deep;
     Result<std::unique_ptr<FilesystemRecovery>> recovery =
         openFilesystemRecovery(*outcome.view, record.offset, filesystemOptions, options.logger);
     if (!recovery.ok()) {

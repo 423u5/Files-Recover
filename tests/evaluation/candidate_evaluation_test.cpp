@@ -883,6 +883,72 @@ TEST(CandidateEvaluationTest, ADeletedFileWhoseStartIsTakenGetsNoCarve) {
     EXPECT_NE(gone->validationStatus(), ValidationStatus::Valid);
 }
 
+// After P20 (L249): the entries of folders found in the free space name what
+// was found where they start when their sizes agree within a cluster; what
+// was found keeps its layout and verdict. One that names another file's
+// start is stale and names nothing; one where nothing else was found is
+// delivered on its own.
+TEST(CandidateEvaluationTest, AnEntryOfAFoundFolderNamesWhatWasFoundWhereItStarts) {
+    Card card;
+    const Bytes active = photo(30);
+    card.add("ACTIVE.JPG", active, 100);
+    // The photo the entry names, one byte longer by the entry (a writer left one after EOI).
+    const Bytes photoNamed = photo(31);
+    const auto named = card.addDeleted("Named.jpg", photoNamed, run(300, clustersFor(photoNamed.size())));
+    storeLe32(card.builder().shortEntry(named), 28, static_cast<std::uint32_t>(photoNamed.size() + 1));
+    // A stale entry: another photo, of another size, took its clusters since.
+    const Bytes staleData = test::makePattern(3 * photoNamed.size(), 32);
+    (void)card.addDeleted("Stale.jpg", staleData, run(500, clustersFor(staleData.size())));
+    const Bytes other = photo(33, 64, 48);
+    card.plant(500, other);
+    // A voice note no format knows, where nothing is carved.
+    const Bytes voice = test::makePattern(3000, 34);
+    (void)card.addDeleted("Voice.opus", voice, run(800, clustersFor(voice.size())));
+    // An entry that names the active file's start.
+    const auto old = card.addDeleted("Old.jpg", test::makePattern(2000, 35), run(900, clustersFor(2000)));
+    storeLe16(card.builder().shortEntry(old), 20, 0);
+    storeLe16(card.builder().shortEntry(old), 26, 100);
+    test::MemoryStorageSource source(card.image());
+    RECOVERY_ASSERT_OK(source.open());
+    Volume volume = openVolume(source);
+    for (RecoveryCandidate& candidate : volume.scan.candidates) {
+        if (candidate.filename != "ACTIVE.JPG") {
+            candidate.filesystemEvidence.entryIssues.push_back(filesystem::EntryIssue::FolderFound);
+        }
+    }
+    Inputs inputs{&volume};
+    inputs.carves = carveAll(source);
+    const Evaluated evaluated = evaluateAll(source, std::move(inputs));
+
+    // The carve, with the entry's name: its bytes, not the entry's size.
+    const EvaluatedCandidate* hybrid = evaluated.one("Named.jpg");
+    ASSERT_NE(hybrid, nullptr);
+    SCOPED_TRACE(describeEvaluated(*hybrid));
+    EXPECT_EQ(hybrid->recoveryMethod(), RecoveryMethod::Hybrid);
+    EXPECT_EQ(hybrid->sourceOffset(), card.offsetOf(300));
+    EXPECT_EQ(hybrid->validationStatus(), ValidationStatus::Valid);
+    EXPECT_EQ(hybrid->identity.sha256, sha256(photoNamed));
+    EXPECT_NE(describeEvaluated(*hybrid).find("Named: an entry of a folder found in the free space"),
+              std::string::npos);
+    // The stale entry names nothing: the other photo is carved as it was.
+    EXPECT_TRUE(evaluated.named("Stale.jpg").empty());
+    const EvaluatedCandidate* carved = evaluated.startingAt(card.offsetOf(500));
+    ASSERT_NE(carved, nullptr);
+    EXPECT_FALSE(carved->hasFilesystemEvidence());
+    EXPECT_EQ(carved->recoveryMethod(), RecoveryMethod::Carving);
+    EXPECT_EQ(carved->identity.sha256, sha256(other));
+    // Nothing else was found where the voice note starts: it is delivered on its own.
+    const EvaluatedCandidate* note = evaluated.one("Voice.opus");
+    ASSERT_NE(note, nullptr);
+    EXPECT_EQ(note->recoveryMethod(), RecoveryMethod::Filesystem);
+    EXPECT_EQ(note->identity.sha256, sha256(voice));
+    // The active file holds the start the old entry names.
+    EXPECT_TRUE(evaluated.named("Old.jpg").empty());
+    const EvaluatedCandidate* kept = evaluated.one("ACTIVE.JPG");
+    ASSERT_NE(kept, nullptr);
+    EXPECT_EQ(kept->identity.sha256, sha256(active));
+}
+
 TEST(CandidateEvaluationTest, UnreadableBytesAreZerosInTheChecksAndTheHash) {
     Card card;
     const Bytes jpeg = photo(17, 256, 192);

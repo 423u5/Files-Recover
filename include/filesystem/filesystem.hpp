@@ -181,8 +181,14 @@ enum class EntryIssue : std::uint8_t {
     // FAT32: the top 16 bits of the start cluster were cleared when the entry
     // was deleted (as Windows does), and firstCluster is where the evidence
     // places the data: the entries around it, or what starts there (L7).
-    // Last, so the values sessions recorded keep their meaning.
     StartClusterInferred,
+    // FAT32: the entry is in a folder found in the free space, which nothing
+    // leads to any more (L249): a format's old folders, whose entries may
+    // name data written over since. It names what other evidence recovers
+    // where it starts, and is no evidence of its own for MP4 recovery or
+    // fragment reconstruction. Last, so the values sessions recorded keep
+    // their meaning.
+    FolderFound,
 };
 
 [[nodiscard]] std::string_view toString(EntryIssue issue) noexcept;

@@ -755,12 +755,13 @@ closed it) and the card's originals, byte for byte. A crash is the session folde
 
 ## Corruption corpus (P20)
 
-`tests/support/corpus.cpp` holds 35 scenarios (P20's 26; since then `fat16-card`, `zip-archives`, `fat12-floppy`, `documents`, `fat32-windows-deleted`, `exfat-orphaned-folder`, `fat32-folder-parts`, `exfat-reused-folder` and `fat32-empty-dht`): disk images built the same, byte for byte, every time, each with the
+`tests/support/corpus.cpp` holds 36 scenarios (P20's 26; since then `fat16-card`, `zip-archives`, `fat12-floppy`, `documents`, `fat32-windows-deleted`, `exfat-orphaned-folder`, `fat32-folder-parts`, `exfat-reused-folder`, `fat32-empty-dht` and `fat32-formatted-phone`): disk images built the same, byte for byte, every time, each with the
 original files it holds and what recovery must give back of each (found by the filesystem with its name, found by
 carving only, found but damaged, lost, or stored inside an archive that is recovered: then no file of its own, and
 byte for byte a stored member of a recovered Complete archive, also of an archive stored in one; or an image inside a
-document that is recovered: no file of its own, and byte for byte a stream's data in a recovered Complete PDF; expected Complete,
-Unverified or either; some only in a deep scan).
+document that is recovered: no file of its own, and byte for byte a stream's data in a recovered Complete PDF; or found
+with its name only by a deep scan, in a folder found in the free space, which a quick scan does not list; expected
+Complete, Unverified or either; some only in a deep scan).
 Together they cover the plan's 16 categories (normal, deleted, large, small, fragmented and partially overwritten
 files, corrupt filesystem metadata, corrupt media, duplicates, Unicode and long names, cluster sizes, nearly full
 and quick-formatted drives, bad regions, multiple partitions) on FAT32, exFAT and NTFS, MBR and GPT disks, 512 and

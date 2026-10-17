@@ -2,8 +2,8 @@
 # image 8422400 bytes, sha256 5215a652b9b3fe7e, 7 originals
 # deep scan: 6 candidates
 #1 filesystem complete image/gif "/NEW.GIF" size=7687/7687 valid=valid:passed/passed sha=c8a38c621bd84a2d recovery=recovered "NEW.GIF" => /NEW.GIF
-#2 carving complete image/jpeg "recovered_000002.jpg" size=19737/19737 valid=valid:passed/passed sha=08e889a578da3de8 recovery=recovered "recovered_000002.jpg" => /DCIM/IMG_0001.JPG
-#3 carving complete image/jpeg "recovered_000003.jpg" size=12403/12403 valid=valid:passed/passed sha=d484fbc7971455cc recovery=recovered "recovered_000003.jpg" => /DCIM/IMG_0002.JPG
+#2 hybrid complete image/jpeg "/$OrphanFiles/Folder 9/IMG_0001.JPG" size=19737/19737 deleted valid=valid:passed/passed sha=08e889a578da3de8 recovery=recovered "$OrphanFiles/Folder 9/IMG_0001.JPG" => /$OrphanFiles/Folder 9/IMG_0001.JPG
+#3 hybrid complete image/jpeg "/$OrphanFiles/Folder 9/IMG_0002.JPG" size=12403/12403 deleted valid=valid:passed/passed sha=d484fbc7971455cc recovery=recovered "$OrphanFiles/Folder 9/IMG_0002.JPG" => /$OrphanFiles/Folder 9/IMG_0002.JPG
 #4 carving complete video/mp4 "recovered_000004.mp4" size=123799/123799 valid=valid:passed/passed sha=841f92c1d533ad22 recovery=recovered "recovered_000004.mp4" => /CLIP.MP4
 #5 carving complete audio/mp3 "recovered_000005.mp3" size=84253/84253 valid=valid:passed/unsupported sha=214d7a9f8c2d815b recovery=recovered "recovered_000005.mp3" => /SONG.MP3
 #6 reconstruction partial(data-missing,content-truncated,reconstruction-partial,validation-failed) image/jpeg "recovered_000006.jpg" size=40960/47221 fragmented valid=invalid:truncated/failed sha=68b416f60ebb1837 recovery=recovered(incomplete) "recovered_000006.jpg"

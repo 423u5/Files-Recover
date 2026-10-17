@@ -123,7 +123,7 @@ unreadable regions (the first 20; all of them are in the metadata).
 
 | Option | Meaning (default) |
 | --- | --- |
-| `--mode quick\|deep` | Quick: filesystem metadata, deleted entries included. Deep (default): also carving, MP4 recovery and fragment reconstruction |
+| `--mode quick\|deep` | Quick: filesystem metadata, deleted entries included. Deep (default): also carving, MP4 recovery and fragment reconstruction, and the folders of a FAT volume that nothing leads to any more (a format leaves them), searched for in its free space (L249) |
 | `--no-carving`, `--no-mp4`, `--no-fragments` | Deep scans: leave out that stage |
 | `--deleted-only` | Filesystem candidates: deleted files only (active files are left out) |
 | `--alignment BYTES` | Carve files that start at multiples of BYTES only (1) |

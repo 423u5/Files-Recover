@@ -85,6 +85,15 @@ starts at its first stored byte, or where its metadata puts its first cluster):
   that was overwritten, a torn NTFS record, a run list beyond the volume) prove nothing about the carve: one that
   validates there is Complete. MP4 recovery's carves follow the same rule (`AllocatedClusters` only when bytes are
   reallocated). A deleted file whose recorded clusters are allocated now still has them marked reallocated.
+- After P20 (L249): the entries of FAT32 folders found in the free space (`EntryIssue::FolderFound`: a format's old
+  folders, whose entries may name data written over since) only name what is found. Such an entry takes no carve,
+  seeds no reconstruction and is not examined by MP4 recovery. Once everything else is placed, it gives its name, path
+  and filesystem evidence to the first file of its own (a carve, an MP4 candidate or a reconstruction) that starts
+  where it starts and whose expected size is its size within a cluster (a different size is another file's, which
+  took its clusters since); that file keeps its layout and verdict (a carve becomes HYBRID, and its evidence says
+  `Named:`). An entry whose start another filesystem candidate or a replacement holds, or that another entry starting
+  there named or will name, is not delivered; one where nothing else was found is delivered with its own layout, as a
+  deleted file is.
 
 ## Format and validation
 

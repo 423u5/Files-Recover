@@ -199,7 +199,11 @@ another free place that happens to qualify: its candidate holds other data then,
 types it checks.
 
 ### L249. Parts of deleted FAT32 folders are looked for right after known data only
-**Status:** Open (2026-10-16)  
+**Status:** Partly resolved (2026-10-17, the user's request): a deep scan finds the folders that nothing leads to by
+their first cluster in the free space (those of a formatted volume), and their entries name what is found. Tests
+`Fat32FoundFolderTest` (7), `CandidateEvaluationTest.AnEntryOfAFoundFolderNamesWhatWasFoundWhereItStarts`,
+`FragmentRecoveryTest.AnEntryOfAFoundFolderIsNoSeed`, `ScanCoordinatorTest.UnreadableSectorsAreCountedOnceAndKeptAcrossResumes`,
+corpus scenarios `fat32-formatted-phone` and `fat32-quick-formatted`; what is left is below  
 What is left of L8 and L243. A scan looks for the parts of deleted folders that no listing reached (L243) only in
 the free clusters right after data or a folder's cluster that it listed: a part after data that nothing lists any
 more (a file whose entry is gone, or space never listed) is not found, and its files are found only by carving. A
@@ -210,6 +214,42 @@ folder's next cluster would be is taken for that folder's: its files are then li
 deleted folders that grew next to each other, one may still list the other's entries as well
 (L243's description: duplicates, nothing lost). Windows 10 records a deleted folder's size in its entry (L8), which
 would tell how many clusters to look for; it is not used.
+
+The same holds for the folders of a formatted volume, whose root the format replaced: nothing leads to them. On the
+user's 32 GB stick (FAT32 of 16 KiB clusters, formatted by Windows, then used in a phone; 2026-10-17) 295 folders
+survive in free clusters (each starts with its `.` and `..` entries; 285 of their parents are among them, 9 were in
+the old root), naming 2,006 files: photos, videos and voice notes of a messaging app, a camera folder, downloads. 1,761
+of them start where a candidate of the scan starts (1,742 of those `COMPLETE`), which come back as
+`recovered_NNNNNN` in one folder; the files of types carving does not know (53 Opus voice notes, L79; 26 encrypted
+chat backups; text files, L213) are not recovered at all. A scan reads every cluster in its one pass already: it
+could find these folders there, list their files in a tree whose top folders are unnamed (their names were in the
+old root), and read each file from its first cluster on, as the format cleared the chains.
+
+What was done (2026-10-17): with `Fat32Options::searchFreeSpaceForFolders`, which a deep scan sets, the volume stage
+reads every free cluster no listing reached for a folder's first cluster (a `.` entry naming that cluster, and a
+`..` entry). A folder found is listed with the folder found that holds it, or as `Folder <cluster>` inside the
+deleted folder its `..` names when the scan listed that, or under `/$OrphanFiles`
+([architecture/filesystems.md](architecture/filesystems.md)). Its entries are flagged `FolderFound` and only name
+what carving, MP4 recovery and fragment reconstruction find where they start, when the sizes agree within a cluster;
+one where nothing else is found is delivered on its own
+([recovery/candidate_evaluation.md](recovery/candidate_evaluation.md)). A first version let them take carves over
+as other deleted files do: on the stick that lost or worsened 116 files (L256, L257, L258), so it was not kept. On
+the stick now: 4,069 candidates have their names and folders instead of 3, 3,813 of the 4,127 complete files among
+them, and 239 files come back that carving cannot find (53 voice notes, 32 Matroska videos, 26 chat backups, text,
+subtitles); nothing was lost or got worse.
+
+What is left: a part of a folder found apart from it (a cluster after its first) is still looked for only right
+after known data; a folder that no folder found holds keeps no name; an entry whose size disagrees with what was
+found where it starts names nothing, so that file keeps a made-up name; the search costs a read (L255); exFAT is not
+searched (L254).
+
+### L255. The free-space folder search reads a FAT volume's free space once more
+**Status:** Open (2026-10-17)  
+A deep scan's volume stage reads all of a FAT volume's free space no listing reached, to find the folders nothing
+leads to (L249), before the source pass reads the whole source anyway. On the user's 28.6 GiB stick, formatted and
+so all free, the deep scan took 12:30 instead of 8:26. Possible fix: look for the folders' first clusters in the
+source pass and list them before the stages that use the volumes' candidates, which would change what a session
+records at which stage (L223).
 
 ## exFAT (P5)
 
@@ -300,6 +340,14 @@ Such a directory is read as one run from its first cluster on, where free, or no
 gives from there happens to have its length. Windows makes directories one run while they can grow so (seen on
 the images it wrote, L21). An orphaned entry whose first four clusters still free hold no entry set and no
 verified orphan stays a file.
+
+### L254. The folders of a formatted exFAT volume are not searched for
+**Status:** Open (2026-10-17)  
+A deep scan finds the folders of a formatted FAT volume in its free space by their first cluster, which starts with
+a `.` and a `..` entry (L249). exFAT folders have no such entries: the folders of a formatted exFAT volume (cards of
+64 GB and more are formatted exFAT) are found only where orphaned entry sets lead to them (L244), and their files
+are otherwise only carved, without names. Possible fix: look at every free cluster for entry sets whose checksums
+and name hashes hold, as L244 does for orphans, in the same read.
 
 ## Cross-checking and test data
 
@@ -1222,6 +1270,24 @@ of 218 MB to 1.25 GB, whose layouts stop at 256 MiB, `maxUnknownLength`), and th
 of their carves. Possible fix: deliver the carve too, with its own condition, when its layouts place fewer of its
 bytes than it holds.
 
+### L256. A deleted file's reconstruction takes the place of a carve that validates
+**Status:** Open (found on the user's stick, 2026-10-17)  
+A deleted file whose guessed layout does not validate is a seed of fragment reconstruction, and a carve that starts
+where it starts joins the seed instead of being one. When the entry's size is not the file's (one byte more than the
+JPEG it names, or another file's clusters took the place of the entry's since), the reconstruction looks for a file
+of the entry's size, ends `PARTIAL` or `AMBIGUOUS`, and its layouts take the place of the carve, which validated on
+its own: on the stick, 75,617-byte photos the carve had whole came back as 64 KiB of them with the rest missing.
+Seen with the entries of folders found in the free space (L249), which are now kept from fragment reconstruction;
+it holds for any deleted FAT32 or exFAT file whose entry's size misleads. Possible fix: a carve that validates where
+a seed starts is delivered as it is, with the entry's name, and the seed is not reconstructed (L253).
+
+### L257. A seed whose name says no format is taken for the first format its content fits
+**Status:** Open (found on the user's stick, 2026-10-17)  
+Fragment reconstruction gives a filesystem seed whose name tells no format (`.db`) the first format whose signature
+and header check its first bytes pass, before the others. An MP4 video kept as `.db` (an app that hides videos)
+was tried as M4A, which refuses video: "nothing of the file validates", `UNRECOVERABLE`, although the evaluation found
+it a valid MP4. Possible fix: choose as the evaluation does (`detectFormat`), or try every format that fits.
+
 ## Validation and candidate evaluation (P14)
 
 P15: unchanged in scans; the claims are rebuilt on resume from the pass's events and the reconstructions
@@ -1359,6 +1425,15 @@ A carve gives a filesystem candidate its layout only when the candidate's own da
 the carve validates (or the metadata locates no data). A carve that is longer than the metadata's own valid layout
 (a file the metadata records too short but whose truncated form still validates, as for formats that validate any
 prefix) does not replace it.
+
+### L258. A failed reconstruction makes a candidate UNRECOVERABLE whose delivered layout validates
+**Status:** Open (found on the user's stick, 2026-10-17)  
+When a deleted file's reconstruction finds nothing, the candidate keeps its own layout with the reconstruction's
+evidence, and a carve that validates where it starts gives that layout (HYBRID). Its condition is still
+`UNRECOVERABLE` (`RECONSTRUCTION_FAILED` comes first in the rules), although the bytes delivered validate: on the
+stick, complete videos of 64 to 89 MB were called so, under the names of entries that named their starts (L257
+caused the failure). Possible fix: judge the condition by the layout delivered, and keep the failed reconstruction as
+evidence only.
 
 ## Scanning (P15)
 

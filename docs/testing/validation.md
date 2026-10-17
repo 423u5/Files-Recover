@@ -501,7 +501,8 @@ Windows 10 wrote (`E:\RecoveryTest\winref`, `winref2`, `winref3`: FAT32 and exFA
 them identical, candidate by candidate (156, 4, 281, 51, 280 and 51 files), with nothing found where nothing is (no
 `/$OrphanFiles` entry). The reference tests pass on `winref2` and `winref3`. The test stick's image (NTFS, 28.6 GiB, read only), where only the paths can change, gave the same 529 candidates as the last scan of it before this work (the L7 work's final build), field for field.
 
-**Checks** (2026-10-16, the final sources). msvc-debug: 1,769 tests, all passing (before four small edits: a reserve, a flag taken before a move, the 256-place bound, a constant's type; the filesystem, registry and four FAT and exFAT corpus tests passed again after them). clang-tidy, both passes, over the filesystem, format registry, scan coordinator, writer and job sources: two findings on this work's lines, both fixed (a multiplication in `int`, a vector filled without a reserve); the rest predate it. The full pass of every CI preset (release, AddressSanitizer, analyze, the fuzz preset and a fuzz run of the new seeds) is still to be run, by the user's choice: the next day.
+**Checks** (2026-10-16, the final sources). msvc-debug: 1,769 tests, all passing (before four small edits: a reserve, a flag taken before a move, the 256-place bound, a constant's type; the filesystem, registry and four FAT and exFAT corpus tests passed again after them). clang-tidy, both passes, over the filesystem, format registry, scan coordinator, writer and job sources: two findings on this work's lines, both fixed (a multiplication in `int`, a vector filled without a reserve); the rest predate it. The full pass of every CI preset ran the next day (2026-10-17), on the sources with L252 and L249 on top: see the
+last section's Checks.
 
 ## After P20: progressive JPEGs with an empty Huffman table segment
 
@@ -538,7 +539,56 @@ test stick's image (`sandisk-f-2.img`) was not scanned again: no candidate of it
 table segment. The review showed L253 (a carve taken over by reconstruction is not delivered itself).
 
 **Checks** (2026-10-17, the final sources). msvc-debug and msvc-release: 1,774 tests each, all passing. clang-tidy on
-the changed engine source: no finding. Not run: analyze, AddressSanitizer and fuzzing (the CI presets).
+the changed engine source: no finding. The full pass of every CI preset ran with L249 on top: see the next section's
+Checks.
+
+## After P20: the folders of a formatted FAT volume
+
+At the user's request (2026-10-17, "why my any file does not have name and no folder there"), L249 is partly
+resolved ([../limitations.md](../limitations.md); [../architecture/filesystems.md](../architecture/filesystems.md),
+[../recovery/candidate_evaluation.md](../recovery/candidate_evaluation.md)): a deep scan finds the folders that
+nothing leads to by their first cluster in a FAT volume's free space, and their entries name what is found.
+
+**What was there.** The user's stick (FAT32 of 16 KiB clusters, formatted by Windows, then used in a phone) named 3
+files. A read of the image found 295 folders in its free clusters (a `.` entry naming its own cluster, and `..`),
+naming 2,006 files in their first clusters alone.
+
+**Tests.** `Fat32FoundFolderTest` (7: a formatted card's folders with their names and files, not searched unless
+asked or when deleted files are left out, a folder a listing reaches not listed again, one whose entry is lost put in
+the folder its `..` names, not in a folder written since in its parent's cluster, and a copy of a folder's cluster
+taken for nothing); `CandidateEvaluationTest.AnEntryOfAFoundFolderNamesWhatWasFoundWhereItStarts` (a carve named
+by an entry one byte longer, a stale entry naming nothing, an entry delivered where nothing was found, one an
+active file's start holds dropped); `FragmentRecoveryTest.AnEntryOfAFoundFolderIsNoSeed`. Corpus: the new scenario
+`fat32-formatted-phone` (8 candidates deep, 1 quick: a messaging app's photos, voice note and chat backup, a camera
+photo and a text file, by their names under `/$OrphanFiles/Folder <cluster>`) and the new outcome `named-found`
+(only a deep scan names the file); `fat32-quick-formatted` now names its two photos (`/$OrphanFiles/Folder 9/...`,
+same bytes and condition); every other baseline is unchanged. Mutation checks: the search switched off, every folder
+found taken as a top one, active folders as parents, no check of the `.` entry's cluster, entries taking carves
+over, naming whatever the size, entries as reconstruction seeds, entries an active file's start holds kept: each
+caught by these tests. `ScanCoordinatorTest.UnreadableSectorsAreCountedOnceAndKeptAcrossResumes` caught a defect of
+the first version: around unreadable sectors the search read 64 bytes of a cluster, which the scan counted as
+unreadable as asked, hiding the rest of the sector from the counts (3,072 bytes became 384); it reads whole sectors
+now.
+
+**Real data, before and after.** A first version let the entries take carves over and seed reconstructions as other
+deleted files do. On the stick it lost or worsened 116 files: entries whose clusters other files took before the
+format, or whose size was a byte more than the photo's, made reconstructions replace complete carves with partial
+layouts, and an MP4 video kept as `.db` was called `UNRECOVERABLE` (L256 to L258). It was not kept. The final
+version, against the scan with the JPEG fix alone (8:26): `compare_reports.py` found no file lost, none worse, 217
+new; `COMPLETE` 4,127 as before, `UNVERIFIED` 248 instead of 10, the same reconstructions (10) and MP4 candidates
+(317). 4,069 candidates have names and folders instead of 3: 3,813 of the complete files, 3,827 carves named in all
+(HYBRID), and 239 files only the folders give back (53 voice notes, 32 Matroska videos, 26 chat backups, 26
+subtitles, 22 text files, 12 AMR recordings). The scan took 12:30 (L255). The six images Windows 10 wrote
+(`winref`, `winref2`, `winref3`, FAT32 and exFAT) gave the same candidates, field for field, as the last work's.
+
+**Checks** (2026-10-17, the final sources; this full pass also covers the two sections before). msvc-debug,
+msvc-release and msvc-asan: 1,784 tests each, all passing; msvc-analyze (214 steps) without a warning; the fuzz
+preset's 11 smoke runs and regressions. The filesystem fuzz target now searches the free space for folders, as a deep
+scan does, and two seeds were added: `fat32_formatted` (filesystem and scan targets: a formatted volume whose old
+folders a deep scan finds) and `jpeg_empty_dht` (formats, media and metadata targets). Fuzzing on the seeds: the
+filesystem target 5 minutes (1,369 inputs), scan 3 (681), formats 3 (64,206), journal 2 (187,441), no findings.
+clang-tidy over the changed engine sources: the findings are all on lines this work did not change. The whole pass
+took 44 minutes.
 
 ## Acceptance
 

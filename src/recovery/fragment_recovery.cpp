@@ -559,6 +559,9 @@ void RunState::claimVolumes() {
         const std::vector<RecoveryCandidate>& candidates = volume.scan().candidates;
         for (std::size_t i = 0; i < candidates.size(); ++i) {
             const RecoveryCandidate& candidate = candidates[i];
+            if (candidate.filesystemEvidence.hasIssue(filesystem::EntryIssue::FolderFound)) {
+                continue;  // its folder may name data written over since: no claim (L249)
+            }
             const OwnerId owner = ownerBase_[v] + i;
             const LayoutEvidence layout = candidate.filesystemEvidence.allocation.layout;
             if (!candidate.isDeleted() || layout == LayoutEvidence::Recorded) {
@@ -603,7 +606,10 @@ Result<FragmentSeedExamination> RunState::examineSeed(std::size_t v, std::size_t
     FragmentSeedExamination examination;
     examination.volume = v;
     examination.index = i;
-    if (candidate.filesystemEvidence.allocation.layout != LayoutEvidence::Guessed) {
+    // An entry of a folder found in the free space names what carving finds
+    // where it starts; it is no seed (L249).
+    if (candidate.filesystemEvidence.allocation.layout != LayoutEvidence::Guessed ||
+        candidate.filesystemEvidence.hasIssue(filesystem::EntryIssue::FolderFound)) {
         return examination;
     }
     const std::optional<std::uint64_t> startOffset = candidate.sourceOffset();
