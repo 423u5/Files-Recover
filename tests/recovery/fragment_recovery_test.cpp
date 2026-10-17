@@ -1105,6 +1105,52 @@ TEST(FragmentRecoveryTest, CarvedMp4WithoutMetadataIsReconstructed) {
     EXPECT_EQ(candidate->name.substr(candidate->name.size() - 4), ".mp4");
 }
 
+// After P20 (L257): a video whose name tells no format (an app that hides
+// its videos as .db) has a brand MPEG-4 audio takes too, and as M4A nothing
+// of it validates: it is reconstructed as the next format its content fits,
+// MP4, in one piece or in two. Audio of such a name stays M4A.
+TEST(FragmentRecoveryTest, AFileWhoseNameSaysNoFormatIsTriedAsEachFormatItsContentFits) {
+    const carving::FormatRegistry registry = allFormats();
+    Card card;
+    const test::Mp4Built whole = clip(161);
+    card.addDeleted("20220908085254.db", whole.bytes, run(1000, clustersFor(whole.bytes.size())));
+    const test::Mp4Built split = clip(162);
+    const std::uint32_t n = clustersFor(split.bytes.size());
+    const std::uint32_t at = checkedSplit(split, 40);
+    card.addDeleted("20220910085209.db", split.bytes, pieces(n, {{2000, at}, {2100, n}}));
+    test::M4aOptions options;
+    options.majorBrand = "isom";
+    options.compatibleBrands = {"isom", "mp42"};
+    options.audio.frames = 60;
+    const Bytes song = test::makeM4a(options);
+    card.addDeleted("20220911090000.db", song, run(3000, clustersFor(song.size())));
+    test::MemoryStorageSource source(card.image());
+    RECOVERY_ASSERT_OK(source.open());
+    Volume volume = openVolume(source);
+    ASSERT_NE(volume.recovery, nullptr);
+    const Recovered recovered = reconstructAll(source, registry, {&volume});
+
+    const FragmentCandidate* one = recovered.named("20220908085254.db");
+    expectReconstructed(source, one, whole.bytes, 1);
+    ASSERT_NE(one, nullptr);
+    EXPECT_EQ(one->formatId, "mp4");
+    EXPECT_NE(one->reason.find("as MPEG-4 audio (M4A): nothing of the file validates"), std::string::npos)
+        << one->reason;
+    const FragmentCandidate* two = recovered.named("20220910085209.db");
+    expectReconstructed(source, two, split.bytes, 2);
+    ASSERT_NE(two, nullptr);
+    EXPECT_EQ(two->formatId, "mp4");
+    const FragmentCandidate* audio = recovered.named("20220911090000.db");
+    expectReconstructed(source, audio, song, 1);
+    ASSERT_NE(audio, nullptr);
+    EXPECT_EQ(audio->formatId, "m4a");
+    // A name keeps its extension; the content's format is the candidate's.
+    ASSERT_NE(one->reconstruction(), nullptr);
+    EXPECT_EQ(one->reconstruction()->data.extension, "db");
+    EXPECT_EQ(recovered.report.complete, 3u);
+    EXPECT_EQ(recovered.report.unrecoverable, 0u);
+}
+
 // ===========================================================================
 // Audio streams, exFAT, output, damage, partitions
 // ===========================================================================
@@ -1562,6 +1608,9 @@ TEST(FragmentRecoveryTest, NamesOfStatusesOriginsAndSources) {
 TEST(FragmentRecoveryTest, TheStepsRestoreFromTheirEventsAndReconstructions) {
     const carving::FormatRegistry registry = allFormats();
     Card card;
+    // The first seed: examined as M4A, reconstructed as MP4 (L257).
+    const test::Mp4Built hidden = clip(33);
+    card.addDeleted("Hidden clip.db", hidden.bytes, run(3000, clustersFor(hidden.bytes.size())));
     const Bytes deleted = photo(31);
     const std::uint32_t n1 = clustersFor(deleted.size());
     (void)card.add("KEEP.BIN", test::makePattern(9 * kClusterSize, 31), run(1010, 9));
@@ -1614,6 +1663,13 @@ TEST(FragmentRecoveryTest, TheStepsRestoreFromTheirEventsAndReconstructions) {
     RECOVERY_ASSERT_OK(next);
     ASSERT_TRUE(next->has_value());
     delivered.push_back(std::move(**next));
+    EXPECT_EQ(delivered.front().name, "Hidden clip.db");
+    EXPECT_EQ(delivered.front().formatId, "mp4");
+    EXPECT_EQ(delivered.front().status, ReconstructionStatus::Complete);
+    const auto seedExamined = std::find_if(examinations.begin(), examinations.end(),
+                                           [](const FragmentSeedExamination& examination) { return examination.seed; });
+    ASSERT_NE(seedExamined, examinations.end());
+    EXPECT_EQ(seedExamined->formatId, "m4a");
 
     // New steps: the examinations, the pass's events and the reconstruction again.
     std::unique_ptr<FragmentRecoverySteps> second = make();
@@ -1621,6 +1677,9 @@ TEST(FragmentRecoveryTest, TheStepsRestoreFromTheirEventsAndReconstructions) {
         RECOVERY_ASSERT_OK(second->addSeedExamination(examination));
     }
     RECOVERY_ASSERT_OK(second->replay(events));
+    FragmentCandidate unknownFormat = delivered.front();
+    unknownFormat.formatId = "no-such-format";
+    RECOVERY_EXPECT_ERROR(second->replayReconstruction(unknownFormat), ErrorCode::InvalidInput);
     RECOVERY_ASSERT_OK(second->replayReconstruction(delivered.front()));
     while (second->nextSeed() < second->seedCount()) {
         Result<std::optional<FragmentCandidate>> more = second->reconstructNext();

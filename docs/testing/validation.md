@@ -590,6 +590,56 @@ filesystem target 5 minutes (1,369 inputs), scan 3 (681), formats 3 (64,206), jo
 clang-tidy over the changed engine sources: the findings are all on lines this work did not change. The whole pass
 took 44 minutes.
 
+## After P20: carves that validate, and the formats a deleted file's content fits
+
+L253, L256, L257 and L258 are resolved (2026-10-17) ([../limitations.md](../limitations.md);
+[../recovery/candidate_evaluation.md](../recovery/candidate_evaluation.md),
+[../recovery/fragment_recovery.md](../recovery/fragment_recovery.md), [../recovery/metadata.md](../recovery/metadata.md)).
+A file whose name was found is recovered under that name, its extension included; the format its content has is
+reported, the file is not renamed by it.
+
+**What was wrong.** Found with the first version of L249. A deleted file whose entry's size is not the
+file's (a byte more than the photo, another file's clusters since) was reconstructed to that size, and its partial
+layouts took the place of a carve that validated where it starts (L256). A deleted video whose name says no format
+was reconstructed as the first format its content fits, M4A, as which nothing of a video validates (L257). A
+reconstruction that found nothing made the candidate `UNRECOVERABLE` even when the bytes delivered instead validated
+(L258). A carve whose end was found but that does not validate came back only as its layouts, which may hold its
+first clusters only (L253).
+
+**Tests.** `FragmentRecoveryTest.AFileWhoseNameSaysNoFormatIsTriedAsEachFormatItsContentFits` (two videos whose name says
+no format, in one piece and in two, reconstructed as MP4; audio of the same brand stays M4A; the name keeps its
+extension) and
+`TheStepsRestoreFromTheirEventsAndReconstructions` (its first seed such a video, restored from the session's records;
+a saved reconstruction of a format the registry lacks is refused). `CandidateEvaluationTest`:
+`AValidCarveWhereADeletedFileStartsTakesThePlaceOfLayoutsThatHoldLess` (a photo whose entry says a byte more, a stale
+entry four times the size of the photo that took its clusters; with the carving stage's carves and without them),
+`AStreamsValidCarveDoesNotTakeThePlaceOfLayouts` (an MP3 carve that validates is no whole file),
+`ACarveSeedsCarveIsDeliveredBesideLayoutsThatHoldLess` (a photo with eight restart intervals made zeros: its end is
+found, its structure is invalid; with and without the carving stage's carves),
+`ACarveSeedThatBreaksGivesNoCarveBesideItsLayouts` (no near copy beside the layouts) and
+`AnUnrecoverableReconstructionKeepsTheMetadataLayout` (the warning only when the bytes kept do not validate);
+`ConditionTest.UnrecoverableWhenNothingIsLocatedOrValidates` (also a candidate of an earlier session that still has
+the warning). The new corpus scenario `fat32-misleading-entries` (7 candidates deep, 5 quick) holds all of these on a
+FAT32 card of 4 KiB clusters. With the last commit's engine its deep scan gave the two videos `UNRECOVERABLE`, the
+photo whose entry says a byte more 16 KiB of 18 KiB (`PARTIAL`), the photo under the stale entry 4 KiB of 8 KiB, and
+the damaged photo only as a 45 KiB layout that ran on into old data; now all five named files are `COMPLETE`, whole,
+and the damaged photo is delivered whole beside its layout (`CORRUPTED`). Its quick scan is unchanged; it calls the
+video in two pieces `audio/m4a` (L259). Every earlier baseline is unchanged. Mutation checks undid each rule in turn
+(the retry as other formats, the restore of its format, the condition rule, the warning, the carve taking the
+layouts' place, the bytes compared, the stream exception, the carve beside the layouts, the bytes it shares with
+them, the found end, and the two copies used when carving delivers no carve): each was caught by these tests.
+Counting the bytes a layout shares with the carve, not all it places, came from the corpus: the damaged photo's
+layout placed 45,056 bytes of which only its first clusters were the photo's.
+
+**Real data, before and after.** Real images, scanned deep by the last commit's build and by this one and compared
+with `compare_reports.py` (a FAT32 stick a phone used and formatted, an NTFS stick, six FAT32 and exFAT images
+Windows 10 wrote): nothing lost or worse. One file is new: a damaged photo of 480,123 bytes, whole and `CORRUPTED`,
+beside its 8 `AMBIGUOUS` layouts of 49,152 bytes; every other candidate is the same.
+
+**Checks** (2026-10-17, the final sources). msvc-debug and msvc-release: 1,790 tests each, all passing, the 37 corpus
+scenarios matching their baselines. clang-tidy over the three changed engine sources: the findings are all on lines
+this work did not change. Not run for this work: msvc-asan, msvc-analyze and the fuzzers.
+
 ## Acceptance
 
 | Criterion | Status |

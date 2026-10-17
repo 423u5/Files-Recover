@@ -88,6 +88,15 @@ struct JpegMarker {
 // new table (L252).
 [[nodiscard]] std::vector<std::byte> withEmptyHuffmanSegments(std::span<const std::byte> file);
 
+// The file (with a restart interval) with `count` restart intervals after its
+// `first`th restart marker made zeros, markers and all: with a multiple of 8
+// the markers left still come in order, but too few of them for the scan's
+// MCUs, which the structure finds at its end (EOI found, structure invalid:
+// a photo damaged in place, L253). Throws std::invalid_argument when the
+// file has too few restart markers.
+[[nodiscard]] std::vector<std::byte> withoutRestartIntervals(std::span<const std::byte> file, std::size_t first,
+                                                             std::size_t count);
+
 // ---------------------------------------------------------------------------
 // PNG
 // ---------------------------------------------------------------------------

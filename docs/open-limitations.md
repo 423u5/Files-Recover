@@ -5,12 +5,12 @@ get files back. The project's first rule is that no file that could come back is
 recover them wrong come first. [limitations.md](limitations.md) stays the reference for each item's details and
 status: when an item is solved or decided there, take it off this list.
 
-Of the register's 258 items, the 91 below are open: 86 Open, 4 Partly resolved (L46, L212, L213, L249) and 1
-Mitigated (L197). The 115 Accepted and 52 Resolved items are not listed (L7, L8 and L13 were resolved on 2026-10-15;
+Of the register's 260 items, the 89 below are open: 84 Open, 4 Partly resolved (L46, L212, L213, L249) and 1
+Mitigated (L197). The 115 Accepted and 56 Resolved items are not listed (L7, L8 and L13 were resolved on 2026-10-15;
 on 2026-10-16 L245, a defect found and fixed, L12, L19 and L21, by the images Windows wrote, L147, L172 and L177,
 which left L246, accepted by the user's choice, and L247, and L10, L242, L243 and L244, which left L248, L249 and
 L250; on 2026-10-17 L252, a defect found on the user's stick and fixed, which showed L253, L249 partly, which showed
-L254 to L258, and L251 was found).
+L254 to L258, and L251 was found; then L253, L256, L257 and L258 were resolved, which left L259 and L260).
 
 Sizes compare the items with each other: **small** is a contained change, **medium** a new part of an existing
 component with its tests, **large** a new component (a file format, a filesystem structure) with reference samples.
@@ -24,9 +24,6 @@ with `tools/regression/compare_reports.py` (nothing lost or worse); the register
 
 | ID | What goes wrong | Possible fix | Size |
 | --- | --- | --- | --- |
-| L256 | A deleted file whose entry's size is not the file's (one byte more, or another file took its clusters since) is reconstructed to that size, and its partial layouts take the place of a carve that validated where it starts: on the user's stick, complete photos came back as their first 64 KiB. | A carve that validates where a seed starts is delivered as it is, with the entry's name, and the seed is not reconstructed (with L253). | small |
-| L258 | A failed reconstruction calls a candidate `UNRECOVERABLE` although the layout it delivers (a carve's) validates: complete videos of 64 to 89 MB were called so on the stick. | Judge the condition by the layout delivered; keep the failed reconstruction as evidence. | small |
-| L257 | A reconstruction seed whose name says no format gets the first format its content fits: an MP4 video kept as `.db` was tried as M4A, and nothing validated. | Choose the format as the evaluation does, or try every one that fits. | small |
 | L23 | **NTFS.** Attribute lists are not followed. A heavily fragmented file (typically a large video on a full disk) comes back short, a file whose data lies wholly in extension records has none, and a fragmented `$MFT` is read only as far as its first record describes: the files after it are not listed. | Read `$ATTRIBUTE_LIST` and the extension records it names, for files and for the `$MFT` itself. | medium to large |
 | L36, L24 | **NTFS.** Compressed files (LZNT1) are not recovered at all: every byte is missing and the writer refuses them. Encrypted (EFS) data cannot be decrypted without the user's key. | Decompress LZNT1, one compression unit at a time. EFS stays out. | medium |
 
@@ -46,7 +43,7 @@ once their entries are overwritten, they are lost.
 
 | ID | What is lost | Possible fix | Size |
 | --- | --- | --- | --- |
-| L253 | A carve that does not validate and whose fragment reconstruction ends `PARTIAL` or `AMBIGUOUS` is not delivered itself, only its layouts, which may hold far less: on the user's stick a 480 KB JPEG carve comes back as 48 KB layouts. MP4 carves are delivered next to their layouts. | Deliver the carve too, with its own condition, when its layouts place fewer of its bytes than it holds. | small |
+| L260 | A deleted file damaged in place (its entry intact, its end found, its structure invalid) is delivered only as its reconstruction's layouts, which may hold its first clusters only: the entry's own layout and the carve at its start are not delivered beside them, as a carve seed's carve is (L253). | Deliver the entry's candidate with the carve too when the layouts share fewer of the carve's bytes than it has. | small |
 | L220 | A `CORRUPTED` archive is written whole: its intact members are not delivered as files of their own (only the stored images, audio and video that carving finds inside it). | Deliver the members whose checksum passes. A design question: the engine does not extract archives today. | medium |
 | L219 | When an archive's start is overwritten or lost, a carve from a later member ends before the central directory (`PARTIAL`); repair tools could read its members from that directory. | Carve on to the central directory even though it places the start earlier (still `PARTIAL`). | medium |
 | L233 | A PDF stream whose `/Length` is far off ends the carve at that object: the rest of the document is left out (`PARTIAL`). | Search for `endstream` as readers do, within a bound, instead of stopping. | small to medium |
@@ -74,6 +71,7 @@ once their entries are overwritten, they are lost.
 | L198 | A carve inside another file's overlong allocation is linked to that file as its container: the report's "inside" evidence is wrong, though the carve is recovered whole. | Link only to what the file's data covers. | small |
 | L239 | Naming by content guesses for some files: templates are named as documents (`.dotx` as `docx`), OpenXPS as `xps`, encrypted Office files `.ole`, JARs and ZIPs by their first member. | Refine the rules where content tells more. | small |
 | L180 | `--log` always writes Info and above, and a scan always uses every format (they are part of its identity). | Add a log level option. | small |
+| L259 | A file whose content fits several formats, none validating it, is judged as the first: a damaged video whose name says no format is `audio/m4a` in a quick scan (its bytes and its CORRUPTED condition are the same as MP4; a deep scan reconstructs it as MP4). | The format whose structure got furthest, or for MPEG-4 the kind its brand and tracks give. | small |
 | L251 | `--log FILE` appends to a file that exists and is refused only on the source image itself: given the image's `.imgmeta`, it appends log lines to it, the metadata is no longer read, and a later scan takes the zeros of the unreadable regions for data. | Refuse the image's metadata as a log too. | small |
 
 ## 5. Checking against real Windows

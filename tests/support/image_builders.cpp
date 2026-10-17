@@ -965,6 +965,24 @@ std::vector<std::byte> withEmptyHuffmanSegments(std::span<const std::byte> file)
     return out;
 }
 
+std::vector<std::byte> withoutRestartIntervals(std::span<const std::byte> file, std::size_t first,
+                                               std::size_t count) {
+    std::vector<std::size_t> restarts;
+    for (const JpegMarker& marker : jpegMarkers(file)) {
+        if (marker.code >= 0xD0 && marker.code <= 0xD7) {
+            restarts.push_back(marker.offset);
+        }
+    }
+    if (count == 0 || restarts.size() <= first + count) {
+        throw std::invalid_argument("withoutRestartIntervals: the file has " + std::to_string(restarts.size()) +
+                                    " restart markers");
+    }
+    std::vector<std::byte> out(file.begin(), file.end());
+    std::fill(out.begin() + static_cast<std::ptrdiff_t>(restarts[first] + 2),
+              out.begin() + static_cast<std::ptrdiff_t>(restarts[first + count] + 2), std::byte{0x00});
+    return out;
+}
+
 std::vector<std::byte> pngChunk(std::string_view type, std::span<const std::byte> data) {
     std::vector<std::byte> out;
     putBe32(out, static_cast<std::uint32_t>(data.size()));

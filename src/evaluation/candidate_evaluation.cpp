@@ -236,6 +236,26 @@ std::vector<SourceRegion> markAllocated(const std::vector<SourceRegion>& regions
     return out;
 }
 
+// The bytes a layout places where a carve has them: at the same file offset,
+// from the same source offset.
+std::uint64_t sharedBytes(const RecoveryCandidate& layout, const FileCandidate& carve) {
+    std::uint64_t shared = 0;
+    for (const SourceRegion& region : layout.sourceRegions) {
+        if (region.kind != RegionKind::Stored) {
+            continue;
+        }
+        for (const carving::CarvedExtent& extent : carve.extents) {
+            if (region.sourceOffset + extent.fileOffset != extent.sourceOffset + region.fileOffset) {
+                continue;
+            }
+            const std::uint64_t begin = std::max(region.fileOffset, extent.fileOffset);
+            const std::uint64_t end = std::min(region.fileOffset + region.length, extent.fileOffset + extent.length);
+            shared += begin < end ? end - begin : 0;
+        }
+    }
+    return shared;
+}
+
 std::string carvedName(std::uint64_t id, std::string_view extension) {
     std::string number = std::to_string(id);
     if (number.size() < 6) {
@@ -320,6 +340,12 @@ private:
     void takeFragments(std::vector<FragmentCandidate>& fragments);
     void takeMp4(std::vector<Mp4Candidate>& mp4);
     void takeCarves(std::vector<FileCandidate>& carves);
+    // A carve that validates as a whole file: its end found, its structure
+    // Valid, of a format that trusts such files and whose valid files are
+    // not any run of its frames (a stream's carve stops at a gap).
+    [[nodiscard]] bool wholeFile(const FileCandidate& carve) const;
+    // A carve delivered as a file of its own.
+    [[nodiscard]] static std::unique_ptr<Proposal> ownCarve(FileCandidate carve, std::vector<FileCandidate> others);
     // The entries of folders found in the free space (L249) name the first
     // proposal of its own that starts where they start (a carve, an MP4
     // candidate or a reconstruction), whose layout and verdict stand. An
@@ -370,6 +396,12 @@ private:
     std::map<std::pair<std::uint64_t, std::string>, FragmentEvidence> failedCarves_;
     // Carves that an MP4 candidate or a reconstruction already holds: (start, format).
     std::set<std::pair<std::uint64_t, std::string>> consumed_;
+    // Carves of reconstructions that carving delivers as the rules place
+    // them, kept here for when it does not (carving off, or stopped by its
+    // limit): a deleted file's carve, which joins its entry; and a carve
+    // seed's, delivered beside its layouts (L253). By (start, format).
+    std::map<std::pair<std::uint64_t, std::string>, std::pair<SlotRef, FileCandidate>> joining_;
+    std::map<std::pair<std::uint64_t, std::string>, FileCandidate> besides_;
     // Entries of folders found in the free space that are not delivered (nameFound).
     std::set<SlotRef> dropped_;
     std::map<std::size_t, std::vector<ActiveData>> active_;
@@ -436,22 +468,70 @@ void Run::takeFragments(std::vector<FragmentCandidate>& fragments) {
             seed = slotOf(FsKey{candidate.volumeOffset, candidate.filesystemCandidate->value()});
         }
         const FragmentEvidence base = evidenceOf(candidate);
+        std::optional<std::pair<std::uint64_t, std::string>> carveKey;
         if (candidate.carve.has_value()) {
-            consumed_.emplace(candidate.carve->sourceOffset, candidate.carve->formatId);
+            carveKey.emplace(candidate.carve->sourceOffset, candidate.carve->formatId);
+            consumed_.insert(*carveKey);
         }
         if (candidate.status == ReconstructionStatus::Unrecoverable || candidate.hypotheses.empty()) {
-            // Nothing validates: the seed keeps its own layout, with this evidence.
+            // Nothing validates: the seed keeps its own layout, with this
+            // evidence, and the carve where it starts joins it (P12's rule
+            // decides between them) or is a file of its own.
+            if (carveKey.has_value()) {
+                consumed_.erase(*carveKey);
+            }
             if (seed.has_value()) {
                 extras_[*seed].failedReconstruction = base;
-            } else if (candidate.carve.has_value()) {
-                consumed_.erase({candidate.carve->sourceOffset, candidate.carve->formatId});
-                failedCarves_.emplace(std::pair{candidate.carve->sourceOffset, candidate.carve->formatId}, base);
+                if (carveKey.has_value()) {
+                    joining_.insert_or_assign(*carveKey, std::pair{*seed, std::move(*candidate.carve)});
+                }
+            } else if (carveKey.has_value()) {
+                failedCarves_.emplace(*carveKey, base);
             }
             continue;
         }
         const std::size_t tied = std::min(candidate.tied, candidate.hypotheses.size());
         const std::size_t layouts =
             candidate.status == ReconstructionStatus::Ambiguous ? std::max<std::size_t>(1, tied) : 1;
+        // What the layouts delivered place at most, of the carve's bytes at
+        // most, and whether one validates.
+        std::uint64_t placed = 0;
+        std::uint64_t shared = 0;
+        bool validates = false;
+        for (std::size_t k = 0; k < layouts; ++k) {
+            placed = std::max(placed, candidate.hypotheses[k].evidence.placedBytes);
+            if (candidate.carve.has_value()) {
+                shared = std::max(shared, sharedBytes(candidate.hypotheses[k].data, *candidate.carve));
+            }
+            validates = validates || candidate.hypotheses[k].validation.status == ValidationStatus::Valid;
+        }
+        bool carveBeside = false;
+        if (seed.has_value() && carveKey.has_value() && !validates && wholeFile(*candidate.carve)) {
+            // After P20 (L256): a carve that validates where a deleted file
+            // starts is that file, whose entry's size misled the search (a
+            // byte more than the photo, another file's clusters since).
+            if (placed <= candidate.carve->length) {
+                // The layouts hold no more of it: the carve joins the
+                // entry's own candidate instead (P12's rule decides).
+                consumed_.erase(*carveKey);
+                joining_.insert_or_assign(*carveKey, std::pair{*seed, std::move(*candidate.carve)});
+                continue;
+            }
+            // The layouts place more bytes: they and the carve with the entry.
+            carveBeside = true;
+        }
+        if (!seed.has_value() && carveKey.has_value() && candidate.status != ReconstructionStatus::Complete &&
+            candidate.carve->end.status == carving::EndStatus::Found && shared < candidate.carve->length) {
+            // After P20 (L253): a carve whose end was found but that does not
+            // validate (a file damaged in place, or one whose end is another
+            // file's), and the layouts hold fewer of its bytes than it has:
+            // the carve, whole, may show more of the file, and is delivered
+            // too with its own verdict (takeCarves; an MP4 candidate holds an
+            // MP4 carve already). A carve that breaks gives what is
+            // consistent to the layouts already.
+            consumed_.erase(*carveKey);
+            besides_.insert_or_assign(*carveKey, *candidate.carve);
+        }
         for (std::size_t k = 0; k < layouts; ++k) {
             ReconstructionHypothesis& hypothesis = candidate.hypotheses[k];
             Proposal proposal;
@@ -482,6 +562,19 @@ void Run::takeFragments(std::vector<FragmentCandidate>& fragments) {
                 }
                 loose_.push_back(std::make_unique<Proposal>(std::move(proposal)));
             }
+        }
+        if (carveBeside) {
+            // The entry with the carve after its layouts, as P12's rule
+            // joins them (the carve's layout unless the entry's validates).
+            const RecoveryCandidate& entry = volumes_[seed->volume].second->candidates[seed->index];
+            Proposal own;
+            own.data = entry;
+            own.filesystemCandidate = entry.id;
+            own.filesystemLayout = true;
+            own.formatId = candidate.carve->formatId;
+            own.carve = std::move(candidate.carve);
+            own.mergeCarve = true;
+            extras_[*seed].replacements.push_back(std::move(own));
         }
         if (seed.has_value()) {
             ++report_.superseded;
@@ -611,14 +704,27 @@ void Run::takeCarves(std::vector<FileCandidate>& carves) {
         std::vector<FileCandidate> group(std::make_move_iterator(unique.begin() + static_cast<std::ptrdiff_t>(first)),
                                          std::make_move_iterator(unique.begin() + static_cast<std::ptrdiff_t>(last)));
         first = last;
+        // Carving delivers these: the rules below place them.
+        for (const FileCandidate& carve : group) {
+            joining_.erase({carve.sourceOffset, carve.formatId});
+        }
 
-        // A replacement holds this start: the carves are its evidence.
+        // A replacement holds this start: the carves are its evidence, but
+        // for a carve seed's carve delivered beside its layouts (L253).
         if (const auto claimed = claimed_.find(start); claimed != claimed_.end()) {
             const auto& [slot, index] = claimed->second;
             Proposal& owner = slot.has_value() ? extras_.at(*slot).replacements[index] : *loose_[index];
-            report_.carvesCompeting += group.size();
+            std::optional<FileCandidate> beside;
             for (FileCandidate& carve : group) {
+                if (!beside.has_value() && besides_.erase({carve.sourceOffset, carve.formatId}) > 0) {
+                    beside = std::move(carve);
+                    continue;
+                }
+                ++report_.carvesCompeting;
                 owner.otherCarves.push_back(std::move(carve));
+            }
+            if (beside.has_value()) {
+                loose_.push_back(ownCarve(std::move(*beside), {}));
             }
             continue;
         }
@@ -653,23 +759,53 @@ void Run::takeCarves(std::vector<FileCandidate>& carves) {
             continue;
         }
         // A file of its own.
-        Proposal proposal;
-        proposal.data = fromCarve(group.front());
-        proposal.formatId = group.front().formatId;
-        if (group.front().validation.status != ValidationStatus::NotValidated) {
-            proposal.knownStructure = group.front().validation;
-        }
-        if (const auto failed = failedCarves_.find({start, group.front().formatId}); failed != failedCarves_.end()) {
-            proposal.fragments = failed->second;
-        }
-        proposal.carve = std::move(group.front());
         report_.carvesCompeting += group.size() - 1;
-        for (std::size_t i = 1; i < group.size(); ++i) {
-            proposal.otherCarves.push_back(std::move(group[i]));
+        const auto failed = failedCarves_.find({start, group.front().formatId});
+        FileCandidate best = std::move(group.front());
+        group.erase(group.begin());
+        std::unique_ptr<Proposal> proposal = ownCarve(std::move(best), std::move(group));
+        if (failed != failedCarves_.end()) {
+            proposal->fragments = failed->second;
         }
-        proposal.examineAllocation = true;
-        loose_.push_back(std::make_unique<Proposal>(std::move(proposal)));
+        loose_.push_back(std::move(proposal));
     }
+    // What carving did not deliver, from the reconstructions.
+    for (auto& [key, joining] : joining_) {
+        auto& [slot, carve] = joining;
+        SlotExtra& extra = extras_[slot];
+        if (extra.replacements.empty() && !extra.carve.has_value()) {
+            extra.carve = std::move(carve);
+            ++report_.carvesMerged;
+        }
+    }
+    joining_.clear();
+    for (auto& [key, carve] : besides_) {
+        if (!consumed_.contains(key)) {
+            loose_.push_back(ownCarve(std::move(carve), {}));
+        }
+    }
+    besides_.clear();
+}
+
+bool Run::wholeFile(const FileCandidate& carve) const {
+    const carving::IFileFormat* format = formats_.find(carve.formatId);
+    if (format == nullptr || !carving::isTrusted(carve, format->descriptor())) {
+        return false;
+    }
+    return !format->descriptor().selfSynchronizing || format->descriptor().foundEndMeansContiguous;
+}
+
+std::unique_ptr<Proposal> Run::ownCarve(FileCandidate carve, std::vector<FileCandidate> others) {
+    auto proposal = std::make_unique<Proposal>();
+    proposal->data = fromCarve(carve);
+    proposal->formatId = carve.formatId;
+    if (carve.validation.status != ValidationStatus::NotValidated) {
+        proposal->knownStructure = carve.validation;
+    }
+    proposal->carve = std::move(carve);
+    proposal->otherCarves = std::move(others);
+    proposal->examineAllocation = true;
+    return proposal;
 }
 
 std::optional<std::size_t> Run::volumeAt(std::uint64_t sourceOffset) const {
@@ -1036,7 +1172,10 @@ Status Run::deliver(EvaluatedCandidate&& candidate, const EvaluatedCandidateSink
     if (candidate.fragments.has_value() && candidate.fragments->alternative > 0) {
         warnings.push_back(EvaluationWarning::AlternativeLayout);
     }
-    if (candidate.fragments.has_value() && candidate.fragments->status == ReconstructionStatus::Unrecoverable) {
+    // What is delivered is never a failed reconstruction's: the bytes, when
+    // they validate, decide (L258); its evidence stays.
+    if (candidate.fragments.has_value() && candidate.fragments->status == ReconstructionStatus::Unrecoverable &&
+        candidate.validationStatus() != ValidationStatus::Valid) {
         warnings.push_back(EvaluationWarning::ReconstructionFailed);
     }
     if (candidate.allocation.has_value() && candidate.allocation->insideActiveFile) {

@@ -141,6 +141,23 @@ TEST(ConditionTest, UnrecoverableWhenNothingIsLocatedOrValidates) {
     EXPECT_EQ(assessment.condition, RecoveryCondition::Unrecoverable);
     EXPECT_EQ(assessment.reasons,
               reasons({ConditionReason::ReconstructionFailed, ConditionReason::ValidationFailed}));
+
+    // After P20 (L258): what is delivered instead validates (the metadata's
+    // layout, a carve's, an MP4 candidate's): the bytes decide, also for a
+    // session whose candidate still has the warning.
+    EvaluatedCandidate kept = complete();
+    kept.fragments = evaluation::FragmentEvidence{};
+    kept.fragments->status = ReconstructionStatus::Unrecoverable;
+    assessment = assessCondition(kept);
+    EXPECT_EQ(assessment.condition, RecoveryCondition::Complete);
+    EXPECT_TRUE(assessment.reasons.empty());
+    kept.warnings.push_back(EvaluationWarning::ReconstructionFailed);
+    EXPECT_EQ(assessCondition(kept).condition, RecoveryCondition::Complete);
+    kept.data.sourceRegions.push_back(SourceRegion{1000, 24, RegionKind::Missing, 0, false});
+    kept.data.expectedSize = 1024;
+    assessment = assessCondition(kept);
+    EXPECT_EQ(assessment.condition, RecoveryCondition::Partial);
+    EXPECT_EQ(assessment.reasons, reasons({ConditionReason::DataMissing}));
 }
 
 TEST(ConditionTest, AmbiguousComesFirst) {

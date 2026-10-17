@@ -81,8 +81,13 @@ ConditionAssessment assessCondition(const evaluation::EvaluatedCandidate& candid
     set(ConditionReason::AlternativeLayout, candidate.hasWarning(EvaluationWarning::AlternativeLayout) ||
                                                 reconstruction == ReconstructionStatus::Ambiguous);
     set(ConditionReason::NothingLocated, data.expectedSize > 0 && missing >= data.expectedSize);
-    set(ConditionReason::ReconstructionFailed, candidate.hasWarning(EvaluationWarning::ReconstructionFailed) ||
-                                                   reconstruction == ReconstructionStatus::Unrecoverable);
+    // After P20 (L258): a reconstruction that found nothing leaves the
+    // candidate its own layout (or a carve's, or an MP4 candidate's); when
+    // those bytes validate, they decide, and the failure is evidence only.
+    set(ConditionReason::ReconstructionFailed,
+        (candidate.hasWarning(EvaluationWarning::ReconstructionFailed) ||
+         reconstruction == ReconstructionStatus::Unrecoverable) &&
+            status != carving::ValidationStatus::Valid);
     set(ConditionReason::DataMissing, missing > 0);
     set(ConditionReason::ContentTruncated, anyLevel(candidate.validation, validation::LevelStatus::Truncated));
     set(ConditionReason::ReconstructionPartial, reconstruction == ReconstructionStatus::Partial);

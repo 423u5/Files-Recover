@@ -185,7 +185,7 @@ The condition is one word for a list. The first rule that applies decides it:
 | Condition | When | Reasons |
 | --- | --- | --- |
 | AMBIGUOUS | one of several layouts the evidence supports equally | `AlternativeLayout` |
-| UNRECOVERABLE | the file has bytes and none is located, or reconstruction found no layout that validates | `NothingLocated`, `ReconstructionFailed` |
+| UNRECOVERABLE | the file has bytes and none is located, or reconstruction found no layout that validates and the bytes delivered instead do not validate either (L258) | `NothingLocated`, `ReconstructionFailed` |
 | PARTIAL | bytes the metadata does not locate, content cut short (a level is Truncated), a partial reconstruction | `DataMissing`, `ContentTruncated`, `ReconstructionPartial` |
 | CORRUPTED | a level failed, bytes unreadable (zeros), bytes in clusters allocated to other data now, a corrupted reconstruction | `ValidationFailed`, `DataUnreadable`, `ClustersReallocated`, `ReconstructionCorrupted` |
 | UNVERIFIED | nothing validated the content (no format, validation off) | `NotValidated` |

@@ -61,7 +61,8 @@ enum class ConditionReason : std::uint8_t {
     // Unrecoverable: the file has bytes, none of them located.
     NothingLocated,
     // Unrecoverable: fragment reconstruction found no layout that validates
-    // (UNRECOVERABLE, EvaluationWarning::ReconstructionFailed).
+    // (UNRECOVERABLE, EvaluationWarning::ReconstructionFailed), and the bytes
+    // delivered instead do not validate either (L258).
     ReconstructionFailed,
     // Partial: bytes the metadata does not locate (RegionKind::Missing).
     DataMissing,

@@ -56,7 +56,11 @@ the source ──► carving pass ──► seeds: carves that break in free spa
    (strongly) and the rest of their guess (softly).
 2. **Filesystem seeds** (`useFilesystem`): every candidate whose layout P7 could only guess (`LayoutEvidence::Guessed`).
    Its format is the one whose signature and header check accept the first bytes (the one its extension names
-   first, when several do); if none does, the extension's format, and the file cannot be recovered. A file that no
+   first, when several do); if none does, the extension's format, and the file cannot be recovered. When nothing of
+   the file validates as that format and its first bytes fit others too, it is reconstructed as the first of them
+   that gives more (after P20, L257: a video whose name says no format may have a brand MPEG-4 audio takes too, and as M4A
+   nothing of it validates, so it is reconstructed as MP4); the candidate's `formatId` is the format it was
+   reconstructed as, and its reason says what the first format made of it. A file that no
    format knows is skipped (`filesystemSkipped`), and so is a file of a format that does not trust its files
    (`FormatDescriptor::trustValidFiles = false`: OLE2 compound files, after P20): any layout that keeps its structure
    in place validates, whatever data it places, so no layout is better evidence than the filesystem's guess.

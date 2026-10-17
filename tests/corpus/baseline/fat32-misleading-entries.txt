@@ -1,0 +1,16 @@
+# corpus scenario fat32-misleading-entries: FAT32: deleted videos hidden as .db (one piece, two pieces), a photo whose entry says one byte more, a stale entry over another photo, a photo damaged in place
+# image 12624896 bytes, sha256 36b99aad96ae4a0a, 6 originals
+# deep scan: 7 candidates
+#1 hybrid complete video/mp4 "/Vault/20220908085254.db" size=125729/125729 deleted valid=valid:passed/passed sha=2db74f3d52677503 recovery=recovered "Vault/20220908085254.db" => /Vault/20220908085254.db
+#2 reconstruction complete video/mp4 "/Vault/20220910085209.db" size=122361/122361 deleted fragmented valid=valid:passed/passed sha=e4305791d0ebe404 recovery=recovered "Vault/20220910085209.db" => /Vault/20220910085209.db
+#3 hybrid complete audio/m4a "/Vault/20220911090000.db" size=65622/65622 deleted valid=valid:passed/passed sha=9fe8b6945700b846 recovery=recovered "Vault/20220911090000.db" => /Vault/20220911090000.db
+#4 hybrid complete image/jpeg "/Vault/Plus one.jpg" size=18289/18289 deleted valid=valid:passed/passed sha=f8a3b3b7d83ca7a6 recovery=recovered "Vault/Plus one.jpg" => /Vault/Plus one.jpg
+#5 hybrid complete image/jpeg "/Vault/Stale.jpg" size=8059/8059 deleted valid=valid:passed/passed sha=2a6abc068c3ffaa0 recovery=recovered "Vault/Stale.jpg" => (unnamed original 5)
+#6 reconstruction partial(data-missing,reconstruction-partial,validation-failed) image/jpeg "recovered_000006.jpg" size=45056/49975 fragmented valid=invalid:failed/not-run sha=c8a5670575f3af64 recovery=recovered(incomplete) "recovered_000006.jpg"
+#7 carving corrupted(validation-failed) image/jpeg "recovered_000007.jpg" size=19115/19115 valid=invalid:failed/not-run sha=51e62cd1999de3dc recovery=recovered "recovered_000007.jpg" => (unnamed original 6)
+# quick scan: 5 candidates
+#1 hybrid complete video/mp4 "/Vault/20220908085254.db" size=125729/125729 deleted valid=valid:passed/passed sha=2db74f3d52677503 recovery=recovered "Vault/20220908085254.db" => /Vault/20220908085254.db
+#2 filesystem corrupted(validation-failed) audio/m4a "/Vault/20220910085209.db" size=122361/122361 deleted valid=invalid:failed/not-run sha=c5e9e27f28874a34 recovery=recovered "Vault/20220910085209.db"
+#3 hybrid complete audio/m4a "/Vault/20220911090000.db" size=65622/65622 deleted valid=valid:passed/passed sha=9fe8b6945700b846 recovery=recovered "Vault/20220911090000.db" => /Vault/20220911090000.db
+#4 filesystem corrupted(validation-failed) image/jpeg "/Vault/Plus one.jpg" size=18290/18290 deleted valid=invalid:failed/not-run sha=92a668c68e7934af recovery=recovered "Vault/Plus one.jpg"
+#5 filesystem corrupted(validation-failed) image/jpeg "/Vault/Stale.jpg" size=32236/32236 deleted valid=invalid:failed/not-run sha=dbc5d02415caf0af recovery=recovered "Vault/Stale.jpg"

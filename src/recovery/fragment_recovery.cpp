@@ -409,6 +409,10 @@ private:
     [[nodiscard]] std::optional<std::size_t> volumeAt(std::uint64_t sourceOffset) const;
     [[nodiscard]] const carving::IFileFormat* formatForExtension(std::string_view extension) const;
     [[nodiscard]] Result<const carving::IFileFormat*> formatByContent(const RecoveryCandidate& candidate) const;
+    // The formats whose signature and header check the file's first bytes
+    // pass: the one its name gives first, then in the registry's order.
+    [[nodiscard]] Result<std::vector<const carving::IFileFormat*>> formatsByContent(
+        const RecoveryCandidate& candidate) const;
     // A format of the registry that the pass carves.
     [[nodiscard]] bool carves(const carving::IFileFormat* format) const;
     // Where a carve of the hit would go: a free cluster's start of a volume,
@@ -427,6 +431,8 @@ private:
 
     void claimVolumes();
     [[nodiscard]] Result<FragmentCandidate> reconstruct(Seed& seed);
+    // The seed reconstructed as its format, as candidate `id`.
+    [[nodiscard]] Result<FragmentCandidate> reconstructAs(const Seed& seed, CandidateId id);
     [[nodiscard]] Result<ReconstructionHypothesis> deliver(Search& search, Hypothesis& hypothesis,
                                                            const FragmentCandidate& candidate, bool full);
     [[nodiscard]] Result<bool> sameContent(Search& search, Hypothesis& a, Hypothesis& b);
@@ -514,21 +520,29 @@ const carving::IFileFormat* RunState::formatForExtension(std::string_view extens
 }
 
 Result<const carving::IFileFormat*> RunState::formatByContent(const RecoveryCandidate& candidate) const {
+    Result<std::vector<const carving::IFileFormat*>> fitting = formatsByContent(candidate);
+    if (!fitting.ok()) {
+        return fitting.error();
+    }
+    return fitting->empty() ? nullptr : fitting->front();
+}
+
+Result<std::vector<const carving::IFileFormat*>> RunState::formatsByContent(const RecoveryCandidate& candidate) const {
     Result<std::unique_ptr<CandidateContentReader>> reader =
         CandidateContentReader::open(source_, candidate, reads(), options_.carving.readCacheSize);
     if (!reader.ok()) {
         return reader.error();
     }
+    std::vector<const carving::IFileFormat*> fitting;
     const auto length = static_cast<std::size_t>(std::min<std::uint64_t>((*reader)->size(), kMaxHeader));
     if (length == 0) {
-        return static_cast<const carving::IFileFormat*>(nullptr);
+        return fitting;
     }
     Result<std::span<const std::byte>> header = (*reader)->read(0, length);
     if (!header.ok()) {
         return header.error();
     }
     const carving::IFileFormat* byExtension = formatForExtension(candidate.extension);
-    const carving::IFileFormat* first = nullptr;
     for (const std::shared_ptr<const carving::IFileFormat>& format : formats_.formats()) {
         const carving::FormatDescriptor& descriptor = format->descriptor();
         const bool matches = std::any_of(descriptor.signatures.begin(), descriptor.signatures.end(),
@@ -544,13 +558,12 @@ Result<const carving::IFileFormat*> RunState::formatByContent(const RecoveryCand
             continue;
         }
         if (format.get() == byExtension) {
-            return format.get();
-        }
-        if (first == nullptr) {
-            first = format.get();
+            fitting.insert(fitting.begin(), format.get());
+        } else {
+            fitting.push_back(format.get());
         }
     }
-    return first;
+    return fitting;
 }
 
 void RunState::claimVolumes() {
@@ -1113,9 +1126,46 @@ Result<ReconstructionHypothesis> RunState::deliver(Search& search, Hypothesis& h
 }
 
 Result<FragmentCandidate> RunState::reconstruct(Seed& seed) {
+    const CandidateId id{nextId_++};
+    Result<FragmentCandidate> first = reconstructAs(seed, id);
+    if (!first.ok() || first->status != ReconstructionStatus::Unrecoverable || seed.metadata == nullptr ||
+        seed.unrecoverable.has_value()) {
+        return first;
+    }
+    // After P20 (L257): nothing of the file validates as the format its
+    // content or name gave first. Its content may fit another (a video whose
+    // brand MPEG-4 audio takes too, named .db): the first of them that
+    // reconstructs it. A failed search claims nothing, so trying again
+    // changes nothing else.
+    Result<std::vector<const carving::IFileFormat*>> fitting = formatsByContent(*seed.metadata);
+    if (!fitting.ok()) {
+        return fitting.error();
+    }
+    for (const carving::IFileFormat* format : *fitting) {
+        if (format == seed.format || !format->descriptor().trustValidFiles) {
+            continue;
+        }
+        Seed other = seed;
+        other.format = format;
+        Result<FragmentCandidate> again = reconstructAs(other, id);
+        if (!again.ok()) {
+            return again.error();
+        }
+        if (again->status != ReconstructionStatus::Unrecoverable) {
+            again->reason += "; as " + seed.format->descriptor().name + ": " + first->reason;
+            again->search.layoutsValidated += first->search.layoutsValidated;
+            again->search.sampleProbes += first->search.sampleProbes;
+            again->search.bytesRead += first->search.bytesRead;
+            return again;
+        }
+    }
+    return first;
+}
+
+Result<FragmentCandidate> RunState::reconstructAs(const Seed& seed, CandidateId id) {
     VolumeEvidence& volume = *volumes_[seed.volume];
     FragmentCandidate candidate;
-    candidate.id = CandidateId{nextId_++};
+    candidate.id = id;
     candidate.origin = seed.origin;
     candidate.formatId = seed.format->descriptor().id;
     if (seed.metadata != nullptr) {
@@ -1334,11 +1384,13 @@ Status RunState::replayReconstruction(const FragmentCandidate& candidate) {
     }
     const bool fromCarve = cursor_ >= filesystemSeeds_.size();
     const Seed& seed = seedAt(cursor_);
-    bool fits = candidate.origin == seed.origin && candidate.id.value() == nextId_ &&
-                candidate.formatId == seed.format->descriptor().id;
+    bool fits = candidate.origin == seed.origin && candidate.id.value() == nextId_;
     if (seed.metadata != nullptr) {
-        fits = fits && candidate.filesystemCandidate == seed.metadata->id;
+        // As its format, or as another its content fits (reconstruct(), L257).
+        fits = fits && candidate.filesystemCandidate == seed.metadata->id &&
+               (candidate.formatId == seed.format->descriptor().id || formats_.find(candidate.formatId) != nullptr);
     } else {
+        fits = fits && candidate.formatId == seed.format->descriptor().id;
         fits = fits && candidate.carve.has_value() && seed.carve.has_value() &&
                candidate.carve->sourceOffset == seed.carve->sourceOffset;
     }

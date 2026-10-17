@@ -4,6 +4,7 @@
 #include "formats/mp4_parser.hpp"
 #include "imaging/image_metadata.hpp"
 #include "partition/guid.hpp"
+#include "recovery/byte_order.hpp"
 #include "recovery/sha256.hpp"
 #include "recovery/text.hpp"
 #include "storage/destination_file.hpp"
@@ -2573,6 +2574,78 @@ Image fat32FormattedPhone() {
     return image;
 }
 
+// After P20 (L253, L256, L257, L258): deleted files whose entries mislead
+// fragment reconstruction, and a photo damaged in place. Videos an app hid
+// as .db, whose brand MPEG-4 audio takes too, in one piece and in two, and
+// audio hidden the same way; a photo whose entry says one byte more than it
+// holds; a stale entry whose clusters another photo took since; a photo whose
+// end is found but whose structure is damaged.
+Image fat32MisleadingEntries() {
+    FatVolume v(fatGeometry(8, 3072, "PHONE"), 0x1301);
+    Fat32ImageBuilder& b = v.builder;
+    std::vector<Original> files;
+    const std::uint32_t vault = v.folder(Fat32ImageBuilder::root(), "Vault");
+    const auto deleted = [&](std::string_view name, const Bytes& bytes, const std::vector<std::uint32_t>& clusters) {
+        const auto entry = b.addFileInClusters(vault, name, bytes, clusters);
+        b.deleteEntry(entry);
+        return entry;
+    };
+
+    const Bytes hidden = video(1301, 8, false, 2048);
+    (void)deleted("20220908085254.db", hidden, run<std::uint32_t>(100, v.clustersFor(hidden.size())));
+    files.push_back(named("/Vault/20220908085254.db", hidden, Expected::Complete,
+                          "a video hidden as .db, deleted; its brand fits M4A too (L257, L258)"));
+    const Bytes split = video(1302, 8, false, 2048);
+    {
+        const std::uint32_t n = v.clustersFor(split.size());
+        (void)deleted("20220910085209.db", split,
+                      join(run<std::uint32_t>(400, n / 2), run<std::uint32_t>(400 + n / 2 + 20, n - n / 2)));
+        files.push_back(with("/Vault/20220910085209.db", split, Outcome::Named,
+                             "a video hidden as .db, deleted in two pieces 20 clusters apart (L257)", true));
+    }
+    M4aOptions audio;
+    audio.majorBrand = "isom";
+    audio.compatibleBrands = {"isom", "mp42"};
+    audio.audio.frames = 400;
+    audio.audio.seed = 1303;
+    const Bytes song = makeM4a(audio);
+    (void)deleted("20220911090000.db", song, run<std::uint32_t>(800, v.clustersFor(song.size())));
+    files.push_back(named("/Vault/20220911090000.db", song, Expected::Complete,
+                          "audio hidden as .db with the same brand, deleted: it stays M4A"));
+
+    const Bytes plusOne = jpeg(1304, 320, 240);
+    const auto longer = deleted("Plus one.jpg", plusOne, run<std::uint32_t>(1000, v.clustersFor(plusOne.size())));
+    storeLe32(b.shortEntry(longer), 28, static_cast<std::uint32_t>(plusOne.size() + 1));
+    files.push_back(with("/Vault/Plus one.jpg", plusOne, Outcome::Named,
+                         "deleted; its entry says one byte more than the photo (L256)", true));
+
+    const Bytes other = jpeg(1305, 200, 150);
+    const Bytes staleData = oldData(4 * other.size(), 1306);
+    (void)deleted("Stale.jpg", staleData, run<std::uint32_t>(1200, v.clustersFor(staleData.size())));
+    v.place(1200, other);
+    files.push_back(with("", other, Outcome::Carved,
+                         "written where a deleted entry four times its size (Stale.jpg) started: the entry names it "
+                         "(L256)"));
+
+    JpegOptions options;
+    options.width = 320;
+    options.height = 240;
+    options.seed = 1307;
+    options.restartInterval = 4;
+    const Bytes damaged = withoutRestartIntervals(makeJpeg(options), 20, 8);
+    v.place(1600, damaged);
+    Original inPlace = with("", damaged, Outcome::Carved,
+                            "no entry; eight restart intervals are zeros: its end is found, its structure is "
+                            "invalid; delivered whole beside its reconstruction (L253)");
+    inPlace.condition = Expected::Any;
+    files.push_back(std::move(inPlace));
+
+    Image image;
+    image.bytes = b.build();
+    image.originals = std::move(files);
+    return image;
+}
+
 struct Entry {
     Scenario scenario;
     std::function<Image()> make;
@@ -2659,6 +2732,9 @@ const std::vector<Entry>& entries() {
         add("fat32-formatted-phone", "FAT32 of 16 KiB clusters a phone used, then formatted: its folders found in "
             "the free space, with a voice note, a chat backup and a text file carving cannot find",
             {"quick-formatted drives", "deleted files"}, fat32FormattedPhone);
+        add("fat32-misleading-entries", "FAT32: deleted videos hidden as .db (one piece, two pieces), a photo whose "
+            "entry says one byte more, a stale entry over another photo, a photo damaged in place",
+            {"deleted files", "fragmented files", "corrupt media"}, fat32MisleadingEntries);
         return list;
     }();
     return all;

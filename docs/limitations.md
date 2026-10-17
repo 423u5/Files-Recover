@@ -1260,33 +1260,71 @@ run, on top of the volumes' candidates (L40); cluster states are cached per volu
 layouts until it is delivered.
 
 ### L253. A carve that fragment reconstruction takes over is not delivered itself
-**Status:** Open (found on the user's stick, 2026-10-17)  
+**Status:** Resolved (2026-10-17) for carves whose end was found: the carve is delivered beside layouts that hold fewer of its bytes. Tests `CandidateEvaluationTest.ACarveSeedsCarveIsDeliveredBesideLayoutsThatHoldLess`, `CandidateEvaluationTest.ACarveSeedThatBreaksGivesNoCarveBesideItsLayouts`, corpus scenario `fat32-misleading-entries`  
 A carve that does not validate is a seed of fragment reconstruction. When the search ends PARTIAL or AMBIGUOUS, only
-its layouts are delivered (`Run::takeFragments`), and they may hold far less than the carve: on the user's stick a
-baseline JPEG carve of 480,123 bytes (EOI found, structure invalid) comes back as 8 AMBIGUOUS layouts of 49,152
-bytes, the rest missing, and before L252 was fixed 1,009 complete photos came back that way. A damaged carve whole
-may show more of a photo than its first clusters. MP4 carves were delivered next to their layouts there (four videos
-of 218 MB to 1.25 GB, whose layouts stop at 256 MiB, `maxUnknownLength`), and the layouts of five PDFs held nearly all
-of their carves. Possible fix: deliver the carve too, with its own condition, when its layouts place fewer of its
+its layouts are delivered (`Run::takeFragments`), and they may hold far less than the carve: a baseline JPEG carve
+of 480,123 bytes (EOI found, structure invalid) came back as 8 AMBIGUOUS layouts of 49,152 bytes, the rest missing.
+A damaged carve whole may show more of a photo than its first clusters. MP4 carves are delivered next to their
+layouts (by MP4 recovery). Possible fix: deliver the carve too, with its own condition, when its layouts place fewer of its
 bytes than it holds.
 
+What was done (2026-10-17): a carve seed whose reconstruction is not COMPLETE, whose carve found its end
+(`EndStatus::Found`: a file damaged in place, or one whose end is another file's) and whose delivered layouts hold
+fewer of the carve's bytes than it has (at the same file offset, from the same source offset: a layout that ran on
+into other data counts only what it shares) gives the carve too, whole, as a file of its own with its own verdict
+(`Run::takeFragments`, `Run::takeCarves`). Counting the bytes shared matters: in the corpus a 19,115-byte photo damaged
+in place had a layout of 45,056 bytes that held only its first clusters, the rest old data. A carve that breaks gives
+what is consistent to the layouts already and is not delivered beside them (it would be a near copy); an MP4 carve
+neither, the MP4 candidate holds it. When carving did not deliver the carve (carving off, or stopped by its limit),
+the reconstruction's copy is used. A deleted file damaged in place is not covered (L260).
+
 ### L256. A deleted file's reconstruction takes the place of a carve that validates
-**Status:** Open (found on the user's stick, 2026-10-17)  
+**Status:** Resolved (2026-10-17): a carve that validates where a deleted file starts is delivered with the entry's name when no layout validates. Tests `CandidateEvaluationTest.AValidCarveWhereADeletedFileStartsTakesThePlaceOfLayoutsThatHoldLess`, `CandidateEvaluationTest.AStreamsValidCarveDoesNotTakeThePlaceOfLayouts`, corpus scenario `fat32-misleading-entries`  
 A deleted file whose guessed layout does not validate is a seed of fragment reconstruction, and a carve that starts
 where it starts joins the seed instead of being one. When the entry's size is not the file's (one byte more than the
 JPEG it names, or another file's clusters took the place of the entry's since), the reconstruction looks for a file
 of the entry's size, ends `PARTIAL` or `AMBIGUOUS`, and its layouts take the place of the carve, which validated on
-its own: on the stick, 75,617-byte photos the carve had whole came back as 64 KiB of them with the rest missing.
-Seen with the entries of folders found in the free space (L249), which are now kept from fragment reconstruction;
-it holds for any deleted FAT32 or exFAT file whose entry's size misleads. Possible fix: a carve that validates where
+its own: photos the carve had whole came back as their first 64 KiB with the rest missing. Seen with the entries of
+folders found in the free space (L249), which are now kept from fragment reconstruction; it holds for any deleted
+FAT32 or exFAT file whose entry's size misleads. Possible fix: a carve that validates where
 a seed starts is delivered as it is, with the entry's name, and the seed is not reconstructed (L253).
 
+What was done (2026-10-17): the seed is still reconstructed (the search settles the claims later seeds rely on, and a
+COMPLETE reconstruction stands), but when none of its delivered layouts validates and the carve where it starts is a
+whole file (end found, `Valid`, a format that trusts its valid files and is not a stream: MP3 and ADTS carves stop
+at the gap of a file in pieces, ZIP counts as whole), the carve joins the entry's candidate by P12's rule instead of
+the layouts (`Run::takeFragments`): the entry's own layout when it validates, the carve's otherwise (HYBRID, the
+entry's name). When a layout places more bytes than the carve holds, the layouts are delivered and the carve with the
+entry after them. A deleted motion photo whose entry counts the video after its EOI comes back as its JPEG, whole,
+instead of its first clusters (the video is lost as before, L60). The carve where a seed whose reconstruction found
+nothing starts now joins the entry too: it was dropped before. In the corpus (`fat32-misleading-entries`, deep scan)
+a photo whose entry says one byte more comes back whole instead of 16 KiB of it, and a stale entry four times the
+size of the photo that took its clusters names that photo, whole, instead of its first 4 KiB.
+
 ### L257. A seed whose name says no format is taken for the first format its content fits
-**Status:** Open (found on the user's stick, 2026-10-17)  
-Fragment reconstruction gives a filesystem seed whose name tells no format (`.db`) the first format whose signature
-and header check its first bytes pass, before the others. An MP4 video kept as `.db` (an app that hides videos)
-was tried as M4A, which refuses video: "nothing of the file validates", `UNRECOVERABLE`, although the evaluation found
+**Status:** Resolved (2026-10-17): a seed nothing of which validates as its first format is tried as the others its content fits. Tests `FragmentRecoveryTest.AFileWhoseNameSaysNoFormatIsTriedAsEachFormatItsContentFits`, `FragmentRecoveryTest.TheStepsRestoreFromTheirEventsAndReconstructions`, corpus scenario `fat32-misleading-entries`  
+Fragment reconstruction gives a filesystem seed whose name tells no format the first format whose signature and
+header check its first bytes pass, before the others. An MP4 video under a name of no known format (as apps that
+hide videos keep them) was tried as M4A, which refuses video: "nothing of the file validates", `UNRECOVERABLE`, although the evaluation found
 it a valid MP4. Possible fix: choose as the evaluation does (`detectFormat`), or try every format that fits.
+
+What was done (2026-10-17): when a filesystem seed's reconstruction ends UNRECOVERABLE for a reason the search
+found (not a first cluster in use, not a start of no format), it is reconstructed again as each other format whose
+signature and header check its first bytes pass, in the registry's order, and the first that gives more is kept
+(`RunState::reconstruct`), with the same candidate id; its reason says what the first format made of it. A search
+that found nothing claimed nothing, so trying again changes no other seed. A session restores such a reconstruction
+(`replayReconstruction` takes its format). A file whose name was found is recovered under that name, its
+extension included: the format its content has is reported, the file is not renamed by it. Audio of such a name
+stays M4A: it reconstructs as M4A first. In the corpus such a video in two pieces comes back COMPLETE as MP4
+instead of UNRECOVERABLE. What a quick scan calls a damaged one is L259.
+
+### L260. A deleted file damaged in place is delivered only as its layouts
+**Status:** Open (found 2026-10-17, with L253)  
+A carve seed's carve is delivered beside layouts that hold fewer of its bytes (L253), but a deleted file's is not: a
+photo whose entry is intact and whose data is damaged in place (its end found, its structure invalid) is reconstructed
+from its entry, and only the layouts are delivered, which may hold its first clusters only. Neither the entry's own
+layout nor the carve at its start is delivered beside them. Possible fix: as for carve seeds, deliver the entry's
+candidate with the carve (P12's rule) too when the layouts share fewer of the carve's bytes than it has.
 
 ## Validation and candidate evaluation (P14)
 
@@ -1427,13 +1465,26 @@ the carve validates (or the metadata locates no data). A carve that is longer th
 prefix) does not replace it.
 
 ### L258. A failed reconstruction makes a candidate UNRECOVERABLE whose delivered layout validates
-**Status:** Open (found on the user's stick, 2026-10-17)  
+**Status:** Resolved (2026-10-17): the bytes delivered decide when they validate. Tests `ConditionTest.UnrecoverableWhenNothingIsLocatedOrValidates`, `CandidateEvaluationTest.AnUnrecoverableReconstructionKeepsTheMetadataLayout`, corpus scenario `fat32-misleading-entries`  
 When a deleted file's reconstruction finds nothing, the candidate keeps its own layout with the reconstruction's
 evidence, and a carve that validates where it starts gives that layout (HYBRID). Its condition is still
-`UNRECOVERABLE` (`RECONSTRUCTION_FAILED` comes first in the rules), although the bytes delivered validate: on the
-stick, complete videos of 64 to 89 MB were called so, under the names of entries that named their starts (L257
-caused the failure). Possible fix: judge the condition by the layout delivered, and keep the failed reconstruction as
+`UNRECOVERABLE` (`RECONSTRUCTION_FAILED` comes first in the rules), although the bytes delivered validate: complete
+videos were called so (L257 caused the failure). Possible fix: judge the condition by the layout delivered, and keep the failed reconstruction as
 evidence only.
+
+What was done (2026-10-17): `RECONSTRUCTION_FAILED` (the evaluation's warning and the condition's reason) applies only
+when the bytes delivered instead do not validate either; the reconstruction's evidence line stays. The condition
+rule reads the validation too, so a session's candidates are judged anew when a report is made. In the corpus a
+video whose name says no format and whose MP4 candidate validated is COMPLETE instead of UNRECOVERABLE.
+
+### L259. A file whose content fits several formats, none of which validates it, is judged as the first
+**Status:** Open (found 2026-10-17, with L257)  
+The evaluation gives a file the format whose header check its first bytes pass; when several do, the one its name
+gives, else the first whose structure validates it, else the first of them (`Run::detectFormat`). A video whose
+name says no format and whose brand MPEG-4 audio takes too is called M4A when it is damaged or in pieces, as a
+quick scan finds a deleted one: `audio/m4a`, CORRUPTED (corpus scenario `fat32-misleading-entries`). Its bytes are
+the same and its condition would be CORRUPTED as MP4 too; a deep scan reconstructs it as MP4 (L257). Possible fix:
+the format whose structure got furthest, or for MPEG-4 the kind its brand and tracks give (`classify`).
 
 ## Scanning (P15)
 

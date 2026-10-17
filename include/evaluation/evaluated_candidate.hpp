@@ -115,7 +115,8 @@ enum class EvaluationWarning : std::uint8_t {
     // reconstruction AMBIGUOUS): none is chosen, all are delivered.
     AlternativeLayout,
     // Fragment reconstruction found no layout that validates; the
-    // metadata's (or the carve's) layout is kept.
+    // metadata's (or the carve's) layout is kept, and it does not validate
+    // either (when it does, the reconstruction is evidence only: L258).
     ReconstructionFailed,
     // A carved file that lies inside an active file's data (container).
     InsideActiveFile,

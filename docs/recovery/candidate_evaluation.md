@@ -63,7 +63,20 @@ starts at its first stored byte, or where its metadata puts its first cluster):
 
 - A fragment reconstruction replaces its seed's layout: the deleted file's guessed layout, or the broken carve.
   AMBIGUOUS gives one candidate per tied layout, each with `ALTERNATIVE_LAYOUT` and its place among them;
-  UNRECOVERABLE keeps the seed's layout, with the reconstruction's evidence and `RECONSTRUCTION_FAILED`.
+  UNRECOVERABLE keeps the seed's layout, with the reconstruction's evidence, and the carve where the seed starts
+  joins it as below (or is a file of its own); `RECONSTRUCTION_FAILED` only when what is delivered does not
+  validate either (after P20, L258: when it does, those bytes decide its condition, and the failure is evidence).
+- After P20 (L256): a deleted file's reconstruction none of whose layouts validates gives way to a carve that
+  validates where the file starts (its end found, a format whose valid files are whole: not MP3 or ADTS frames,
+  which stop at a gap): the entry's size misled the search (a byte more than the photo, another file's clusters
+  since). The carve joins the filesystem candidate by P12's rule below, instead of the layouts; when a layout
+  places more bytes than the carve holds, the layouts are delivered and the carve with the entry after them.
+- After P20 (L253): a carve seed whose reconstruction is not COMPLETE and whose layouts place fewer bytes than the
+  carve holds gives the carve too, whole, as a file of its own with its own verdict (a photo damaged in place may
+  show more than its first clusters). An MP4 carve is not: the MP4 candidate holds it already.
+- The carves a reconstruction holds are taken from it when carving did not deliver them (carving off, or stopped
+  by its limit), so that a carve that joins a filesystem candidate or is delivered beside layouts never depends on
+  the carving stage.
 - An MP4 candidate replaces its filesystem candidate and its carve (unless a reconstruction replaced the filesystem
   candidate already).
 - Carves are grouped by their first byte; the best of a group (Valid, Truncated, not validated, Invalid; then the

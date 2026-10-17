@@ -761,8 +761,12 @@ struct SeededCard {
     Volume volume;
     const RecoveryCandidate* seed = nullptr;
 
-    SeededCard() {
+    // `damaged`: other bytes in the photo's third cluster since.
+    explicit SeededCard(bool damaged = false) {
         card.addDeleted("Trip photo.jpg", jpeg, run(100, clustersFor(jpeg.size())));
+        if (damaged) {
+            card.plant(102, test::makePattern(kClusterSize, 14));
+        }
         source = std::make_unique<test::MemoryStorageSource>(card.image());
         EXPECT_TRUE(source->open().ok());
         volume = openVolume(*source);
@@ -843,18 +847,221 @@ TEST(CandidateEvaluationTest, AnAmbiguousReconstructionGivesEveryTiedLayout) {
 }
 
 TEST(CandidateEvaluationTest, AnUnrecoverableReconstructionKeepsTheMetadataLayout) {
+    // After P20 (L258): the failure is a warning only when the bytes kept do
+    // not validate either; when they do, they decide, and it is evidence.
+    for (const bool damaged : {true, false}) {
+        SCOPED_TRACE(damaged ? "damaged" : "intact");
+        SeededCard seeded(damaged);
+        ASSERT_NE(seeded.seed, nullptr);
+        Inputs inputs{&seeded.volume};
+        inputs.fragments.push_back(seeded.reconstruction(ReconstructionStatus::Unrecoverable));
+        const Evaluated evaluated = evaluateAll(*seeded.source, std::move(inputs));
+        const EvaluatedCandidate* trip = evaluated.one("Trip photo.jpg");
+        ASSERT_NE(trip, nullptr);
+        SCOPED_TRACE(describeEvaluated(*trip));
+        EXPECT_EQ(trip->validationStatus() == ValidationStatus::Valid, !damaged);
+        EXPECT_EQ(trip->hasWarning(EvaluationWarning::ReconstructionFailed), damaged);
+        ASSERT_TRUE(trip->fragments.has_value());
+        EXPECT_EQ(trip->fragments->status, ReconstructionStatus::Unrecoverable);
+        EXPECT_NE(describeEvaluated(*trip).find("Fragment reconstruction (filesystem seed): UNRECOVERABLE"),
+                  std::string::npos);
+        EXPECT_EQ(trip->data.sourceRegions, seeded.seed->sourceRegions);
+    }
+}
+
+// Fragment reconstruction of every seed of the card, then the evaluation of
+// it all, with the carving stage's carves or without them (carving off).
+Evaluated reconstructAndEvaluate(storage::IStorageSource& source, Volume& volume, bool withCarves,
+                                 std::vector<FragmentCandidate>* fragments = nullptr) {
+    Inputs inputs{&volume};
+    FragmentRecovery recovery(source, allFormats());
+    EXPECT_TRUE(recovery.addVolume(*volume.recovery, volume.scan).ok());
+    Result<FragmentRecoveryReport> report = recovery.run([&](FragmentCandidate&& candidate) -> Status {
+        if (fragments != nullptr) {
+            fragments->push_back(candidate);
+        }
+        inputs.fragments.push_back(std::move(candidate));
+        return success();
+    });
+    EXPECT_TRUE(report.ok());
+    if (withCarves) {
+        inputs.carves = carveAll(source);
+    }
+    return evaluateAll(source, std::move(inputs));
+}
+
+const FragmentCandidate* fragmentOf(const std::vector<FragmentCandidate>& fragments, std::uint64_t start) {
+    for (const FragmentCandidate& candidate : fragments) {
+        if (candidate.carve.has_value() && candidate.carve->sourceOffset == start) {
+            return &candidate;
+        }
+    }
+    return nullptr;
+}
+
+// After P20 (L256): a deleted file's entry whose size misleads the search (a
+// byte more than the photo; another photo's clusters since) gives layouts
+// that do not validate, while the carve where it starts does: the carve is
+// delivered with the entry's name instead of them, whether carving delivers
+// it or only the reconstruction has it.
+TEST(CandidateEvaluationTest, AValidCarveWhereADeletedFileStartsTakesThePlaceOfLayoutsThatHoldLess) {
+    Card card;
+    const Bytes plusOne = photo(40, 256, 192);
+    const auto entry = card.addDeleted("Plus one.jpg", plusOne, run(300, clustersFor(plusOne.size())));
+    storeLe32(card.builder().shortEntry(entry), 28, static_cast<std::uint32_t>(plusOne.size() + 1));
+    const Bytes staleData = test::makePattern(4 * plusOne.size(), 41);
+    (void)card.addDeleted("Stale.jpg", staleData, run(600, clustersFor(staleData.size())));
+    const Bytes other = photo(42, 128, 96);
+    card.plant(600, other);
+    test::MemoryStorageSource source(card.image());
+    RECOVERY_ASSERT_OK(source.open());
+    Volume volume = openVolume(source);
+    for (const bool withCarves : {true, false}) {
+        SCOPED_TRACE(withCarves ? "with carving" : "without carving");
+        std::vector<FragmentCandidate> fragments;
+        const Evaluated evaluated = reconstructAndEvaluate(source, volume, withCarves, &fragments);
+        for (const auto& [name, start, bytes] :
+             {std::tuple{"Plus one.jpg", card.offsetOf(300), &plusOne}, std::tuple{"Stale.jpg", card.offsetOf(600), &other}}) {
+            SCOPED_TRACE(name);
+            // What the search made of the entry's size: no layout that validates.
+            const FragmentCandidate* fragment = fragmentOf(fragments, start);
+            ASSERT_NE(fragment, nullptr);
+            EXPECT_NE(fragment->status, ReconstructionStatus::Complete) << fragment->reason;
+            const EvaluatedCandidate* file = evaluated.one(name);
+            ASSERT_NE(file, nullptr);
+            SCOPED_TRACE(describeEvaluated(*file));
+            EXPECT_EQ(file->recoveryMethod(), RecoveryMethod::Hybrid);
+            EXPECT_EQ(file->validationStatus(), ValidationStatus::Valid);
+            EXPECT_EQ(file->identity.sha256, sha256(*bytes));
+            EXPECT_FALSE(file->fragments.has_value());
+            // The carve is the entry's, not a file of its own too.
+            EXPECT_EQ(evaluated.startingAt(start), file);
+        }
+    }
+}
+
+// A stream's carve that validates (MP3, ADTS: any run of frames does) is no
+// whole file: the frames stop where a piece of the file ends. Beside a
+// deleted file's partial reconstruction, the layouts stand (L256).
+TEST(CandidateEvaluationTest, AStreamsValidCarveDoesNotTakeThePlaceOfLayouts) {
     SeededCard seeded;
     ASSERT_NE(seeded.seed, nullptr);
+    FragmentCandidate partial = seeded.reconstruction(ReconstructionStatus::Partial);
+    // The photo's first four clusters placed, the rest Missing.
+    ReconstructionHypothesis placed = seeded.hypothesis(run(100, clustersFor(seeded.jpeg.size())));
+    const std::uint64_t four = 4 * kClusterSize;
+    placed.data.sourceRegions = {
+        SourceRegion{0, four, RegionKind::Stored, seeded.card.offsetOf(100), false},
+        SourceRegion{four, placed.data.expectedSize - four, RegionKind::Missing, 0, false}};
+    placed.data.warnings = {CandidateWarning::DataMissing};
+    placed.validation = carving::ValidationResult{ValidationStatus::Truncated, four, "synthetic"};
+    placed.evidence.placedBytes = four;
+    placed.evidence.missingBytes = placed.data.expectedSize - four;
+    partial.hypotheses.push_back(std::move(placed));
+    carving::FileCandidate frames;
+    frames.id = carving::FileCandidateId{5};
+    frames.formatId = "mp3";
+    frames.extension = "mp3";
+    frames.sourceOffset = seeded.card.offsetOf(100);
+    frames.length = 6 * kClusterSize;
+    frames.extents = {carving::CarvedExtent{0, frames.sourceOffset, frames.length}};
+    frames.end.status = carving::EndStatus::Found;
+    frames.end.method = carving::EndDetectionMethod::StructureWalk;
+    frames.end.available = frames.length;
+    frames.validation.status = ValidationStatus::Valid;
+    frames.validation.validBytes = frames.length;
+    partial.carve = frames;
     Inputs inputs{&seeded.volume};
-    inputs.fragments.push_back(seeded.reconstruction(ReconstructionStatus::Unrecoverable));
+    inputs.fragments.push_back(std::move(partial));
+    inputs.carves.push_back(frames);
     const Evaluated evaluated = evaluateAll(*seeded.source, std::move(inputs));
     const EvaluatedCandidate* trip = evaluated.one("Trip photo.jpg");
     ASSERT_NE(trip, nullptr);
     SCOPED_TRACE(describeEvaluated(*trip));
-    EXPECT_TRUE(trip->hasWarning(EvaluationWarning::ReconstructionFailed));
     ASSERT_TRUE(trip->fragments.has_value());
-    EXPECT_EQ(trip->fragments->status, ReconstructionStatus::Unrecoverable);
-    EXPECT_EQ(trip->data.sourceRegions, seeded.seed->sourceRegions);
+    EXPECT_EQ(trip->fragments->status, ReconstructionStatus::Partial);
+    EXPECT_EQ(trip->data.bytes(RegionKind::Stored), 4 * kClusterSize);
+}
+
+// After P20 (L253): a carve whose end is found but whose structure is
+// invalid is a seed; its layouts deliver only the part the evidence
+// confirms, and the carve, which holds the rest of the photo, is delivered
+// beside them with its own verdict, whether carving delivers it or only the
+// reconstruction has it.
+TEST(CandidateEvaluationTest, ACarveSeedsCarveIsDeliveredBesideLayoutsThatHoldLess) {
+    Card card;
+    test::JpegOptions options;
+    options.width = 256;
+    options.height = 192;
+    options.seed = 43;
+    options.restartInterval = 4;
+    const Bytes damaged = test::withoutRestartIntervals(test::makeJpeg(options), 12, 8);
+    card.plant(900, damaged);
+    test::MemoryStorageSource source(card.image());
+    RECOVERY_ASSERT_OK(source.open());
+    Volume volume = openVolume(source);
+    for (const bool withCarves : {true, false}) {
+        SCOPED_TRACE(withCarves ? "with carving" : "without carving");
+        std::vector<FragmentCandidate> fragments;
+        const Evaluated evaluated = reconstructAndEvaluate(source, volume, withCarves, &fragments);
+        const FragmentCandidate* fragment = fragmentOf(fragments, card.offsetOf(900));
+        ASSERT_NE(fragment, nullptr);
+        ASSERT_NE(fragment->status, ReconstructionStatus::Complete) << fragment->reason;
+        ASSERT_NE(fragment->status, ReconstructionStatus::Unrecoverable) << fragment->reason;
+        ASSERT_TRUE(fragment->carve.has_value());
+        EXPECT_EQ(fragment->carve->end.status, carving::EndStatus::Found);
+        std::vector<const EvaluatedCandidate*> layouts;
+        const EvaluatedCandidate* whole = nullptr;
+        for (const EvaluatedCandidate& candidate : evaluated.candidates) {
+            if (candidate.sourceOffset() != card.offsetOf(900)) {
+                continue;
+            }
+            if (candidate.fragments.has_value()) {
+                layouts.push_back(&candidate);
+            } else {
+                EXPECT_EQ(whole, nullptr);
+                whole = &candidate;
+            }
+        }
+        EXPECT_FALSE(layouts.empty());
+        ASSERT_NE(whole, nullptr);
+        SCOPED_TRACE(describeEvaluated(*whole));
+        EXPECT_EQ(whole->recoveryMethod(), RecoveryMethod::Carving);
+        EXPECT_EQ(whole->recoveredSize(), fragment->carve->length);
+        EXPECT_NE(whole->validationStatus(), ValidationStatus::Valid);
+        for (const EvaluatedCandidate* layout : layouts) {
+            EXPECT_LT(layout->data.bytes(RegionKind::Stored), whole->recoveredSize());
+        }
+    }
+}
+
+// A carve that breaks (a photo whose second piece is lost: its structure
+// holds a little way into the old data after the first) gives its layouts
+// what is consistent: it is not delivered beside them too.
+TEST(CandidateEvaluationTest, ACarveSeedThatBreaksGivesNoCarveBesideItsLayouts) {
+    Card card;
+    const Bytes jpeg = photo(45, 256, 192);
+    card.plant(1100, Bytes(jpeg.begin(), jpeg.begin() + 20 * kClusterSize));
+    test::MemoryStorageSource source(card.image());
+    RECOVERY_ASSERT_OK(source.open());
+    Volume volume = openVolume(source);
+    std::vector<FragmentCandidate> fragments;
+    const Evaluated evaluated = reconstructAndEvaluate(source, volume, true, &fragments);
+    const FragmentCandidate* fragment = fragmentOf(fragments, card.offsetOf(1100));
+    ASSERT_NE(fragment, nullptr);
+    SCOPED_TRACE(fragment->reason);
+    ASSERT_NE(fragment->status, ReconstructionStatus::Complete);
+    ASSERT_TRUE(fragment->carve.has_value());
+    EXPECT_NE(fragment->carve->end.status, carving::EndStatus::Found);
+    bool layout = false;
+    for (const EvaluatedCandidate& candidate : evaluated.candidates) {
+        if (candidate.sourceOffset() == card.offsetOf(1100)) {
+            SCOPED_TRACE(describeEvaluated(candidate));
+            EXPECT_TRUE(candidate.fragments.has_value());
+            layout = true;
+        }
+    }
+    EXPECT_TRUE(layout);
 }
 
 TEST(CandidateEvaluationTest, ADeletedFileWhoseStartIsTakenGetsNoCarve) {
